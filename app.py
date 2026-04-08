@@ -144,7 +144,7 @@ def fetch_live_prices(unique_tickers, crypto_tickers):
 def process_data(df):
     numeric_cols = ['Quantity', 'Origin_Buy_Price', 'Cost_Origin', 'Cost_ILS', 'Current_Value_ILS', 'Cost_USD',
                     'Current_Value_USD', 'Buy_Price_USD', 'Buy_Price_ILS', 'Current_Price_USD', 'Current_Price_ILS',
-                    'Return_Origin', 'Return_ILS']
+                    'Return_Origin', 'Return_ILS', 'Commission']
 
     for col in numeric_cols:
         if col in df.columns:
@@ -152,6 +152,13 @@ def process_data(df):
             df[col] = df[col].astype(str).str.replace(r'[₪$,\s%]', '', regex=True)
             # Convert to float and fill empty cells with 0
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    # Strip whitespaces from Status column and fill missing values with 'פתוח'
+    if 'Status' in df.columns:
+        df['Status'] = df['Status'].astype(str).str.strip()
+        df['Status'] = df['Status'].fillna('פתוח')
+        # Replace 'nan' string values (from coercion) with 'פתוח'
+        df['Status'] = df['Status'].replace('nan', 'פתוח')
 
     # Parse dates safely
     if 'Purchase_Date' in df.columns:
@@ -236,6 +243,8 @@ page = st.sidebar.radio("Go to", ["Dashboard", "Analytics", "Reports", "Settings
 auto_sync_configured = st.session_state.google_sheet_url != ""
 
 df = None
+sync_error = None
+
 if auto_sync_configured:
     # Try to use saved credentials first
     credentials_dict = st.session_state.google_credentials
@@ -252,7 +261,12 @@ if auto_sync_configured:
             # Load from Google Sheets
             df = sync_google_sheet(gc, st.session_state.google_sheet_url)
         except Exception as e:
-            st.error(f"Authentication/Connection Error: {repr(e)}")
+            error_str = str(repr(e))
+            # Distinguish between network errors and auth errors
+            if "NameResolutionError" in error_str or "ConnectionError" in error_str or "Max retries" in error_str:
+                sync_error = f"Network connectivity error: Unable to reach Google servers. Check your internet connection."
+            else:
+                sync_error = f"Authentication/Connection Error: {repr(e)}"
             df = None
     else:
         # Fallback: Manual upload
@@ -272,37 +286,52 @@ if auto_sync_configured:
                 # Load from Google Sheets
                 df = sync_google_sheet(gc, st.session_state.google_sheet_url)
             except Exception as e:
-                st.error(f"Authentication/Connection Error: {repr(e)}")
+                error_str = str(repr(e))
+                if "NameResolutionError" in error_str or "ConnectionError" in error_str or "Max retries" in error_str:
+                    sync_error = f"Network connectivity error: Unable to reach Google servers. Check your internet connection."
+                else:
+                    sync_error = f"Authentication/Connection Error: {repr(e)}"
                 df = None
-else:
-    # Manual CSV upload
-    uploaded_file = st.file_uploader("Upload Portfolio CSV", type="csv", key="csv_upload")
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-        # AGGRESSIVE column cleanup to strip invisible unicode characters (RTL/LTR marks, etc.)
-        df.columns = [str(col).replace('\u200e', '').replace('\u200f', '').strip() for col in df.columns]
 
-# If no data loaded yet, use sample data
+# If no data loaded yet, use sample data or show error
 if df is None:
-    if auto_sync_configured:
-        # Auto-sync is configured but failed - show error and stop
-        st.error(
-            "Failed to load from Google Sheets. Please clear the cache (Top right menu -> Clear cache) or check credentials.")
-        st.stop()
-    else:
-        # Manual mode with no upload - use sample data
-        sample_data = {
-            'Platform': ['Bit2C', 'אקסלנס'],
-            'Type': ['קריפטו', 'שוק ההון'],
-            'Ticker': ['BTC', 'AAPL'],
-            'Purchase_Date': ['2023-01-01', '2023-01-02'],
-            'Quantity': [0.01, 10],
-            'Origin_Buy_Price': [30000, 150],
-            'Cost_Origin': [300, 1500],
-            'Origin_Currency': ['USD', 'USD']
-        }
-        df = pd.DataFrame(sample_data)
-        df['Purchase_Date'] = pd.to_datetime(df['Purchase_Date'])
+    if auto_sync_configured and sync_error:
+        # Show error but allow fallback to manual upload
+        st.warning(f"⚠️ Auto-sync failed: {sync_error}")
+        st.info("💡 **Tip:** You can still upload a CSV file manually below, or check your internet connection and refresh the page.")
+        st.divider()
+        st.subheader("📁 Manual Portfolio Upload")
+        uploaded_file = st.file_uploader("Upload Portfolio CSV", type="csv", key="csv_upload_fallback")
+        if uploaded_file is not None:
+            df = pd.read_csv(uploaded_file)
+            # AGGRESSIVE column cleanup to strip invisible unicode characters (RTL/LTR marks, etc.)
+            df.columns = [str(col).replace('\u200e', '').replace('\u200f', '').strip() for col in df.columns]
+            st.success("✅ CSV file loaded successfully!")
+    elif not auto_sync_configured:
+        # Manual mode with no upload - show upload UI
+        uploaded_file = st.file_uploader("Upload Portfolio CSV", type="csv", key="csv_upload")
+        if uploaded_file is not None:
+            df = pd.read_csv(uploaded_file)
+            # AGGRESSIVE column cleanup to strip invisible unicode characters (RTL/LTR marks, etc.)
+            df.columns = [str(col).replace('\u200e', '').replace('\u200f', '').strip() for col in df.columns]
+
+# If still no data, use sample data
+if df is None:
+    # Use sample data
+    sample_data = {
+        'Platform': ['Bit2C', 'אקסלנס'],
+        'Type': ['קריפטו', 'שוק ההון'],
+        'Ticker': ['BTC', 'AAPL'],
+        'Purchase_Date': ['2023-01-01', '2023-01-02'],
+        'Quantity': [0.01, 10],
+        'Origin_Buy_Price': [30000, 150],
+        'Cost_Origin': [300, 1500],
+        'Origin_Currency': ['USD', 'USD']
+    }
+    df = pd.DataFrame(sample_data)
+    df['Purchase_Date'] = pd.to_datetime(df['Purchase_Date'])
+    if not auto_sync_configured:
+        st.info("📊 Showing sample data. Upload a CSV file to see your actual portfolio.")
 else:
     # Process loaded data
     rename_dict = {
@@ -332,6 +361,8 @@ else:
         "שער קנייה (ILS)": "Buy_Price_ILS",
         "שער נוכחי (USD)": "Current_Price_USD",
         "שער נוכחי (ILS)": "Current_Price_ILS",
+        "עמלה": "Commission",
+        "סטטוס": "Status",
     }
     df.rename(columns=rename_dict, inplace=True)
     required_columns = ['Purchase_Date', 'Platform', 'Ticker', 'Type', 'Quantity', 'Origin_Buy_Price', 'Cost_Origin']
@@ -350,6 +381,11 @@ else:
     df['Purchase_Date'] = pd.to_datetime(df['Purchase_Date'], format='%d/%m/%Y')
 
 processed_df = process_data(df)
+
+# Initialize Status column if it doesn't exist
+if 'Status' not in processed_df.columns:
+    processed_df['Status'] = 'פתוח'
+
 summary = create_summary(processed_df)
 
 # Safe global metric calculation
@@ -364,39 +400,66 @@ else:
 
 if page == "Dashboard":
     st.title("Portfolio Manager OS - Dashboard")
-    # Modern KPI Cards
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        profit_loss = total_value_ils - total_cost_ils
-        st.metric("Total Value (ILS)", f"₪{total_value_ils:,.0f}",
-                  delta=f"₪{profit_loss:,.0f}" if profit_loss != 0 else None)
-    with col2:
-        st.metric("Total Cost (ILS)", f"₪{total_cost_ils:,.0f}")
-    with col3:
-        st.metric("Total Net Yield (%)", f"{total_yield:.2%}", delta=f"{total_yield:.2%}")
 
-    # Visuals
-    if not summary.empty and 'Total_Value_ILS' in summary.columns and 'Profit_Loss_ILS' in summary.columns:
+    # Split into open and closed positions
+    open_positions = processed_df[processed_df['Status'] == 'פתוח'].copy() if 'Status' in processed_df.columns else processed_df.copy()
+    closed_positions = processed_df[processed_df['Status'] == 'סגור'].copy() if 'Status' in processed_df.columns else pd.DataFrame()
+
+    # Generate summary from open positions only
+    summary_open = create_summary(open_positions)
+
+    # Calculate metrics for open positions
+    if not summary_open.empty and 'Total_Value_ILS' in summary_open.columns and 'Total_Cost_ILS' in summary_open.columns:
+        total_value_ils_open = summary_open['Total_Value_ILS'].sum()
+        total_cost_ils_open = summary_open['Total_Cost_ILS'].sum()
+        total_yield_open = (total_value_ils_open - total_cost_ils_open) / total_cost_ils_open if total_cost_ils_open > 0 else 0
+    else:
+        total_value_ils_open = 0
+        total_cost_ils_open = 0
+        total_yield_open = 0
+
+    # Calculate realized profit from closed positions
+    if not closed_positions.empty and 'Current_Value_ILS' in closed_positions.columns and 'Cost_ILS' in closed_positions.columns:
+        realized_profit = closed_positions['Current_Value_ILS'].sum() - closed_positions['Cost_ILS'].sum()
+    else:
+        realized_profit = 0
+
+    # Modern KPI Cards
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        profit_loss_open = total_value_ils_open - total_cost_ils_open
+        st.metric("Total Value (ILS)", f"₪{total_value_ils_open:,.0f}",
+                  delta=f"₪{profit_loss_open:,.0f}" if profit_loss_open != 0 else None)
+    with col2:
+        st.metric("Total Cost (ILS)", f"₪{total_cost_ils_open:,.0f}")
+    with col3:
+        st.metric("Total Net Yield (%)", f"{total_yield_open:.2%}", delta=f"{total_yield_open:.2%}")
+    with col4:
+        st.metric("Realized Profit (רווח ממומש)", f"₪{realized_profit:,.0f}",
+                  delta=f"₪{realized_profit:,.0f}" if realized_profit != 0 else None)
+
+    # Visuals - using open positions summary
+    if not summary_open.empty and 'Total_Value_ILS' in summary_open.columns and 'Profit_Loss_ILS' in summary_open.columns:
         col1, col2 = st.columns(2)
         with col1:
             # Donut Chart for Allocation
-            fig_donut = px.pie(summary, values='Total_Value_ILS', names='Ticker', hole=0.4,
-                               title='Portfolio Allocation')
+            fig_donut = px.pie(summary_open, values='Total_Value_ILS', names='Ticker', hole=0.4,
+                               title='Portfolio Allocation (Open Positions)')
             fig_donut.update_layout(margin=dict(t=40, b=40, l=40, r=40))
             st.plotly_chart(fig_donut)
         with col2:
             # Bar Chart for Profit/Loss
-            fig_bar = px.bar(summary, x='Ticker', y='Profit_Loss_ILS', title='Profit/Loss by Ticker',
+            fig_bar = px.bar(summary_open, x='Ticker', y='Profit_Loss_ILS', title='Profit/Loss by Ticker (Open)',
                              color='Profit_Loss_ILS', color_continuous_scale='RdYlGn')
             fig_bar.update_layout(margin=dict(t=40, b=40, l=40, r=40))
             st.plotly_chart(fig_bar)
 
     # Summary table
-    st.subheader("Summary by Ticker")
+    st.subheader("Summary by Ticker (Open Positions)")
     # Dynamically select columns that exist in the summary
     available_cols = ['Ticker']
     for col in ['Total_Qty', 'Total_Cost_ILS', 'Total_Value_ILS', 'Profit_Loss_ILS', 'Avg_Return_ILS']:
-        if col in summary.columns:
+        if col in summary_open.columns:
             available_cols.append(col)
 
     if len(available_cols) > 1:  # More than just 'Ticker'
@@ -408,32 +471,57 @@ if page == "Dashboard":
             'Avg_Return_ILS': '{:.2%}'
         }
         # Filter format_dict to only include columns that exist
-        format_dict = {k: v for k, v in format_dict.items() if k in summary.columns}
-        formatted_summary = summary[available_cols].style.format(format_dict).hide(axis='index')
+        format_dict = {k: v for k, v in format_dict.items() if k in summary_open.columns}
+        formatted_summary = summary_open[available_cols].style.format(format_dict).hide(axis='index')
         st.dataframe(formatted_summary)
 
     # Drill-down
-    st.subheader("Drill-Down View")
-    ticker_options = ['Select All'] + sorted(summary['Ticker'].tolist())
+    st.subheader("Drill-Down View (Open Positions)")
+    ticker_options = ['Select All'] + sorted(summary_open['Ticker'].tolist()) if not summary_open.empty else ['Select All']
     selected_ticker = st.selectbox("Select Ticker", ticker_options)
-    desired_columns = ['Purchase_Date', 'Platform', 'Quantity', 'Origin_Buy_Price', 'Cost_ILS', 'Current_Value_ILS']
-    available_columns = [col for col in desired_columns if col in processed_df.columns]
+    desired_columns = ['Purchase_Date', 'Platform', 'Quantity', 'Origin_Buy_Price', 'Cost_ILS', 'Current_Value_ILS', 'Commission', 'Status']
+    available_columns = [col for col in desired_columns if col in open_positions.columns]
     if selected_ticker == 'Select All':
-        drill_df = processed_df[available_columns]
+        drill_df = open_positions[available_columns]
     else:
-        drill_df = processed_df[processed_df['Ticker'] == selected_ticker][available_columns]
+        drill_df = open_positions[open_positions['Ticker'] == selected_ticker][available_columns]
     formatted_drill = drill_df.style.format({
         'Quantity': '{:.8f}',
         'Origin_Buy_Price': '{:.2f}',
         'Cost_ILS': '₪{:,.0f}',
-        'Current_Value_ILS': '₪{:,.0f}'
+        'Current_Value_ILS': '₪{:,.0f}',
+        'Commission': '₪{:,.0f}'
     }).hide(axis='index')
     st.dataframe(formatted_drill)
 
+    # Closed Positions Section
+    if not closed_positions.empty:
+        st.divider()
+        st.subheader("Closed Positions (סגור)")
+        summary_closed = create_summary(closed_positions)
+
+        if not summary_closed.empty:
+            available_cols_closed = ['Ticker']
+            for col in ['Total_Qty', 'Total_Cost_ILS', 'Total_Value_ILS', 'Profit_Loss_ILS', 'Avg_Return_ILS']:
+                if col in summary_closed.columns:
+                    available_cols_closed.append(col)
+
+            if len(available_cols_closed) > 1:
+                format_dict_closed = {
+                    'Total_Qty': '{:.8f}',
+                    'Total_Cost_ILS': '₪{:,.0f}',
+                    'Total_Value_ILS': '₪{:,.0f}',
+                    'Profit_Loss_ILS': '₪{:,.0f}',
+                    'Avg_Return_ILS': '{:.2%}'
+                }
+                format_dict_closed = {k: v for k, v in format_dict_closed.items() if k in summary_closed.columns}
+                formatted_summary_closed = summary_closed[available_cols_closed].style.format(format_dict_closed).hide(axis='index')
+                st.dataframe(formatted_summary_closed)
+
 elif page == "Analytics":
     st.title("Portfolio Manager OS - Analytics")
-    if not processed_df.empty:
-        sharpe, vol, tot_ret = calculate_metrics(processed_df)
+    if not open_positions.empty:
+        sharpe, vol, tot_ret = calculate_metrics(open_positions)
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Sharpe Ratio", f"{sharpe:.2f}")
@@ -443,11 +531,11 @@ elif page == "Analytics":
             st.metric("Total Return", f"{tot_ret:.2%}")
 
         # Historical chart
-        plot_df = processed_df.dropna(subset=['Purchase_Date']).sort_values('Purchase_Date')
+        plot_df = open_positions.dropna(subset=['Purchase_Date']).sort_values('Purchase_Date')
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=plot_df['Purchase_Date'], y=plot_df['Current_Value_ILS'], mode='lines+markers',
                                  name='Portfolio Value'))
-        fig.update_layout(title='Portfolio Value Over Time', xaxis_title='Date', yaxis_title='Value (ILS)')
+        fig.update_layout(title='Portfolio Value Over Time (Open Positions)', xaxis_title='Date', yaxis_title='Value (ILS)')
         st.plotly_chart(fig)
 
 elif page == "Reports":
@@ -463,12 +551,12 @@ elif page == "Reports":
     ]
     selected_report = st.selectbox("Select Report", report_options)
     if selected_report == "Crypto Allocation (%)":
-        crypto_df = processed_df[processed_df['Type'].isin(['קריפטו']) | processed_df['Ticker'].isin(CRYPTO_ETFS)]
+        crypto_df = open_positions[open_positions['Type'].isin(['קריפטו']) | open_positions['Ticker'].isin(CRYPTO_ETFS)]
         crypto_val = crypto_df['Current_Value_ILS'].sum()
-        btc_df = processed_df[processed_df['Ticker'].isin(['BTC', 'IBIT'])]
+        btc_df = open_positions[open_positions['Ticker'].isin(['BTC', 'IBIT'])]
         btc_val = btc_df['Current_Value_ILS'].sum()
-        p_crypto = crypto_val / total_value_ils if total_value_ils else 0
-        p_btc_total = btc_val / total_value_ils if total_value_ils else 0
+        p_crypto = crypto_val / total_value_ils_open if total_value_ils_open else 0
+        p_btc_total = btc_val / total_value_ils_open if total_value_ils_open else 0
         p_btc_crypto = btc_val / crypto_val if crypto_val else 0
         st.write(f"Percentage of Crypto in total portfolio: {p_crypto:.2%}")
         st.write(f"Percentage of BTC in total portfolio: {p_btc_total:.2%}")
@@ -478,10 +566,10 @@ elif page == "Reports":
         etfs = {'BTC': 'IBIT', 'ETH': 'ETHA', 'SOL': 'BSOL'}
         data = []
         for asset in assets:
-            real_df = processed_df[(processed_df['Ticker'] == asset) & (processed_df['Type'] == 'קריפטו')]
+            real_df = open_positions[(open_positions['Ticker'] == asset) & (open_positions['Type'] == 'קריפטו')]
             real_qty = real_df['Quantity'].sum()
             real_val = real_df['Current_Value_ILS'].sum()
-            etf_df = processed_df[processed_df['Ticker'] == etfs[asset]]
+            etf_df = open_positions[open_positions['Ticker'] == etfs[asset]]
             etf_qty = etf_df['Quantity'].sum()
             etf_val = etf_df['Current_Value_ILS'].sum()
             total_exp = real_val + etf_val
@@ -496,17 +584,17 @@ elif page == "Reports":
             'Total Exposure (ILS)': '₪{:,.0f}'
         }))
     elif selected_report == "Biggest Winner & Loser":
-        if 'Total_Value_ILS' in summary.columns and 'Total_Cost_ILS' in summary.columns:
-            summary['Dynamic_Return'] = (summary['Total_Value_ILS'] - summary['Total_Cost_ILS']) / summary[
+        if 'Total_Value_ILS' in summary_open.columns and 'Total_Cost_ILS' in summary_open.columns:
+            summary_open['Dynamic_Return'] = (summary_open['Total_Value_ILS'] - summary_open['Total_Cost_ILS']) / summary_open[
                 'Total_Cost_ILS']
-            winner = summary.loc[summary['Dynamic_Return'].idxmax()]
-            loser = summary.loc[summary['Dynamic_Return'].idxmin()]
+            winner = summary_open.loc[summary_open['Dynamic_Return'].idxmax()]
+            loser = summary_open.loc[summary_open['Dynamic_Return'].idxmin()]
             st.write(f"Biggest Winner: {winner['Ticker']} with {winner['Dynamic_Return']:.2%}")
             st.write(f"Biggest Loser: {loser['Ticker']} with {loser['Dynamic_Return']:.2%}")
         else:
             st.write("Insufficient data to calculate winners and losers.")
     elif selected_report == "Net Investment (Deposits)":
-        platform_summary = processed_df.groupby('Platform').agg(
+        platform_summary = open_positions.groupby('Platform').agg(
             Total_Cost_ILS=('Cost_ILS', 'sum'),
             Total_Value_ILS=('Current_Value_ILS', 'sum')
         ).reset_index()
@@ -663,8 +751,69 @@ elif page == "Settings":
             st.success(f"✅ Synced {len(df)} rows from Google Sheet!")
         else:
             st.error("❌ Failed to sync from Google Sheet.")
+            if sync_error:
+                st.info(f"Error details: {sync_error}")
     else:
         st.info("Auto-sync not configured.")
+
+    st.write("---")
+    st.subheader("🔧 Troubleshooting")
+    with st.expander("Connection Issues & Fixes", expanded=False):
+        st.write("""
+        **DNS Resolution Error** (Failed to resolve 'oauth2.googleapis.com')
+        - ✅ Check your internet connection
+        - ✅ Try refreshing the page (F5)
+        - ✅ If using VPN/Proxy, verify it allows access to Google services
+        - ✅ Try clearing browser cache (Ctrl+Shift+Del)
+        - ✅ If issue persists, use manual CSV upload as a fallback
+        
+        **Authentication Error** (Invalid credentials)
+        - ✅ Download a fresh Google Service Account JSON key
+        - ✅ Re-upload the key in Step 1 above
+        - ✅ Verify the service account email has access to your Google Sheet
+        - ✅ Share the Google Sheet with the service account email explicitly
+        
+        **Sheet Not Found**
+        - ✅ Verify the Google Sheet URL is correct
+        - ✅ Check that the sheet has a worksheet named "תמונת מצב"
+        - ✅ Ensure the service account has access to the sheet
+        """)
+
+    with st.expander("Test Connection", expanded=False):
+        if st.button("🧪 Test Google Sheets Connection"):
+            if st.session_state.google_credentials:
+                try:
+                    test_credentials = Credentials.from_service_account_info(
+                        st.session_state.google_credentials,
+                        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+                    )
+                    test_gc = gspread.authorize(test_credentials)
+                    st.success("✅ Google authentication successful!")
+                    
+                    if st.session_state.google_sheet_url:
+                        try:
+                            sheet_key = st.session_state.google_sheet_url.split('/d/')[1].split('/')[0]
+                            test_sheet = test_gc.open_by_key(sheet_key)
+                            st.success(f"✅ Google Sheet accessible! Found {len(test_sheet.worksheets())} worksheets")
+                            
+                            # List worksheets
+                            worksheet_names = [ws.title for ws in test_sheet.worksheets()]
+                            st.info(f"Available worksheets: {', '.join(worksheet_names)}")
+                            
+                            if "תמונת מצב" in worksheet_names:
+                                st.success("✅ 'תמונת מצב' worksheet found!")
+                            else:
+                                st.warning("⚠️ 'תמונת מצב' worksheet not found. Update the sheet name if different.")
+                        except Exception as e:
+                            st.error(f"❌ Could not access Google Sheet: {str(e)}")
+                except Exception as e:
+                    error_str = str(e)
+                    if "NameResolutionError" in error_str or "ConnectionError" in error_str:
+                        st.error("❌ Network Error: Cannot reach Google servers. Check your internet connection.")
+                    else:
+                        st.error(f"❌ Authentication failed: {str(e)}")
+            else:
+                st.warning("⚠️ No Google credentials saved. Please upload credentials first.")
 
 
 def authenticate_google_sheets():
