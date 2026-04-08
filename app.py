@@ -27,6 +27,7 @@ if 'google_credentials' not in st.session_state:
 CREDENTIALS_FILE = ".streamlit/local_credentials.json"
 CONFIG_FILE = ".streamlit/auto_sync_config.json"
 
+
 # Load saved credentials on startup
 def load_saved_credentials():
     """Load saved Google credentials from local file"""
@@ -40,6 +41,7 @@ def load_saved_credentials():
             st.warning(f"Could not load saved credentials: {e}")
     return None
 
+
 def save_credentials(credentials_dict):
     """Save Google credentials to local file"""
     try:
@@ -51,6 +53,7 @@ def save_credentials(credentials_dict):
     except Exception as e:
         st.error(f"Could not save credentials: {e}")
         return False
+
 
 def load_auto_sync_config():
     """Load auto-sync config (credentials and URL) from local file"""
@@ -66,6 +69,7 @@ def load_auto_sync_config():
             st.warning(f"Could not load auto-sync config: {e}")
     return False
 
+
 def save_auto_sync_config(credentials_dict, url):
     """Save auto-sync config to local file"""
     try:
@@ -78,11 +82,13 @@ def save_auto_sync_config(credentials_dict, url):
         st.error(f"Could not save auto-sync config: {e}")
         return False
 
+
 # Load saved credentials on app startup
 saved_creds = load_saved_credentials()
 
 # Load auto-sync config on startup
 load_auto_sync_config()
+
 
 # Function to calculate additional metrics
 def calculate_metrics(df):
@@ -99,14 +105,17 @@ def calculate_metrics(df):
 
     return sharpe, volatility, total_return
 
+
 def load_portfolio_data(csv_path):
     # Assume CSV has columns: Platform, Type, Ticker, Purchase_Date, Quantity, Origin_Buy_Price, Cost_Origin, Origin_Currency
     df = pd.read_csv(csv_path, parse_dates=['Purchase_Date'])
     return df
 
+
 @st.cache_data(ttl=300)
 def fetch_live_prices(unique_tickers, crypto_tickers):
     prices = {}
+
     def fetch_ticker(ticker):
         if ticker in crypto_tickers:
             yf_ticker = ticker + '-USD'
@@ -131,8 +140,11 @@ def fetch_live_prices(unique_tickers, crypto_tickers):
         usdils = 0
     return prices, usdils
 
+
 def process_data(df):
-    numeric_cols = ['Quantity', 'Origin_Buy_Price', 'Cost_Origin', 'Cost_ILS', 'Current_Value_ILS', 'Cost_USD', 'Current_Value_USD', 'Buy_Price_USD', 'Buy_Price_ILS', 'Current_Price_USD', 'Current_Price_ILS', 'Return_Origin', 'Return_ILS']
+    numeric_cols = ['Quantity', 'Origin_Buy_Price', 'Cost_Origin', 'Cost_ILS', 'Current_Value_ILS', 'Cost_USD',
+                    'Current_Value_USD', 'Buy_Price_USD', 'Buy_Price_ILS', 'Current_Price_USD', 'Current_Price_ILS',
+                    'Return_Origin', 'Return_ILS']
 
     for col in numeric_cols:
         if col in df.columns:
@@ -143,9 +155,10 @@ def process_data(df):
 
     # Parse dates safely
     if 'Purchase_Date' in df.columns:
-         df['Purchase_Date'] = pd.to_datetime(df['Purchase_Date'], errors='coerce')
+        df['Purchase_Date'] = pd.to_datetime(df['Purchase_Date'], errors='coerce')
 
     return df
+
 
 def create_summary(df):
     if 'Ticker' not in df.columns:
@@ -178,14 +191,15 @@ def create_summary(df):
 
     return summary
 
+
 def sync_google_sheet(gc, sheet_url):
     """
     Sync data from a Google Sheet.
-    
+
     Args:
         gc (gspread.Client): Authenticated gspread client.
         sheet_url (str): URL of the Google Sheet.
-        
+
     Returns:
         pd.DataFrame: Data from the Google Sheet, or None if sync failed.
     """
@@ -193,7 +207,7 @@ def sync_google_sheet(gc, sheet_url):
         # Extract sheet key from URL
         # Example URL: https://docs.google.com/spreadsheets/d/1ABC123/edit#gid=0
         sheet_key = sheet_url.split('/d/')[1].split('/')[0]
-        
+
         # Open the sheet and get the worksheet named "תמונת מצב"
         sheet = gc.open_by_key(sheet_key)
         worksheet = sheet.worksheet("תמונת מצב")
@@ -202,7 +216,7 @@ def sync_google_sheet(gc, sheet_url):
         data = worksheet.get_all_values()
         if not data:
             return None
-        
+
         # First row is header, rest is data
         df = pd.DataFrame(data[1:], columns=data[0])
         # AGGRESSIVE column cleanup to strip invisible unicode characters (RTL/LTR marks, etc.)
@@ -212,6 +226,7 @@ def sync_google_sheet(gc, sheet_url):
         st.error(f"❌ Sync Error: {repr(e)}")
         return None
 
+
 # Sidebar for navigation
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", ["Dashboard", "Analytics", "Reports", "Settings"])
@@ -219,7 +234,6 @@ page = st.sidebar.radio("Go to", ["Dashboard", "Analytics", "Reports", "Settings
 # Data loading (common for all pages)
 # Check if auto-sync is configured
 auto_sync_configured = st.session_state.google_sheet_url != ""
-
 
 df = None
 if auto_sync_configured:
@@ -242,7 +256,8 @@ if auto_sync_configured:
             df = None
     else:
         # Fallback: Manual upload
-        uploaded_key = st.file_uploader("Upload Google Service Account Key (JSON) for auto-sync", type="json", key="gcp_key_main")
+        uploaded_key = st.file_uploader("Upload Google Service Account Key (JSON) for auto-sync", type="json",
+                                        key="gcp_key_main")
 
         if uploaded_key:
             try:
@@ -271,7 +286,8 @@ else:
 if df is None:
     if auto_sync_configured:
         # Auto-sync is configured but failed - show error and stop
-        st.error("Failed to load from Google Sheets. Please clear the cache (Top right menu -> Clear cache) or check credentials.")
+        st.error(
+            "Failed to load from Google Sheets. Please clear the cache (Top right menu -> Clear cache) or check credentials.")
         st.stop()
     else:
         # Manual mode with no upload - use sample data
@@ -321,7 +337,8 @@ else:
     required_columns = ['Purchase_Date', 'Platform', 'Ticker', 'Type', 'Quantity', 'Origin_Buy_Price', 'Cost_Origin']
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
-        st.error(f"Required columns not found after renaming: {missing_columns}. Please check the CSV headers and update the rename_dict.")
+        st.error(
+            f"Required columns not found after renaming: {missing_columns}. Please check the CSV headers and update the rename_dict.")
         st.stop()
     if 'Origin_Currency' not in df.columns:
         df['Origin_Currency'] = 'ILS'  # Assume costs are in ILS if not specified
@@ -345,14 +362,14 @@ else:
     total_cost_ils = 0
     total_yield = 0
 
-
 if page == "Dashboard":
     st.title("Portfolio Manager OS - Dashboard")
     # Modern KPI Cards
     col1, col2, col3 = st.columns(3)
     with col1:
         profit_loss = total_value_ils - total_cost_ils
-        st.metric("Total Value (ILS)", f"₪{total_value_ils:,.0f}", delta=f"₪{profit_loss:,.0f}" if profit_loss != 0 else None)
+        st.metric("Total Value (ILS)", f"₪{total_value_ils:,.0f}",
+                  delta=f"₪{profit_loss:,.0f}" if profit_loss != 0 else None)
     with col2:
         st.metric("Total Cost (ILS)", f"₪{total_cost_ils:,.0f}")
     with col3:
@@ -363,7 +380,8 @@ if page == "Dashboard":
         col1, col2 = st.columns(2)
         with col1:
             # Donut Chart for Allocation
-            fig_donut = px.pie(summary, values='Total_Value_ILS', names='Ticker', hole=0.4, title='Portfolio Allocation')
+            fig_donut = px.pie(summary, values='Total_Value_ILS', names='Ticker', hole=0.4,
+                               title='Portfolio Allocation')
             fig_donut.update_layout(margin=dict(t=40, b=40, l=40, r=40))
             st.plotly_chart(fig_donut)
         with col2:
@@ -423,11 +441,12 @@ elif page == "Analytics":
             st.metric("Volatility", f"{vol:.2%}")
         with col3:
             st.metric("Total Return", f"{tot_ret:.2%}")
-        
+
         # Historical chart
         plot_df = processed_df.dropna(subset=['Purchase_Date']).sort_values('Purchase_Date')
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=plot_df['Purchase_Date'], y=plot_df['Current_Value_ILS'], mode='lines+markers', name='Portfolio Value'))
+        fig.add_trace(go.Scatter(x=plot_df['Purchase_Date'], y=plot_df['Current_Value_ILS'], mode='lines+markers',
+                                 name='Portfolio Value'))
         fig.update_layout(title='Portfolio Value Over Time', xaxis_title='Date', yaxis_title='Value (ILS)')
         st.plotly_chart(fig)
 
@@ -467,7 +486,8 @@ elif page == "Reports":
             etf_val = etf_df['Current_Value_ILS'].sum()
             total_exp = real_val + etf_val
             data.append([asset, real_qty, real_val, etf_qty, etf_val, total_exp])
-        conc_df = pd.DataFrame(data, columns=['Asset', 'Direct Qty', 'Direct Val (ILS)', 'ETF Qty', 'ETF Val (ILS)', 'Total Exposure (ILS)'])
+        conc_df = pd.DataFrame(data, columns=['Asset', 'Direct Qty', 'Direct Val (ILS)', 'ETF Qty', 'ETF Val (ILS)',
+                                              'Total Exposure (ILS)'])
         st.dataframe(conc_df.style.format({
             'Direct Qty': '{:.8f}',
             'Direct Val (ILS)': '₪{:,.0f}',
@@ -477,7 +497,8 @@ elif page == "Reports":
         }))
     elif selected_report == "Biggest Winner & Loser":
         if 'Total_Value_ILS' in summary.columns and 'Total_Cost_ILS' in summary.columns:
-            summary['Dynamic_Return'] = (summary['Total_Value_ILS'] - summary['Total_Cost_ILS']) / summary['Total_Cost_ILS']
+            summary['Dynamic_Return'] = (summary['Total_Value_ILS'] - summary['Total_Cost_ILS']) / summary[
+                'Total_Cost_ILS']
             winner = summary.loc[summary['Dynamic_Return'].idxmax()]
             loser = summary.loc[summary['Dynamic_Return'].idxmin()]
             st.write(f"Biggest Winner: {winner['Ticker']} with {winner['Dynamic_Return']:.2%}")
@@ -490,13 +511,15 @@ elif page == "Reports":
             Total_Value_ILS=('Current_Value_ILS', 'sum')
         ).reset_index()
         platform_summary['Profit_Loss_ILS'] = platform_summary['Total_Value_ILS'] - platform_summary['Total_Cost_ILS']
-        platform_summary['Profit_Loss_Percent'] = platform_summary['Profit_Loss_ILS'] / platform_summary['Total_Cost_ILS']
+        platform_summary['Profit_Loss_Percent'] = platform_summary['Profit_Loss_ILS'] / platform_summary[
+            'Total_Cost_ILS']
         total_row = pd.DataFrame({
             'Platform': ['Total'],
             'Total_Cost_ILS': [platform_summary['Total_Cost_ILS'].sum()],
             'Total_Value_ILS': [platform_summary['Total_Value_ILS'].sum()],
             'Profit_Loss_ILS': [platform_summary['Profit_Loss_ILS'].sum()],
-            'Profit_Loss_Percent': [platform_summary['Profit_Loss_ILS'].sum() / platform_summary['Total_Cost_ILS'].sum()]
+            'Profit_Loss_Percent': [
+                platform_summary['Profit_Loss_ILS'].sum() / platform_summary['Total_Cost_ILS'].sum()]
         })
         platform_summary = pd.concat([platform_summary, total_row], ignore_index=True)
         st.dataframe(platform_summary.style.format({
@@ -526,7 +549,7 @@ elif page == "Reports":
         st.write(f"BTC/USD: {btcusd:.2f}")
         st.write(f"ETH/USD: {ethusd:.2f}")
         st.write(f"SOL/USD: {solusd:.2f}")
-    
+
     # Export to PDF
     if st.button("Export to PDF"):
         pdf = FPDF()
@@ -541,15 +564,16 @@ elif page == "Reports":
         pdf_output = io.BytesIO()
         pdf.output(pdf_output)
         pdf_output.seek(0)
-        st.download_button(label="Download PDF", data=pdf_output, file_name="portfolio_report.pdf", mime="application/pdf")
+        st.download_button(label="Download PDF", data=pdf_output, file_name="portfolio_report.pdf",
+                           mime="application/pdf")
 
 elif page == "Settings":
     st.title("Portfolio Manager OS - Settings")
     st.subheader("🔗 Google Sheets Integration - Auto-Sync Setup")
-    
+
     st.write("**One-time setup**: Configure automatic syncing from Google Sheets")
     st.write("---")
-    
+
     # Instructions
     with st.expander("📋 How to Set Up Google Credentials", expanded=False):
         st.write("""
@@ -563,13 +587,13 @@ elif page == "Settings":
            - Create JSON key and download
         5. Share your Google Sheet with the service account email
         """)
-    
+
     st.write("---")
-    
+
     # Upload Google credentials
     st.subheader("Step 1: Upload Google Service Account Key")
     uploaded_key = st.file_uploader("Upload Google Service Account Key (JSON)", type="json", key="gcp_key")
-    
+
     if uploaded_key:
         # Save credentials to local file
         credentials_dict = json.load(uploaded_key)
@@ -577,10 +601,10 @@ elif page == "Settings":
             st.success("✅ Google credentials saved successfully!")
 
     st.write("---")
-    
+
     # Google Sheet URL input with session state
     st.subheader("Step 2: Enter Google Sheet URL")
-    
+
     col1, col2 = st.columns([3, 1])
     with col1:
         sheet_url = st.text_input(
@@ -588,45 +612,45 @@ elif page == "Settings":
             value=st.session_state.google_sheet_url,
             placeholder="https://docs.google.com/spreadsheets/d/1ABC123/edit"
         )
-    
+
     with col2:
         remember = st.checkbox("Remember URL", value=st.session_state.remember_sheet)
-    
+
     st.write("---")
-    
+
     # Setup auto-sync
     if st.button("✅ Set Up Auto-Sync", key="setup_sync"):
         if uploaded_key and sheet_url:
             # Save settings to session state
             st.session_state.google_sheet_url = sheet_url
             st.session_state.remember_sheet = remember
-            
+
             # Also save to config file
             save_auto_sync_config(st.session_state.google_credentials, sheet_url)
 
             st.success("""
             ✅ **Setup Complete!**
-            
+
             **Next Steps:**
             1. **Refresh the app** (F5) to start auto-syncing
             2. The app will automatically load your portfolio from Google Sheets
             3. No need to upload CSV files anymore
             4. Updates to your Google Sheet will appear automatically
-            
+
             **Note:** If you see any errors, try refreshing again or check that your Google Sheet is properly shared with the service account.
             """)
-            
+
             st.info("💡 **Credentials are saved locally** - you won't need to upload the JSON file again tomorrow!")
         else:
             st.error("⚠️ Please provide both the Google credentials file and Sheet URL")
-    
+
     # Show current settings
     if st.session_state.google_sheet_url:
         st.write("---")
         st.subheader("📊 Current Configuration")
         st.write(f"**Sheet URL**: `{st.session_state.google_sheet_url}`")
         st.write(f"**Remember Settings**: {st.session_state.remember_sheet}")
-        
+
         if st.button("🔄 Clear Settings"):
             st.session_state.google_sheet_url = ""
             st.session_state.remember_sheet = False
@@ -641,6 +665,7 @@ elif page == "Settings":
             st.error("❌ Failed to sync from Google Sheet.")
     else:
         st.info("Auto-sync not configured.")
+
 
 def authenticate_google_sheets():
     """
