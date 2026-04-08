@@ -11,6 +11,8 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+"""Load saved Google credentials from local file"""
+
 CRYPTO_ETFS = ["IBIT", "ETHA", "BSOL"]
 
 st.set_page_config(page_title="Portfolio Manager OS", page_icon="📊", layout="wide", initial_sidebar_state="expanded")
