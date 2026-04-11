@@ -184,7 +184,7 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 "מחיר ממוצע פתוח (₪)": open_cost / open_qty if open_qty else 0.0,
             }
         )
-
+##
     return pd.DataFrame(rows)
 
 
