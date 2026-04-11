@@ -1,11 +1,13 @@
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
-import gspread
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -14,14 +16,15 @@ import streamlit as st
 import yfinance as yf
 
 try:
-    from google.oauth2.service_account import Credentials
-except Exception:  # pragma: no cover - optional for local preview environments
-    Credentials = None
+    import gspread
+except Exception:
+    gspread = None
 
-DATA_FILE = Path(__file__).resolve().parent / "DATA" / "verified_data.csv"
-SHEET_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
 RISK_FREE_ANNUAL = 0.02
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
+LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "app_local_config.json"
+DEFAULT_SERVICE_ACCOUNT_FILE = Path(__file__).resolve().parent / "clean-linker-492313-s3-770814e64205.json"
+DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 
 
 @dataclass
@@ -230,6 +233,23 @@ def _safe_quote(symbol: str) -> float:
         return 0.0
 
 
+def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "") -> str:
+    cleaned = sorted({_clean(v) for v in options if _clean(v)})
+    mode = st.radio(
+        f"{label} - אופן הזנה",
+        ["בחירה מרשימה", "הקלדה ידנית"],
+        horizontal=True,
+        key=f"{key_prefix}_{label}_mode",
+    )
+    if mode == "בחירה מרשימה":
+        selectable = cleaned if cleaned else ([default] if _clean(default) else [])
+        if not selectable:
+            return st.text_input(label, value=default, key=f"{key_prefix}_{label}_fallback")
+        index = selectable.index(default) if default in selectable else 0
+        return st.selectbox(label, selectable, index=index, key=f"{key_prefix}_{label}_pick")
+    return st.text_input(label, value=default, key=f"{key_prefix}_{label}_type")
+
+
 def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     work = open_trades.copy()
     for col in ["Type", "Ticker", "Platform"]:
@@ -312,107 +332,273 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     }
 
 
-def get_gspread_client(credentials_json: Optional[str]):
-    if not credentials_json or Credentials is None:
-        return None
+def call_apps_script_(web_app_url: str, payload: Dict[str, object]) -> Dict[str, object]:
+    req = urlrequest.Request(
+        web_app_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+    with urlrequest.urlopen(req, timeout=25) as response:
+        body = response.read().decode("utf-8")
+    return json.loads(body)
+
+
+def load_local_settings() -> Dict[str, str]:
+    if not LOCAL_SETTINGS_FILE.exists():
+        return {}
     try:
-        credentials_dict = json.loads(credentials_json)
-        creds = Credentials.from_service_account_info(credentials_dict, scopes=SHEET_SCOPE)
-        return gspread.authorize(creds)
+        raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+        return {
+            "web_app_url": _clean(raw.get("web_app_url", "")),
+            "api_token": _clean(raw.get("api_token", "")),
+            "spreadsheet_ref": _clean(raw.get("spreadsheet_ref", "")),
+            "worksheet_name": _clean(raw.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
+            "service_account_file": _clean(raw.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))),
+        }
     except Exception:
-        return None
+        return {}
 
 
-def sync_trade_to_sheet(gc, sheet_url: str, action: str, trade_row: Dict[str, object]) -> Tuple[bool, str]:
+def save_local_settings(
+    web_app_url: str,
+    api_token: str,
+    spreadsheet_ref: str,
+    worksheet_name: str,
+    service_account_file: str,
+) -> bool:
     try:
-        sh = gc.open_by_url(sheet_url)
-        ws = sh.worksheet("תמונת מצב")
-        audit = sh.worksheet("תגובות לטופס 1")
+        payload = {
+            "web_app_url": _clean(web_app_url),
+            "api_token": _clean(api_token),
+            "spreadsheet_ref": _clean(spreadsheet_ref),
+            "worksheet_name": _clean(worksheet_name) or DEFAULT_WORKSHEET_NAME,
+            "service_account_file": _clean(service_account_file),
+        }
+        LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
 
-        header = ws.row_values(1)
-        if not header:
-            return False, "הטאב תמונת מצב ריק מכותרות"
-        if "Trade_ID" not in header:
-            return False, "עמודת Trade_ID חסרה בטאב תמונת מצב"
 
-        tid = str(trade_row.get("Trade_ID", "")).strip()
-        if not tid:
-            return False, "Trade_ID חסר"
+def is_apps_script_web_app_url(url: str) -> bool:
+    cleaned = _clean(url).lower()
+    return cleaned.startswith("https://script.google.com/macros/s/") and (cleaned.endswith("/exec") or cleaned.endswith("/dev"))
 
-        id_col = header.index("Trade_ID") + 1
-        id_values = ws.col_values(id_col)[1:]
-        row_index = None
-        for i, value in enumerate(id_values, start=2):
-            if str(value).strip() == tid:
-                row_index = i
-                break
 
-        editable = set(trade_row.keys())
+def is_google_sheet_url(url: str) -> bool:
+    cleaned = _clean(url).lower()
+    return "docs.google.com/spreadsheets" in cleaned
 
-        def build_new_row() -> List[object]:
-            row = [""] * len(header)
-            for col, val in trade_row.items():
-                if col in header:
-                    row[header.index(col)] = val
-            return row
 
-        if action == "add":
-            if row_index:
-                return False, "הרשומה כבר קיימת. יש לבחור עריכה"
-            ws.append_row(build_new_row(), value_input_option="USER_ENTERED")
-        elif action == "edit":
-            if not row_index:
-                return False, "לא נמצאה רשומה לעדכון"
-            existing = ws.row_values(row_index)
-            if len(existing) < len(header):
-                existing += [""] * (len(header) - len(existing))
-            for col in editable:
-                if col in header:
-                    existing[header.index(col)] = trade_row.get(col, "")
-            ws.update([existing], f"A{row_index}")
-        elif action == "delete":
-            if not row_index:
-                return False, "לא נמצאה רשומה למחיקה"
-            ws.delete_rows(row_index)
-        else:
-            return False, "פעולה לא נתמכת"
+def _extract_sheet_id(sheet_ref: str) -> str:
+    ref = _clean(sheet_ref)
+    if not ref:
+        return ""
+    if "docs.google.com/spreadsheets" not in ref:
+        return ref
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", ref)
+    return match.group(1) if match else ""
 
-        audit.append_row([
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            action,
-            tid,
-            "OK",
-            json.dumps(trade_row, ensure_ascii=False),
-        ])
-        return True, "סונכרן בהצלחה"
+
+def _build_gspread_client(service_account_file: str):
+    if gspread is None:
+        raise RuntimeError("הספריה gspread לא מותקנת בסביבה")
+
+    key_path = Path(_clean(service_account_file)) if _clean(service_account_file) else DEFAULT_SERVICE_ACCOUNT_FILE
+    if not key_path.is_absolute():
+        key_path = Path(__file__).resolve().parent / key_path
+    if not key_path.exists():
+        raise RuntimeError(f"קובץ Service Account לא נמצא: {key_path}")
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.readonly",
+    ]
+    return gspread.service_account(filename=str(key_path), scopes=scopes)
+
+
+@st.cache_data(ttl=20)
+def load_google_snapshot_data_via_gspread(spreadsheet_ref: str, worksheet_name: str, service_account_file: str) -> pd.DataFrame:
+    client = _build_gspread_client(service_account_file)
+    sheet_id = _extract_sheet_id(spreadsheet_ref)
+    if not sheet_id:
+        raise RuntimeError("חסר Spreadsheet ID/URL עבור חיבור gspread")
+
+    book = client.open_by_key(sheet_id)
+    ws = book.worksheet(_clean(worksheet_name) or DEFAULT_WORKSHEET_NAME)
+    values = ws.get_all_values()
+    if not values:
+        return pd.DataFrame()
+
+    headers = [str(h) for h in values[0]]
+    rows = [r for r in values[1:] if any(_clean(v) for v in r)]
+    return pd.DataFrame(rows, columns=headers)
+
+
+@st.cache_data(ttl=20)
+def load_google_snapshot_data(web_app_url: str, token: str) -> pd.DataFrame:
+    payload = {"token": token or "", "action": "read_snapshot"}
+    parsed = call_apps_script_(web_app_url, payload)
+    if not bool(parsed.get("ok")):
+        raise RuntimeError(str(parsed.get("error") or parsed))
+
+    data = parsed.get("data") or {}
+    headers = [str(h) for h in (data.get("headers") or [])]
+    rows = data.get("rows") or []
+    if not headers:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows, columns=headers)
+    return _normalize_snapshot_df(df)
+
+
+def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
+    rename = {
+        "מיקום נוכחי": "Current_Location",
+        "פלטפורמה": "Platform",
+        "סוג נכס": "Type",
+        "טיקר": "Ticker",
+        "תאריך רכישה": "Purchase_Date",
+        "כמות": "Quantity",
+        "שער קנייה": "Origin_Buy_Price",
+        "עלות כוללת": "Cost_Origin",
+        "מטבע": "Origin_Currency",
+        "עמלה": "Commission",
+        "סטטוס": "Status",
+        "עלות ILS": "Cost_ILS",
+        "שווי ILS": "Current_Value_ILS",
+        "Trade_ID": "Trade_ID",
+    }
+    df = df.rename(columns=rename)
+
+    for col in ["Platform", "Type", "Ticker", "Status", "Origin_Currency"]:
+        if col not in df.columns:
+            df[col] = ""
+        df[col] = df[col].map(_clean)
+
+    for col in ["Quantity", "Origin_Buy_Price", "Cost_Origin", "Commission", "Cost_ILS", "Current_Value_ILS"]:
+        if col not in df.columns:
+            df[col] = 0.0
+        df[col] = df[col].map(_num)
+
+    if "Purchase_Date" not in df.columns:
+        df["Purchase_Date"] = pd.NaT
+    df["Purchase_Date"] = pd.to_datetime(df["Purchase_Date"], errors="coerce", dayfirst=True)
+
+    if "Trade_ID" not in df.columns:
+        df["Trade_ID"] = df.apply(_to_trade_id, axis=1)
+    else:
+        df["Trade_ID"] = df["Trade_ID"].map(_clean)
+        missing = df["Trade_ID"] == ""
+        if missing.any():
+            df.loc[missing, "Trade_ID"] = df.loc[missing].apply(_to_trade_id, axis=1)
+
+    df["Record_Source"] = "STATE_SNAPSHOT"
+    df["Event_Type"] = "TRADE"
+    df["Action"] = df["Status"].map(lambda x: "SELL" if _clean(x) == "סגור" else "BUY")
+    return df
+
+
+def load_snapshot_data(
+    web_app_url: str,
+    token: str,
+    spreadsheet_ref: str,
+    worksheet_name: str,
+    service_account_file: str,
+) -> Tuple[pd.DataFrame, str]:
+    clean_url = _clean(web_app_url)
+    if clean_url:
+        if not is_apps_script_web_app_url(clean_url):
+            raise RuntimeError("קישור Web App לא תקין")
+        return load_google_snapshot_data(clean_url, token), "apps_script"
+
+    raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
+    return _normalize_snapshot_df(raw_df), "gspread"
+
+
+def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Dict[str, object]) -> Tuple[bool, str]:
+    if not web_app_url:
+        return False, "חסר קישור Web App של Apps Script"
+
+    payload = {"token": token or "", "action": action, "trade": trade_row}
+
+    try:
+        parsed = call_apps_script_(web_app_url, payload)
+    except urlerror.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else str(exc)
+        return False, f"שגיאת HTTP מהשרת: {exc.code} | {details}"
     except Exception as exc:
-        return False, f"שגיאת סנכרון: {exc}"
+        return False, f"שגיאת תקשורת ל-Apps Script: {exc}"
 
-
-def persist_verified(df: pd.DataFrame) -> None:
-    df_to_save = df.copy()
-    df_to_save.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
-    load_verified_data.clear()
+    if bool(parsed.get("ok")):
+        return True, str(parsed.get("message") or "נשמר בהצלחה בגוגל שיט")
+    return False, str(parsed.get("error") or parsed)
 
 
 def main() -> None:
     st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide")
 
     st.sidebar.title("הגדרות תצוגה וחיבור")
-    theme = st.sidebar.radio("מצב תצוגה", ["כהה", "בהיר"], index=0)
-    template = "plotly_dark" if theme == "כהה" else "plotly_white"
+    template = "plotly_white"
 
-    creds_json = st.sidebar.text_area("JSON של Service Account (אופציונלי)", value="", height=120)
-    sheet_url = st.sidebar.text_input("קישור Google Sheet (אופציונלי)", value="")
-    view_mode = st.sidebar.selectbox(
-        "טווח נתונים",
-        ["עסקאות תמונת מצב בלבד", "כל הרשומות ב-verified_data"],
-        index=0,
+    settings = load_local_settings()
+
+    web_app_url = st.sidebar.text_input("קישור Web App של Apps Script", value=settings.get("web_app_url", ""))
+    api_token = st.sidebar.text_input("API Token (אם הוגדר ב-Script Properties)", value=settings.get("api_token", ""), type="password")
+    st.sidebar.caption("אם אין Web App אפשר לעבוד בקריאה ישירה עם Service Account (gspread).")
+    spreadsheet_ref = st.sidebar.text_input(
+        "Spreadsheet URL או ID",
+        value=settings.get("spreadsheet_ref", ""),
+        help="ניתן להדביק URL מלא של Google Sheets או את ה-ID בלבד.",
+    )
+    worksheet_name = st.sidebar.text_input("שם גיליון", value=settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME))
+    service_account_file = st.sidebar.text_input(
+        "נתיב קובץ Service Account JSON",
+        value=settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)),
     )
 
-    df = load_verified_data(str(DATA_FILE))
+    if st.sidebar.button("שמור חיבור למחשב הזה"):
+        ok = save_local_settings(web_app_url, api_token, spreadsheet_ref, worksheet_name, service_account_file)
+        if ok:
+            st.sidebar.success("החיבור נשמר מקומית")
+        else:
+            st.sidebar.error("שמירת החיבור נכשלה")
+
+    if st.sidebar.button("רענון נתונים מגוגל"):
+        load_google_snapshot_data.clear()
+        load_google_snapshot_data_via_gspread.clear()
+        st.rerun()
+
+    web_url_clean = _clean(web_app_url)
+    using_apps_script = bool(web_url_clean)
+    if using_apps_script and not is_apps_script_web_app_url(web_url_clean):
+        if is_google_sheet_url(web_url_clean):
+            st.error("הוזן קישור של Google Sheets במקום קישור Web App של Apps Script")
+            st.info("צריך להדביק קישור שמתחיל ב-https://script.google.com/macros/s/ ומסתיים ב-/exec")
+        else:
+            st.error("קישור Web App לא תקין")
+            st.info("פורמט תקין לדוגמה: https://script.google.com/macros/s/.../exec")
+        st.stop()
+
+    if not using_apps_script and not _clean(spreadsheet_ref):
+        st.error("חסר חיבור לגוגל: הזן Web App URL או Spreadsheet URL/ID עבור gspread")
+        st.info("יש לך כבר קובץ Service Account בפרויקט, לכן מספיק להדביק Spreadsheet URL/ID ולשמור.")
+        st.stop()
+
+    try:
+        df, source_mode = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
+    except Exception as exc:
+        st.error(f"קריאת נתונים מגוגל נכשלה: {exc}")
+        st.stop()
+
+    if source_mode == "gspread":
+        st.sidebar.warning("מצב קריאה דרך gspread פעיל (ללא Web App פעיל, פעולות עריכה/מחיקה מושבתות).")
+    else:
+        st.sidebar.success("חיבור דרך Apps Script פעיל (קריאה + כתיבה).")
+
     if df.empty:
-        st.error("לא נמצא קובץ DATA/verified_data.csv. יש להריץ תחילה את portfolio_validator.py")
+        st.warning("לא נמצאו עסקאות ב'תמונת מצב' בגוגל שיט")
         st.stop()
 
     trades = df[(df["Record_Source"] == "STATE_SNAPSHOT") & (df["Event_Type"] == "TRADE")].copy() if "Record_Source" in df.columns else df.copy()
@@ -545,9 +731,13 @@ def main() -> None:
 
     elif page == "ניהול עסקאות":
         st.title("ניהול עסקאות (הוספה / עריכה / מחיקה)")
+        st.caption("שמירה מתבצעת ישירות ל-Google Sheets דרך Apps Script (ללא כתיבה ל-CSV).")
+        write_enabled = source_mode == "apps_script"
+        if not write_enabled:
+            st.warning("הדף במצב קריאה בלבד כי אין Web App URL תקין. כדי לאפשר הוספה/עריכה/מחיקה, חבר Apps Script Web App.")
 
         st.caption(f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות.")
-        trade_view = df.copy() if view_mode == "כל הרשומות ב-verified_data" else trades.copy()
+        trade_view = trades.copy()
         status_filter = st.multiselect("סינון סטטוס", sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[])
         if status_filter:
             trade_view = trade_view[trade_view["Status"].isin(status_filter)]
@@ -561,18 +751,22 @@ def main() -> None:
 
         mode = st.radio("פעולה", ["הוספה", "עריכה", "מחיקה"], horizontal=True)
         editable_cols = ["Platform", "Type", "Ticker", "Purchase_Date", "Quantity", "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID"]
+        platforms = trades["Platform"].dropna().astype(str).tolist() if "Platform" in trades.columns else []
+        types = trades["Type"].dropna().astype(str).tolist() if "Type" in trades.columns else []
+        tickers = trades["Ticker"].dropna().astype(str).tolist() if "Ticker" in trades.columns else []
+        currencies = trades["Origin_Currency"].dropna().astype(str).tolist() if "Origin_Currency" in trades.columns else []
 
         if mode == "הוספה":
             with st.form("add_form"):
                 new_row = {
-                    "Platform": st.text_input("פלטפורמה", "Bit2C"),
-                    "Type": st.text_input("סוג נכס", "קריפטו"),
-                    "Ticker": st.text_input("טיקר", "BTC"),
+                    "Platform": _select_or_type("פלטפורמה", platforms, "Bit2C", "add_platform"),
+                    "Type": _select_or_type("סוג נכס", types, "קריפטו", "add_type"),
+                    "Ticker": _select_or_type("טיקר", tickers, "BTC", "add_ticker").upper(),
                     "Purchase_Date": st.date_input("תאריך רכישה", value=datetime.now()).strftime("%Y-%m-%d"),
                     "Quantity": st.number_input("כמות", value=0.0, format="%.8f"),
                     "Origin_Buy_Price": st.number_input("שער קנייה", value=0.0),
                     "Cost_Origin": st.number_input("עלות מקור", value=0.0),
-                    "Origin_Currency": st.text_input("מטבע מקור", "USD"),
+                    "Origin_Currency": _select_or_type("מטבע מקור", currencies, "USD", "add_currency").upper(),
                     "Commission": st.number_input("עמלה", value=0.0),
                     "Status": st.selectbox("סטטוס", ["פתוח", "סגור"]),
                     "Cost_ILS": st.number_input("עלות ILS", value=0.0),
@@ -584,22 +778,25 @@ def main() -> None:
                 submitted = st.form_submit_button("שמור")
 
             if submitted:
-                for col in df.columns:
-                    if col not in new_row:
-                        new_row[col] = ""
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                persist_verified(df)
-                st.success("הרשומה נוספה לקובץ verified_data.csv")
-
-                gc = get_gspread_client(creds_json)
-                if gc and sheet_url:
-                    ok, msg = sync_trade_to_sheet(gc, sheet_url, "add", new_row)
-                    st.info(msg if ok else f"כשל סנכרון: {msg}")
+                if not write_enabled:
+                    st.error("לא ניתן לשמור במצב gspread. הגדר Web App URL תקין בצד שמאל.")
+                else:
+                    ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
+                    if ok:
+                        st.success("הרשומה נוספה ישירות ל-Google Sheets")
+                        st.info(msg)
+                        load_google_snapshot_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"הוספה נכשלה: {msg}")
 
         elif mode == "עריכה":
             options = trades["Trade_ID"].dropna().astype(str).tolist()
+            if not options:
+                st.info("אין Trade_ID זמין לעריכה")
+                return
             selected = st.selectbox("בחר Trade_ID", options)
-            row_idx = df.index[df["Trade_ID"].astype(str) == selected]
+            row_idx = trades.index[trades["Trade_ID"].astype(str) == selected]
             if len(row_idx) == 0:
                 st.warning("לא נמצאה רשומה")
             else:
@@ -607,14 +804,22 @@ def main() -> None:
                 with st.form("edit_form"):
                     edited = {}
                     for col in editable_cols:
-                        if col not in df.columns:
+                        if col not in trades.columns:
                             continue
-                        val = df.at[idx, col]
+                        val = trades.at[idx, col]
                         if col in {"Quantity", "Origin_Buy_Price", "Cost_Origin", "Commission", "Cost_ILS", "Current_Value_ILS"}:
                             edited[col] = st.number_input(col, value=float(_num(val)), key=f"e_{col}")
                         elif col == "Purchase_Date":
                             d = pd.to_datetime(val, errors="coerce")
                             edited[col] = st.date_input(col, value=(d.date() if pd.notna(d) else datetime.now().date()), key=f"e_{col}").strftime("%Y-%m-%d")
+                        elif col == "Platform":
+                            edited[col] = _select_or_type("פלטפורמה", platforms, _clean(val), f"edit_{selected}_platform")
+                        elif col == "Type":
+                            edited[col] = _select_or_type("סוג נכס", types, _clean(val), f"edit_{selected}_type")
+                        elif col == "Ticker":
+                            edited[col] = _select_or_type("טיקר", tickers, _clean(val), f"edit_{selected}_ticker").upper()
+                        elif col == "Origin_Currency":
+                            edited[col] = _select_or_type("מטבע מקור", currencies, _clean(val), f"edit_{selected}_currency").upper()
                         elif col == "Status":
                             edited[col] = st.selectbox(col, ["פתוח", "סגור"], index=0 if _clean(val) != "סגור" else 1, key=f"e_{col}")
                         elif col == "Action":
@@ -624,37 +829,45 @@ def main() -> None:
                     submitted = st.form_submit_button("עדכן")
 
                 if submitted:
-                    for k, v in edited.items():
-                        df.at[idx, k] = v
-                    persist_verified(df)
-                    st.success("הרשומה עודכנה")
-                    gc = get_gspread_client(creds_json)
-                    if gc and sheet_url:
-                        ok, msg = sync_trade_to_sheet(gc, sheet_url, "edit", edited)
-                        st.info(msg if ok else f"כשל סנכרון: {msg}")
+                    if not write_enabled:
+                        st.error("לא ניתן לעדכן במצב gspread. הגדר Web App URL תקין בצד שמאל.")
+                    else:
+                        edited["Trade_ID"] = selected
+                        ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "edit", edited)
+                        if ok:
+                            st.success("הרשומה עודכנה ישירות ב-Google Sheets")
+                            st.info(msg)
+                            load_google_snapshot_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"עדכון נכשל: {msg}")
 
         else:
             options = trades["Trade_ID"].dropna().astype(str).tolist()
+            if not options:
+                st.info("אין Trade_ID זמין למחיקה")
+                return
             selected = st.selectbox("בחר Trade_ID למחיקה", options)
             if st.button("מחק רשומה"):
-                row = df[df["Trade_ID"].astype(str) == selected]
-                df = df[df["Trade_ID"].astype(str) != selected]
-                persist_verified(df)
-                st.success("הרשומה נמחקה")
-                gc = get_gspread_client(creds_json)
-                if gc and sheet_url and not row.empty:
-                    ok, msg = sync_trade_to_sheet(gc, sheet_url, "delete", row.iloc[0].to_dict())
-                    st.info(msg if ok else f"כשל סנכרון: {msg}")
+                if not write_enabled:
+                    st.error("לא ניתן למחוק במצב gspread. הגדר Web App URL תקין בצד שמאל.")
+                else:
+                    delete_payload = {"Trade_ID": _clean(selected)}
+                    ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "delete", delete_payload)
+                    if ok:
+                        st.success("הרשומה נמחקה ישירות מ-Google Sheets")
+                        st.info(msg)
+                        load_google_snapshot_data.clear()
+                        st.rerun()
+                    else:
+                        st.error(f"מחיקה נכשלה: {msg}")
 
     else:
         st.title("בקרת נתונים ואיכות")
-        if "validation_status" in df.columns:
-            status_counts = df[df.get("Record_Source", "") == "STATE_SNAPSHOT"].groupby("validation_status").size().reset_index(name="count")
-            st.dataframe(status_counts)
-            fig = px.pie(status_counts, names="validation_status", values="count", title="פיזור סטטוסי אימות", template=template)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("לא נמצאו עמודות אימות ב-verified_data.csv")
+        status_counts = trades.groupby("Status").size().reset_index(name="count")
+        st.dataframe(status_counts)
+        fig = px.pie(status_counts, names="Status", values="count", title="פיזור סטטוסי עסקאות", template=template)
+        st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("נתונים אחרונים")
         st.dataframe(df.tail(30))
