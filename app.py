@@ -1,10 +1,11 @@
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
@@ -401,20 +402,109 @@ def _extract_sheet_id(sheet_ref: str) -> str:
     return match.group(1) if match else ""
 
 
+def _service_account_from_runtime_secrets() -> Optional[Dict[str, object]]:
+    # Streamlit Cloud usually injects credentials via st.secrets, not local files.
+    required_keys = {
+        "type",
+        "project_id",
+        "private_key_id",
+        "private_key",
+        "client_email",
+        "client_id",
+        "auth_uri",
+        "token_uri",
+        "auth_provider_x509_cert_url",
+        "client_x509_cert_url",
+    }
+
+    def _to_plain_dict(obj: object) -> Optional[Dict[str, object]]:
+        if obj is None:
+            return None
+        if hasattr(obj, "to_dict"):
+            try:
+                return dict(obj.to_dict())
+            except Exception:
+                return None
+        if isinstance(obj, Mapping):
+            return dict(obj)
+        if isinstance(obj, dict):
+            return dict(obj)
+        if isinstance(obj, str):
+            try:
+                parsed = json.loads(obj)
+                return dict(parsed) if isinstance(parsed, dict) else None
+            except Exception:
+                return None
+        return None
+
+    def _normalize(creds: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
+        if not creds:
+            return None
+        out = {str(k): v for k, v in creds.items()}
+        if not required_keys.issubset(set(out.keys())):
+            return None
+        # Ensure real newlines in private key for google-auth.
+        out["private_key"] = str(out.get("private_key", "")).replace("\\n", "\n")
+        return out
+
+    try:
+        # Preferred format in Streamlit Cloud: [gcp_service_account] section.
+        if "gcp_service_account" in st.secrets:
+            parsed = _normalize(_to_plain_dict(st.secrets["gcp_service_account"]))
+            if parsed:
+                return parsed
+
+        # Also support flat secrets format (top-level keys).
+        flat = _to_plain_dict(st.secrets)
+        parsed_flat = _normalize(flat)
+        if parsed_flat:
+            return parsed_flat
+    except Exception:
+        return None
+    return None
+
+
+def _service_account_from_env() -> Optional[Dict[str, object]]:
+    for var_name in ["GCP_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_JSON", "SERVICE_ACCOUNT_JSON"]:
+        raw = os.getenv(var_name, "")
+        if not _clean(raw):
+            continue
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            continue
+    return None
+
+
 def _build_gspread_client(service_account_file: str):
     if gspread is None:
         raise RuntimeError("הספריה gspread לא מותקנת בסביבה")
-
-    key_path = Path(_clean(service_account_file)) if _clean(service_account_file) else DEFAULT_SERVICE_ACCOUNT_FILE
-    if not key_path.is_absolute():
-        key_path = Path(__file__).resolve().parent / key_path
-    if not key_path.exists():
-        raise RuntimeError(f"קובץ Service Account לא נמצא: {key_path}")
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
+
+    env_creds = _service_account_from_env()
+    if env_creds:
+        return gspread.service_account_from_dict(env_creds, scopes=scopes)
+
+    secrets_creds = _service_account_from_runtime_secrets()
+    if secrets_creds:
+        return gspread.service_account_from_dict(secrets_creds, scopes=scopes)
+
+    key_path = Path(_clean(service_account_file)) if _clean(service_account_file) else DEFAULT_SERVICE_ACCOUNT_FILE
+    if not key_path.is_absolute():
+        key_path = Path(__file__).resolve().parent / key_path
+    if not key_path.exists():
+        raise RuntimeError(
+            f"קובץ Service Account לא נמצא: {key_path}. "
+            "בפריסה (למשל Streamlit Cloud) הגדר credentials תחת st.secrets['gcp_service_account'] "
+            "או ENV בשם GCP_SERVICE_ACCOUNT_JSON."
+        )
+
     return gspread.service_account(filename=str(key_path), scopes=scopes)
 
 
