@@ -12,11 +12,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-from google.oauth2.service_account import Credentials
+
+try:
+    from google.oauth2.service_account import Credentials
+except Exception:  # pragma: no cover - optional for local preview environments
+    Credentials = None
 
 DATA_FILE = Path(__file__).resolve().parent / "DATA" / "verified_data.csv"
 SHEET_SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
 RISK_FREE_ANNUAL = 0.02
+CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
 
 
 @dataclass
@@ -96,6 +101,18 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
             df[col] = 0.0
         df[col] = df[col].map(_num)
 
+    for col, default in {
+        "Record_Source": "",
+        "validation_status": "",
+        "source_type": "",
+        "source_file": "",
+        "raw_sources": "",
+        "platform_norm": "",
+    }.items():
+        if col not in df.columns:
+            df[col] = default
+        df[col] = df[col].map(_clean)
+
     if "Purchase_Date" not in df.columns:
         df["Purchase_Date"] = pd.NaT
     df["Purchase_Date"] = pd.to_datetime(df["Purchase_Date"], errors="coerce", dayfirst=True)
@@ -145,7 +162,7 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
     if not frames:
         return pd.Series(dtype=float)
 
-    combined = pd.concat(frames, axis=1).fillna(method="ffill").fillna(0)
+    combined = pd.concat(frames, axis=1).ffill().fillna(0)
     return combined.sum(axis=1)
 
 
@@ -184,7 +201,6 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 "מחיר ממוצע פתוח (₪)": open_cost / open_qty if open_qty else 0.0,
             }
         )
-##
     return pd.DataFrame(rows)
 
 
@@ -207,8 +223,97 @@ def risk_metrics(value_series: pd.Series) -> Dict[str, float]:
     return {"vol": vol, "sharpe": sharpe, "mdd": mdd, "cagr": cagr}
 
 
+def _safe_quote(symbol: str) -> float:
+    try:
+        return float(yf.Ticker(symbol).info.get("regularMarketPrice", 0) or 0)
+    except Exception:
+        return 0.0
+
+
+def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
+    work = open_trades.copy()
+    for col in ["Type", "Ticker", "Platform"]:
+        if col not in work.columns:
+            work[col] = ""
+        work[col] = work[col].map(_clean)
+
+    for col in ["Quantity", "Cost_ILS", "Current_Value_ILS", "Cost_Origin", "Commission"]:
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = work[col].map(_num)
+
+    total_value = float(work["Current_Value_ILS"].sum())
+    total_cost = float(work["Cost_ILS"].sum())
+
+    crypto_mask = (work["Type"] == "קריפטו") | (work["Ticker"].isin(CRYPTO_ETFS))
+    crypto_value = float(work.loc[crypto_mask, "Current_Value_ILS"].sum())
+    btc_value = float(work.loc[work["Ticker"].isin(["BTC", "IBIT"]), "Current_Value_ILS"].sum())
+
+    summary = work.groupby("Ticker", as_index=False).agg(
+        עלות_שקלית=("Cost_ILS", "sum"),
+        שווי_שקלי=("Current_Value_ILS", "sum"),
+        עלות_מקור=("Cost_Origin", "sum"),
+    )
+    if summary.empty:
+        winner_loser = pd.DataFrame(columns=["סוג", "טיקר", "תשואה"])
+    else:
+        summary["תשואה"] = np.where(summary["עלות_שקלית"] > 0, (summary["שווי_שקלי"] - summary["עלות_שקלית"]) / summary["עלות_שקלית"], 0.0)
+        winner = summary.loc[summary["תשואה"].idxmax()]
+        loser = summary.loc[summary["תשואה"].idxmin()]
+        winner_loser = pd.DataFrame(
+            [
+                {"סוג": "המנצח", "טיקר": winner["Ticker"], "תשואה": float(winner["תשואה"])},
+                {"סוג": "המפסיד", "טיקר": loser["Ticker"], "תשואה": float(loser["תשואה"])},
+            ]
+        )
+
+    platform_summary = work.groupby("Platform", as_index=False).agg(
+        עלות_שקלית=("Cost_ILS", "sum"),
+        שווי_שקלי=("Current_Value_ILS", "sum"),
+    )
+    if not platform_summary.empty:
+        platform_summary["רווח_הפסד"] = platform_summary["שווי_שקלי"] - platform_summary["עלות_שקלית"]
+
+    asset_map = {"BTC": "IBIT", "ETH": "ETHA", "SOL": "BSOL"}
+    concentration_rows: List[Dict[str, float]] = []
+    for asset, etf in asset_map.items():
+        direct = work[(work["Ticker"] == asset) & (work["Type"] == "קריפטו")]
+        etf_df = work[work["Ticker"] == etf]
+        direct_qty = float(direct["Quantity"].sum())
+        direct_val = float(direct["Current_Value_ILS"].sum())
+        etf_qty = float(etf_df["Quantity"].sum())
+        etf_val = float(etf_df["Current_Value_ILS"].sum())
+        concentration_rows.append(
+            {
+                "נכס": asset,
+                "כמות ישירה": direct_qty,
+                "שווי ישיר (₪)": direct_val,
+                "כמות בקרן": etf_qty,
+                "שווי בקרן (₪)": etf_val,
+                "חשיפה כוללת (₪)": direct_val + etf_val,
+            }
+        )
+
+    live_rates = {
+        "USD/ILS": _safe_quote("USDILS=X"),
+        "BTC/USD": _safe_quote("BTC-USD"),
+        "ETH/USD": _safe_quote("ETH-USD"),
+        "SOL/USD": _safe_quote("SOL-USD"),
+    }
+
+    return {
+        "אחוז_קריפטו": (crypto_value / total_value) if total_value else 0.0,
+        "אחוז_ביטקוין_מהתיק": (btc_value / total_value) if total_value else 0.0,
+        "אחוז_ביטקוין_מהקריפטו": (btc_value / crypto_value) if crypto_value else 0.0,
+        "טבלת_ריכוז": pd.DataFrame(concentration_rows),
+        "טבלת_מנצח_מפסיד": winner_loser,
+        "טבלת_הפקדות": platform_summary,
+        "שערים_חיים": live_rates,
+    }
+
+
 def get_gspread_client(credentials_json: Optional[str]):
-    if not credentials_json:
+    if not credentials_json or Credentials is None:
         return None
     try:
         credentials_dict = json.loads(credentials_json)
@@ -242,16 +347,29 @@ def sync_trade_to_sheet(gc, sheet_url: str, action: str, trade_row: Dict[str, ob
                 row_index = i
                 break
 
-        ordered = [trade_row.get(col, "") for col in header]
+        editable = set(trade_row.keys())
+
+        def build_new_row() -> List[object]:
+            row = [""] * len(header)
+            for col, val in trade_row.items():
+                if col in header:
+                    row[header.index(col)] = val
+            return row
 
         if action == "add":
             if row_index:
                 return False, "הרשומה כבר קיימת. יש לבחור עריכה"
-            ws.append_row(ordered)
+            ws.append_row(build_new_row(), value_input_option="USER_ENTERED")
         elif action == "edit":
             if not row_index:
                 return False, "לא נמצאה רשומה לעדכון"
-            ws.update([ordered], f"A{row_index}")
+            existing = ws.row_values(row_index)
+            if len(existing) < len(header):
+                existing += [""] * (len(header) - len(existing))
+            for col in editable:
+                if col in header:
+                    existing[header.index(col)] = trade_row.get(col, "")
+            ws.update([existing], f"A{row_index}")
         elif action == "delete":
             if not row_index:
                 return False, "לא נמצאה רשומה למחיקה"
@@ -286,6 +404,11 @@ def main() -> None:
 
     creds_json = st.sidebar.text_area("JSON של Service Account (אופציונלי)", value="", height=120)
     sheet_url = st.sidebar.text_input("קישור Google Sheet (אופציונלי)", value="")
+    view_mode = st.sidebar.selectbox(
+        "טווח נתונים",
+        ["עסקאות תמונת מצב בלבד", "כל הרשומות ב-verified_data"],
+        index=0,
+    )
 
     df = load_verified_data(str(DATA_FILE))
     if df.empty:
@@ -314,6 +437,7 @@ def main() -> None:
 
     if page == "דשבורד":
         st.title("מערכת ניהול תיק - דשבורד מתקדם")
+        st.caption(f"{len(trades):,} רשומות נטענו | {len(trades[trades['Record_Source'] == 'STATE_SNAPSHOT']):,} שורות תמונת מצב | {len(trades[trades['Status'] == 'סגור']):,} סגורות")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("שווי כולל (₪)", f"{total_value:,.0f}", delta=f"{total_profit:,.0f} ₪")
@@ -339,6 +463,51 @@ def main() -> None:
 
         st.subheader("טבלת חשיפה מפורטת")
         st.dataframe(summary.style.format({"כמות": "{:.8f}", "עלות": "₪{:,.0f}", "שווי": "₪{:,.0f}", "רווח/הפסד": "₪{:,.0f}", "תשואה": "{:.2%}"}))
+
+        with st.expander("רשימת העסקאות המלאה בתמונת מצב כולל סגורות", expanded=False):
+            snapshot_view = trades[trades["Record_Source"] == "STATE_SNAPSHOT"].copy() if "Record_Source" in trades.columns else trades.copy()
+            show_cols = [c for c in ["Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Cost_Origin", "Cost_ILS", "Commission", "Status", "validation_status"] if c in snapshot_view.columns]
+            if show_cols:
+                snapshot_sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in snapshot_view.columns]
+                if snapshot_sort_cols:
+                    snapshot_asc = [False if c == "Purchase_Date" else True for c in snapshot_sort_cols]
+                    snapshot_view = snapshot_view.sort_values(snapshot_sort_cols, ascending=snapshot_asc)
+                st.dataframe(snapshot_view[show_cols], use_container_width=True)
+
+        st.subheader("תובנות בהשראת דף הבית")
+        reports = build_home_inspired_reports(open_trades)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("אחוז קריפטו מהתיק", f"{reports['אחוז_קריפטו']:.2%}")
+        m2.metric("אחוז ביטקוין מהתיק", f"{reports['אחוז_ביטקוין_מהתיק']:.2%}")
+        m3.metric("אחוז ביטקוין מסך הקריפטו", f"{reports['אחוז_ביטקוין_מהקריפטו']:.2%}")
+
+        report_choice = st.selectbox(
+            "בחר דוח",
+            ["ריכוז נכסים", "המנצח והמפסיד", "סך השקעה נטו", "שערי מטבע חיים"],
+        )
+        if report_choice == "ריכוז נכסים":
+            st.dataframe(
+                reports["טבלת_ריכוז"].style.format(
+                    {
+                        "כמות ישירה": "{:.8f}",
+                        "שווי ישיר (₪)": "₪{:,.0f}",
+                        "כמות בקרן": "{:.8f}",
+                        "שווי בקרן (₪)": "₪{:,.0f}",
+                        "חשיפה כוללת (₪)": "₪{:,.0f}",
+                    }
+                )
+            )
+        elif report_choice == "המנצח והמפסיד":
+            st.dataframe(reports["טבלת_מנצח_מפסיד"].style.format({"תשואה": "{:.2%}"}))
+        elif report_choice == "סך השקעה נטו":
+            st.dataframe(reports["טבלת_הפקדות"].style.format({"עלות_שקלית": "₪{:,.0f}", "שווי_שקלי": "₪{:,.0f}", "רווח_הפסד": "₪{:,.0f}"}))
+        else:
+            rates = reports["שערים_חיים"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("USD/ILS", f"{rates['USD/ILS']:.4f}")
+            c2.metric("BTC/USD", f"{rates['BTC/USD']:.2f}")
+            c3.metric("ETH/USD", f"{rates['ETH/USD']:.2f}")
+            c4.metric("SOL/USD", f"{rates['SOL/USD']:.2f}")
 
     elif page == "סיכונים ו-FIFO":
         st.title("סיכונים, ביצועים ועלות FIFO")
@@ -376,6 +545,19 @@ def main() -> None:
 
     elif page == "ניהול עסקאות":
         st.title("ניהול עסקאות (הוספה / עריכה / מחיקה)")
+
+        st.caption(f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות.")
+        trade_view = df.copy() if view_mode == "כל הרשומות ב-verified_data" else trades.copy()
+        status_filter = st.multiselect("סינון סטטוס", sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[])
+        if status_filter:
+            trade_view = trade_view[trade_view["Status"].isin(status_filter)]
+        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
+        if preview_cols:
+            sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in trade_view.columns]
+            if sort_cols:
+                asc = [False if c == "Purchase_Date" else True for c in sort_cols]
+                trade_view = trade_view.sort_values(sort_cols, ascending=asc)
+            st.dataframe(trade_view[preview_cols], use_container_width=True)
 
         mode = st.radio("פעולה", ["הוספה", "עריכה", "מחיקה"], horizontal=True)
         editable_cols = ["Platform", "Type", "Ticker", "Purchase_Date", "Quantity", "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID"]
