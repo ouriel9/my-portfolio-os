@@ -133,11 +133,15 @@ def inject_global_styles(language: str) -> None:
     css = f"""
     <style>
     .block-container {{padding-top: 3.0rem;}}
+    #MainMenu {{display: none !important;}}
     footer {{display: none !important;}}
     [data-testid="stFooter"] {{display: none !important;}}
     [data-testid="stAppCreator"] {{display: none !important;}}
     [data-testid="stDecoration"] {{display: none !important;}}
-    [href*="streamlit.io"] {{display: none !important;}}
+    [class*="viewerBadge_container"] {{display: none !important;}}
+    [class*="viewerBadge_link"] {{display: none !important;}}
+    [class*="viewerBadge_text"] {{display: none !important;}}
+    a[href*="streamlit.io"] {{display: none !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
@@ -150,10 +154,16 @@ def inject_global_styles(language: str) -> None:
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
     [data-testid="collapsedControl"] button svg,
     [data-testid="stSidebarCollapsedControl"] button svg,
-    [aria-label="Open sidebar"] svg {{display: none !important;}}
+    [data-testid="collapsedControl"] button [data-testid="stIconMaterial"],
+    [data-testid="stSidebarCollapsedControl"] button [data-testid="stIconMaterial"],
+    button[aria-label*="sidebar"] svg,
+    button[aria-label*="Sidebar"] svg,
+    button[aria-label*="sidebar"] [data-testid="stIconMaterial"],
+    button[aria-label*="Sidebar"] [data-testid="stIconMaterial"] {{display: none !important;}}
     [data-testid="collapsedControl"] button::before,
     [data-testid="stSidebarCollapsedControl"] button::before,
-    [aria-label="Open sidebar"]::before {{
+    button[aria-label*="sidebar"]::before,
+    button[aria-label*="Sidebar"]::before {{
         content: "\2630";
         font-size: 1.28rem;
         font-weight: 700;
