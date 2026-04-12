@@ -14,6 +14,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
 try:
@@ -133,37 +134,35 @@ def inject_global_styles(language: str) -> None:
     css = f"""
     <style>
     .block-container {{padding-top: 3.0rem;}}
-    #MainMenu {{display: none !important;}}
     footer {{display: none !important;}}
     [data-testid="stFooter"] {{display: none !important;}}
     [data-testid="stAppCreator"] {{display: none !important;}}
-    [data-testid="stDecoration"] {{display: none !important;}}
-    [class*="viewerBadge_container"] {{display: none !important;}}
-    [class*="viewerBadge_link"] {{display: none !important;}}
-    [class*="viewerBadge_text"] {{display: none !important;}}
-    a[href*="streamlit.io"] {{display: none !important;}}
+    [href*="streamlit.io"] {{display: none !important;}}
+    [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
     [data-testid="stMetric"] {{direction: {direction};}}
     [data-baseweb="tab-list"] {{
+        display: flex !important;
         overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scroll-snap-type: x mandatory;
+        touch-action: pan-x;
         scrollbar-width: thin;
         white-space: nowrap;
+    }}
+    [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+        flex: 0 0 auto;
+        scroll-snap-align: start;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
     [data-testid="collapsedControl"] button svg,
     [data-testid="stSidebarCollapsedControl"] button svg,
-    [data-testid="collapsedControl"] button [data-testid="stIconMaterial"],
-    [data-testid="stSidebarCollapsedControl"] button [data-testid="stIconMaterial"],
-    button[aria-label*="sidebar"] svg,
-    button[aria-label*="Sidebar"] svg,
-    button[aria-label*="sidebar"] [data-testid="stIconMaterial"],
-    button[aria-label*="Sidebar"] [data-testid="stIconMaterial"] {{display: none !important;}}
+    button[aria-label*="sidebar"] svg {{display: none !important;}}
     [data-testid="collapsedControl"] button::before,
     [data-testid="stSidebarCollapsedControl"] button::before,
-    button[aria-label*="sidebar"]::before,
-    button[aria-label*="Sidebar"]::before {{
+    button[aria-label*="sidebar"]::before {{
         content: "\2630";
         font-size: 1.28rem;
         font-weight: 700;
@@ -215,6 +214,76 @@ def inject_global_styles(language: str) -> None:
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
+
+
+def inject_client_fixes() -> None:
+    # Small runtime fixes for mobile UX and branding noise.
+    components.html(
+        """
+        <script>
+        (function () {
+          function removeBranding() {
+            const selectors = [
+              'a[href*="streamlit.io"]',
+              'a[href*="share.streamlit.io"]',
+              'div[data-testid="stAppCreator"]',
+              'footer'
+            ];
+            selectors.forEach((sel) => {
+              document.querySelectorAll(sel).forEach((el) => {
+                const txt = (el.innerText || '').toLowerCase();
+                if (txt.includes('hosted with streamlit') || txt.includes('created by') || sel !== 'a[href*="streamlit.io"]') {
+                  el.style.display = 'none';
+                }
+              });
+            });
+          }
+
+          function setupTabSwipe() {
+            const tabs = Array.from(document.querySelectorAll('[data-baseweb="tab-list"] [data-baseweb="tab"]'));
+            if (!tabs.length || window.__pmSwipeBound) return;
+            window.__pmSwipeBound = true;
+
+            let startX = 0;
+            let startY = 0;
+            document.addEventListener('touchstart', (e) => {
+              if (!e.touches || !e.touches.length) return;
+              startX = e.touches[0].clientX;
+              startY = e.touches[0].clientY;
+            }, { passive: true });
+
+            document.addEventListener('touchend', (e) => {
+              if (!e.changedTouches || !e.changedTouches.length) return;
+              const dx = e.changedTouches[0].clientX - startX;
+              const dy = e.changedTouches[0].clientY - startY;
+              if (Math.abs(dx) < 70 || Math.abs(dy) > 45) return;
+
+              const currentTabs = Array.from(document.querySelectorAll('[data-baseweb="tab-list"] [data-baseweb="tab"]'));
+              const active = currentTabs.findIndex((t) => t.getAttribute('aria-selected') === 'true');
+              if (active < 0) return;
+
+              const next = dx < 0 ? active + 1 : active - 1;
+              if (next >= 0 && next < currentTabs.length) {
+                currentTabs[next].click();
+                currentTabs[next].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+              }
+            }, { passive: true });
+          }
+
+          function run() {
+            removeBranding();
+            setupTabSwipe();
+          }
+
+          run();
+          const obs = new MutationObserver(run);
+          obs.observe(document.body, { childList: true, subtree: true });
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 
 @dataclass
@@ -1179,6 +1248,7 @@ def main() -> None:
     demo_mode = st.sidebar.checkbox("Demo view / מצב הדגמה", value=bool(settings.get("demo_mode", False)))
 
     inject_global_styles(language)
+    inject_client_fixes()
 
     tr = (lambda en, he: he if language == LANG_HE else en)
 
