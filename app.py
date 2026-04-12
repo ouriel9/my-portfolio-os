@@ -133,6 +133,7 @@ def inject_global_styles(language: str) -> None:
     align = "right" if rtl else "left"
     css = f"""
     <style>
+    #MainMenu {{visibility: hidden !important;}}
     .block-container {{padding-top: 3.0rem;}}
     footer,
     footer *,
@@ -149,7 +150,12 @@ def inject_global_styles(language: str) -> None:
         pointer-events: none !important;
     }}
     [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"] {{display: none !important;}}
+    [data-testid="stStatusWidget"],
+    [data-testid="stBottom"],
+    [data-testid="stFloatingActionButton"],
+    [data-testid="stAppViewBlockContainer"] + div:has(a[href*="streamlit.io"]) {{display: none !important;}}
+    a[href*="streamlit.io"],
+    a[href*="share.streamlit.io"] {{display: none !important;}}
     [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
@@ -221,7 +227,9 @@ def inject_global_styles(language: str) -> None:
         [data-testid="stFooter"],
         [data-testid="stAppCreator"],
         [data-testid="stDecoration"],
-        [data-testid="stStatusWidget"] {{display: none !important;}}
+        [data-testid="stStatusWidget"],
+        [data-testid="stBottom"],
+        [data-testid="stFloatingActionButton"] {{display: none !important;}}
     }}
     @media (max-width: 420px) {{
         h1 {{font-size: 1.42rem !important;}}
@@ -239,21 +247,73 @@ def inject_client_fixes() -> None:
         """
         <script>
         (function () {
-          const rootDoc = (window.parent && window.parent.document) ? window.parent.document : document;
-          const rootWin = rootDoc.defaultView || window;
+          const hideCss = `
+            #MainMenu { visibility: hidden !important; }
+            footer, footer *, [data-testid="stFooter"], [data-testid="stFooter"] *,
+            [data-testid="stAppCreator"], [data-testid="stAppCreator"] *,
+            [data-testid="stDecoration"], [data-testid="stStatusWidget"],
+            [data-testid="stBottom"], [data-testid="stFloatingActionButton"],
+            [role="contentinfo"], a[href*="streamlit.io"], a[href*="share.streamlit.io"] {
+              display: none !important;
+              visibility: hidden !important;
+              opacity: 0 !important;
+              max-height: 0 !important;
+              overflow: hidden !important;
+              pointer-events: none !important;
+            }
+          `;
+
+          function injectHideStyle(targetDoc) {
+            if (!targetDoc || !targetDoc.head) return;
+            let styleTag = targetDoc.getElementById('pm-hide-streamlit-branding');
+            if (!styleTag) {
+              styleTag = targetDoc.createElement('style');
+              styleTag.id = 'pm-hide-streamlit-branding';
+              targetDoc.head.appendChild(styleTag);
+            }
+            if (styleTag.textContent !== hideCss) {
+              styleTag.textContent = hideCss;
+            }
+          }
+
+          function resolveRootDoc() {
+            try {
+              if (window.parent && window.parent !== window && window.parent.document) {
+                return window.parent.document;
+              }
+            } catch (err) {
+              // Cross-origin or sandbox limitation: fallback to current document.
+            }
+            return document;
+          }
+
+          let rootDoc = resolveRootDoc();
+          let rootWin = rootDoc.defaultView || window;
 
           function removeBranding() {
+            rootDoc = resolveRootDoc();
+            rootWin = rootDoc.defaultView || window;
+            injectHideStyle(document);
+            if (rootDoc !== document) injectHideStyle(rootDoc);
+
             const brandingHosts = [
               'footer',
               '[data-testid="stFooter"]',
               '[data-testid="stAppCreator"]',
               '[data-testid="stDecoration"]',
               '[data-testid="stStatusWidget"]',
+              '[data-testid="stToolbarActions"]',
               '[role="contentinfo"]'
             ];
 
             brandingHosts.forEach((sel) => {
               rootDoc.querySelectorAll(sel).forEach((el) => {
+                el.style.display = 'none';
+                el.style.visibility = 'hidden';
+                el.style.maxHeight = '0';
+                el.style.overflow = 'hidden';
+              });
+              document.querySelectorAll(sel).forEach((el) => {
                 el.style.display = 'none';
                 el.style.visibility = 'hidden';
                 el.style.maxHeight = '0';
@@ -273,6 +333,18 @@ def inject_client_fixes() -> None:
               const text = (el.innerText || '').trim().toLowerCase();
               if (!text) return;
               if (text.includes('hosted with streamlit') || text === 'made with streamlit') {
+                el.style.display = 'none';
+              }
+            });
+
+            // Fallback: hide tiny fixed bottom-right badges that include Streamlit links.
+            rootDoc.querySelectorAll('div, section, aside').forEach((el) => {
+              const style = rootWin.getComputedStyle ? rootWin.getComputedStyle(el) : null;
+              if (!style) return;
+              const isFixed = style.position === 'fixed' || style.position === 'sticky';
+              const nearBottom = parseFloat(style.bottom || '9999') <= 40;
+              if (!isFixed || !nearBottom) return;
+              if (el.querySelector('a[href*="streamlit.io"], a[href*="share.streamlit.io"]')) {
                 el.style.display = 'none';
               }
             });
@@ -357,6 +429,11 @@ def inject_client_fixes() -> None:
           run();
           const obs = new MutationObserver(run);
           obs.observe(rootDoc.body, { childList: true, subtree: true });
+          rootWin.setInterval(removeBranding, 1200);
+          window.setInterval(function () {
+            injectHideStyle(document);
+            if (rootDoc !== document) injectHideStyle(rootDoc);
+          }, 2000);
         })();
         </script>
         """,
