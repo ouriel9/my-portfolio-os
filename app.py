@@ -134,10 +134,22 @@ def inject_global_styles(language: str) -> None:
     css = f"""
     <style>
     .block-container {{padding-top: 3.0rem;}}
-    footer {{display: none !important;}}
-    [data-testid="stFooter"] {{display: none !important;}}
-    [data-testid="stAppCreator"] {{display: none !important;}}
-    [href*="streamlit.io"] {{display: none !important;}}
+    footer,
+    footer *,
+    [data-testid="stFooter"],
+    [data-testid="stFooter"] *,
+    [data-testid="stAppCreator"],
+    [data-testid="stAppCreator"] * {{
+        display: none !important;
+        visibility: hidden !important;
+        max-height: 0 !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }}
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"] {{display: none !important;}}
     [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
@@ -205,6 +217,11 @@ def inject_global_styles(language: str) -> None:
         .pm-value {{font-size: 1.12rem;}}
         .pm-delta {{font-size: 0.75rem;}}
         .block-container {{padding-top: 2.6rem; padding-left: 0.6rem; padding-right: 0.6rem;}}
+        footer,
+        [data-testid="stFooter"],
+        [data-testid="stAppCreator"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"] {{display: none !important;}}
     }}
     @media (max-width: 420px) {{
         h1 {{font-size: 1.42rem !important;}}
@@ -226,19 +243,38 @@ def inject_client_fixes() -> None:
           const rootWin = rootDoc.defaultView || window;
 
           function removeBranding() {
-            const selectors = [
-              'a[href*="streamlit.io"]',
-              'a[href*="share.streamlit.io"]',
-              'div[data-testid="stAppCreator"]',
-              'footer'
+            const brandingHosts = [
+              'footer',
+              '[data-testid="stFooter"]',
+              '[data-testid="stAppCreator"]',
+              '[data-testid="stDecoration"]',
+              '[data-testid="stStatusWidget"]',
+              '[role="contentinfo"]'
             ];
-            selectors.forEach((sel) => {
+
+            brandingHosts.forEach((sel) => {
               rootDoc.querySelectorAll(sel).forEach((el) => {
-                const txt = (el.innerText || '').toLowerCase();
-                if (txt.includes('hosted with streamlit') || txt.includes('created by') || sel !== 'a[href*="streamlit.io"]') {
-                  el.style.display = 'none';
-                }
+                el.style.display = 'none';
+                el.style.visibility = 'hidden';
+                el.style.maxHeight = '0';
+                el.style.overflow = 'hidden';
               });
+            });
+
+            rootDoc.querySelectorAll('a[href*="streamlit.io"], a[href*="share.streamlit.io"]').forEach((link) => {
+              const holder = link.closest('footer, [data-testid="stFooter"], [data-testid="stAppCreator"], [role="contentinfo"], div');
+              const text = ((holder && holder.innerText) || link.innerText || '').toLowerCase();
+              if (text.includes('streamlit') || text.includes('hosted with') || text.includes('created by')) {
+                (holder || link).style.display = 'none';
+              }
+            });
+
+            rootDoc.querySelectorAll('div, span, p, small').forEach((el) => {
+              const text = (el.innerText || '').trim().toLowerCase();
+              if (!text) return;
+              if (text.includes('hosted with streamlit') || text === 'made with streamlit') {
+                el.style.display = 'none';
+              }
             });
           }
 
