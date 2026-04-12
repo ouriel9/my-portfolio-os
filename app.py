@@ -831,6 +831,50 @@ def save_manual_deposits_store(store: Dict[str, List[Dict[str, object]]]) -> boo
         return False
 
 
+def load_manual_deposits_remote(web_app_url: str, token: str, mode: str) -> Tuple[bool, List[Dict[str, object]], str]:
+    try:
+        payload = {
+            "token": token or "",
+            "action": "read_manual_deposits",
+            "mode": ("demo" if _clean(mode).lower() == "demo" else "live"),
+        }
+        parsed = call_apps_script_(web_app_url, payload)
+        if not bool(parsed.get("ok")):
+            return False, [], str(parsed.get("error") or parsed)
+        data = parsed.get("data") or {}
+        rows = data.get("rows") or []
+        clean_rows: List[Dict[str, object]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            platform = _clean(row.get("Platform", ""))
+            if not platform:
+                continue
+            clean_rows.append({
+                "Platform": platform,
+                "Manual_Deposit_ILS": _num(row.get("Manual_Deposit_ILS", 0.0)),
+            })
+        return True, clean_rows, ""
+    except Exception as exc:
+        return False, [], str(exc)
+
+
+def save_manual_deposits_remote(web_app_url: str, token: str, mode: str, rows: List[Dict[str, object]]) -> Tuple[bool, str]:
+    try:
+        payload = {
+            "token": token or "",
+            "action": "save_manual_deposits",
+            "mode": ("demo" if _clean(mode).lower() == "demo" else "live"),
+            "rows": rows,
+        }
+        parsed = call_apps_script_(web_app_url, payload)
+        if bool(parsed.get("ok")):
+            return True, ""
+        return False, str(parsed.get("error") or parsed)
+    except Exception as exc:
+        return False, str(exc)
+
+
 def load_local_settings() -> Dict[str, str]:
     if not LOCAL_SETTINGS_FILE.exists():
         return {}
@@ -1795,6 +1839,7 @@ def main() -> None:
 
             deposits_mode = "demo" if is_demo else "live"
             deposits_key = "manual_deposits_table_demo" if is_demo else "manual_deposits_table_live"
+            remote_sync_enabled = source_mode == "apps_script" and _clean(web_url_clean) != ""
             if is_demo:
                 demo_vals = [120000.0, 85000.0, 43000.0, 26000.0, 14000.0]
                 seeded = [demo_vals[i % len(demo_vals)] for i in range(len(all_platforms))]
@@ -1809,13 +1854,21 @@ def main() -> None:
                 })
 
             if deposits_key not in st.session_state:
-                store = load_manual_deposits_store()
-                persisted = store.get(deposits_mode, [])
-                if persisted:
-                    persisted_df = pd.DataFrame(persisted)
-                    st.session_state[deposits_key] = persisted_df
-                else:
-                    st.session_state[deposits_key] = base_df
+                loaded = False
+                if remote_sync_enabled:
+                    ok_remote, remote_rows, _ = load_manual_deposits_remote(web_url_clean, api_token, deposits_mode)
+                    if ok_remote:
+                        st.session_state[deposits_key] = pd.DataFrame(remote_rows) if remote_rows else base_df
+                        loaded = True
+
+                if not loaded:
+                    store = load_manual_deposits_store()
+                    persisted = store.get(deposits_mode, [])
+                    if persisted:
+                        persisted_df = pd.DataFrame(persisted)
+                        st.session_state[deposits_key] = persisted_df
+                    else:
+                        st.session_state[deposits_key] = base_df
             else:
                 existing = st.session_state[deposits_key].copy()
                 for col, default in {"Platform": "", "Manual_Deposit_ILS": 0.0}.items():
@@ -1854,6 +1907,17 @@ def main() -> None:
             store = load_manual_deposits_store()
             store[deposits_mode] = edited_deposits.to_dict("records")
             save_manual_deposits_store(store)
+
+            # Sync across devices when Apps Script mode is available.
+            if remote_sync_enabled:
+                ok_remote_save, remote_err = save_manual_deposits_remote(
+                    web_url_clean,
+                    api_token,
+                    deposits_mode,
+                    edited_deposits.to_dict("records"),
+                )
+                if not ok_remote_save:
+                    st.warning(tr("Could not sync deposits to cloud, kept locally on this device.", "לא ניתן לסנכרן הפקדות לענן, נשמר מקומית במכשיר זה."))
 
             total_manual_deposits = float(edited_deposits["Manual_Deposit_ILS"].sum()) if not edited_deposits.empty else 0.0
             st.metric(tr("Total Manual Deposits (ILS)", "סך הפקדות ידני (₪)"), f"{total_manual_deposits:,.0f}")
