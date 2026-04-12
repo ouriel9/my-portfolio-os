@@ -222,6 +222,9 @@ def inject_client_fixes() -> None:
         """
         <script>
         (function () {
+          const rootDoc = (window.parent && window.parent.document) ? window.parent.document : document;
+          const rootWin = rootDoc.defaultView || window;
+
           function removeBranding() {
             const selectors = [
               'a[href*="streamlit.io"]',
@@ -230,7 +233,7 @@ def inject_client_fixes() -> None:
               'footer'
             ];
             selectors.forEach((sel) => {
-              document.querySelectorAll(sel).forEach((el) => {
+              rootDoc.querySelectorAll(sel).forEach((el) => {
                 const txt = (el.innerText || '').toLowerCase();
                 if (txt.includes('hosted with streamlit') || txt.includes('created by') || sel !== 'a[href*="streamlit.io"]') {
                   el.style.display = 'none';
@@ -239,26 +242,64 @@ def inject_client_fixes() -> None:
             });
           }
 
+          function findDashboardTabList() {
+            const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
+            const he = ['סקירה', 'חלוקה', 'דוחות', 'עסקאות'];
+            const en = ['overview', 'allocation', 'reports', 'transactions'];
+
+            for (const list of lists) {
+              const labels = Array.from(list.querySelectorAll('[data-baseweb="tab"]')).map((tab) =>
+                (tab.innerText || '').trim().toLowerCase()
+              );
+              const hasHebrew = he.every((name) => labels.some((lbl) => lbl.indexOf(name) >= 0));
+              const hasEnglish = en.every((name) => labels.some((lbl) => lbl.indexOf(name) >= 0));
+              if (hasHebrew || hasEnglish) return list;
+            }
+            return null;
+          }
+
           function setupTabSwipe() {
-            const tabs = Array.from(document.querySelectorAll('[data-baseweb="tab-list"] [data-baseweb="tab"]'));
-            if (!tabs.length || window.__pmSwipeBound) return;
-            window.__pmSwipeBound = true;
+            if (rootWin.__pmSwipeBound) return;
+
+            const blockedSelector = [
+              'input',
+              'textarea',
+              'select',
+              'button',
+              'a',
+              '[role="button"]',
+              '.js-plotly-plot',
+              '[data-testid="stDataFrame"]',
+              'iframe',
+              '[data-no-swipe]'
+            ].join(',');
 
             let startX = 0;
             let startY = 0;
-            document.addEventListener('touchstart', (e) => {
+            let shouldHandle = false;
+
+            rootDoc.addEventListener('touchstart', (e) => {
+              if (!findDashboardTabList()) return;
               if (!e.touches || !e.touches.length) return;
+              if (e.touches.length > 1) return;
+              const target = e.target;
+              shouldHandle = !(target && target.closest && target.closest(blockedSelector));
+              if (!shouldHandle) return;
               startX = e.touches[0].clientX;
               startY = e.touches[0].clientY;
             }, { passive: true });
 
-            document.addEventListener('touchend', (e) => {
+            rootDoc.addEventListener('touchend', (e) => {
+              if (!shouldHandle) return;
               if (!e.changedTouches || !e.changedTouches.length) return;
               const dx = e.changedTouches[0].clientX - startX;
               const dy = e.changedTouches[0].clientY - startY;
-              if (Math.abs(dx) < 70 || Math.abs(dy) > 45) return;
+              if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
 
-              const currentTabs = Array.from(document.querySelectorAll('[data-baseweb="tab-list"] [data-baseweb="tab"]'));
+              const tabList = findDashboardTabList();
+              if (!tabList) return;
+
+              const currentTabs = Array.from(tabList.querySelectorAll('[data-baseweb="tab"]'));
               const active = currentTabs.findIndex((t) => t.getAttribute('aria-selected') === 'true');
               if (active < 0) return;
 
@@ -268,6 +309,8 @@ def inject_client_fixes() -> None:
                 currentTabs[next].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }
             }, { passive: true });
+
+            rootWin.__pmSwipeBound = true;
           }
 
           function run() {
@@ -277,7 +320,7 @@ def inject_client_fixes() -> None:
 
           run();
           const obs = new MutationObserver(run);
-          obs.observe(document.body, { childList: true, subtree: true });
+          obs.observe(rootDoc.body, { childList: true, subtree: true });
         })();
         </script>
         """,
