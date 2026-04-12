@@ -30,6 +30,7 @@ DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7O
 
 LANG_EN = "English"
 LANG_HE = "עברית"
+DEFAULT_LANGUAGE = LANG_HE
 
 COLUMN_LABELS = {
     "Ticker": {LANG_EN: "Ticker", LANG_HE: "טיקר"},
@@ -142,6 +143,13 @@ def inject_global_styles(language: str) -> None:
         white-space: nowrap;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
+    [data-testid="collapsedControl"] button svg {{display: none;}}
+    [data-testid="collapsedControl"] button::before {{
+        content: "\2630";
+        font-size: 1.2rem;
+        font-weight: 700;
+        line-height: 1;
+    }}
     .modern-card {{
         border: 1px solid rgba(120,120,120,0.18);
         border-radius: 16px;
@@ -169,7 +177,20 @@ def inject_global_styles(language: str) -> None:
     }}
     @media (max-width: 640px) {{
         .pm-metric-grid {{grid-template-columns: 1fr;}}
+        h1 {{font-size: 1.45rem !important; line-height: 1.25 !important;}}
+        h2 {{font-size: 1.18rem !important; line-height: 1.25 !important;}}
+        h3 {{font-size: 1.02rem !important; line-height: 1.25 !important;}}
+        [data-testid="stMetricValue"] {{font-size: 1.22rem !important;}}
+        [data-testid="stMetricLabel"] {{font-size: 0.8rem !important;}}
+        .pm-title {{font-size: 0.76rem;}}
+        .pm-value {{font-size: 1.12rem;}}
+        .pm-delta {{font-size: 0.75rem;}}
         .block-container {{padding-top: 2.6rem; padding-left: 0.6rem; padding-right: 0.6rem;}}
+    }}
+    @media (max-width: 420px) {{
+        h1 {{font-size: 1.25rem !important;}}
+        h2 {{font-size: 1.06rem !important;}}
+        h3 {{font-size: 0.95rem !important;}}
     }}
     </style>
     """
@@ -525,7 +546,7 @@ def load_local_settings() -> Dict[str, str]:
             "spreadsheet_ref": _clean(raw.get("spreadsheet_ref", "")),
             "worksheet_name": _clean(raw.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
             "service_account_file": _clean(raw.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))),
-            "language": _clean(raw.get("language", "English")) or "English",
+            "language": _clean(raw.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
             "demo_mode": str(raw.get("demo_mode", "false")).lower() == "true",
         }
     except Exception:
@@ -548,7 +569,7 @@ def save_local_settings(
             "spreadsheet_ref": _clean(spreadsheet_ref),
             "worksheet_name": _clean(worksheet_name) or DEFAULT_WORKSHEET_NAME,
             "service_account_file": _clean(service_account_file),
-            "language": _clean(language) or "English",
+            "language": _clean(language) or DEFAULT_LANGUAGE,
             "demo_mode": bool(demo_mode),
         }
         LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1123,13 +1144,13 @@ def dataframe_completeness(df: pd.DataFrame) -> Tuple[int, int, float]:
 
 
 def main() -> None:
-    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide")
+    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
     template = "plotly_white"
 
     settings = load_local_settings()
-    language_default = settings.get("language", "English")
+    language_default = settings.get("language", DEFAULT_LANGUAGE)
     if language_default not in {"English", "עברית"}:
-        language_default = "English"
+        language_default = DEFAULT_LANGUAGE
 
     inject_global_styles(language_default)
 
@@ -1463,7 +1484,21 @@ def main() -> None:
             with st.expander(tr("Full snapshot transactions (including closed)", "רשימת העסקאות המלאה בתמונת מצב כולל סגורות"), expanded=True):
                 snapshot_view = trades[trades["Record_Source"] == "STATE_SNAPSHOT"].copy() if "Record_Source" in trades.columns else trades.copy()
                 ticker_options = sorted([t for t in snapshot_view["Ticker"].dropna().astype(str).unique() if _clean(t)]) if "Ticker" in snapshot_view.columns else []
-                selected_tickers = st.multiselect(tr("Filter by ticker", "סינון לפי טיקר"), ticker_options, default=[])
+                if hasattr(st, "pills"):
+                    selected_tickers = st.pills(
+                        tr("Filter by ticker", "סינון לפי טיקר"),
+                        ticker_options,
+                        selection_mode="multi",
+                        default=[],
+                        key="snapshot_ticker_pills",
+                    )
+                    selected_tickers = list(selected_tickers) if selected_tickers else []
+                else:
+                    selected_tickers = st.multiselect(
+                        tr("Filter by ticker", "סינון לפי טיקר"),
+                        ticker_options,
+                        default=[],
+                    )
                 if selected_tickers and "Ticker" in snapshot_view.columns:
                     snapshot_view = snapshot_view[snapshot_view["Ticker"].isin(selected_tickers)]
 
