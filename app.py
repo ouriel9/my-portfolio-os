@@ -187,6 +187,7 @@ def inject_global_styles(language: str) -> None:
         border-radius: 16px;
         padding: 0.9rem 1rem;
         background: linear-gradient(180deg, rgba(250,250,250,0.95), rgba(245,247,250,0.95));
+        color: #111827;
     }}
     .pm-metric-grid {{
         display: grid;
@@ -205,6 +206,47 @@ def inject_global_styles(language: str) -> None:
     .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem; color: #4b5563 !important;}}
     .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: #111827 !important;}}
     .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem; color: #374151 !important;}}
+    /* Dark theme cards follow the app palette with light text. */
+    @media (prefers-color-scheme: dark) {{
+        .modern-card {{
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.92));
+            color: #e5e7eb !important;
+        }}
+        .pm-card {{
+            border: 1px solid rgba(148, 163, 184, 0.28);
+            background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+            box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
+            color: #f9fafb !important;
+        }}
+        .pm-title {{color: #cbd5e1 !important;}}
+        .pm-value {{color: #ffffff !important;}}
+        .pm-delta {{color: #d1d5db !important;}}
+    }}
+    html[data-theme="dark"] .modern-card,
+    body[data-theme="dark"] .modern-card,
+    [data-theme="dark"] .modern-card {{
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.92));
+        color: #e5e7eb !important;
+    }}
+    html[data-theme="dark"] .pm-card,
+    body[data-theme="dark"] .pm-card,
+    [data-theme="dark"] .pm-card {{
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+        box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
+        color: #f9fafb !important;
+    }}
+    html[data-theme="dark"] .pm-title,
+    body[data-theme="dark"] .pm-title,
+    [data-theme="dark"] .pm-title {{color: #cbd5e1 !important;}}
+    html[data-theme="dark"] .pm-value,
+    body[data-theme="dark"] .pm-value,
+    [data-theme="dark"] .pm-value {{color: #ffffff !important;}}
+    html[data-theme="dark"] .pm-delta,
+    body[data-theme="dark"] .pm-delta,
+    [data-theme="dark"] .pm-delta {{color: #d1d5db !important;}}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
