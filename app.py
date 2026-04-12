@@ -28,6 +28,7 @@ LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "app_local_config.json"
 DEFAULT_SERVICE_ACCOUNT_FILE = Path(__file__).resolve().parent / "clean-linker-492313-s3-770814e64205.json"
 DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7OQVPLflfN2rufBhAT5-fzmjy8iEVFMmNLZlK_CeI4MFvx1dijZF/exec"
+MANUAL_DEPOSITS_FILE = Path(__file__).resolve().parent / "manual_deposits_store.json"
 
 LANG_EN = "English"
 LANG_HE = "עברית"
@@ -352,8 +353,8 @@ def inject_client_fixes() -> None:
 
           function findDashboardTabList() {
             const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
-            const he = ['סקירה', 'חלוקה', 'דוחות', 'עסקאות'];
-            const en = ['overview', 'allocation', 'reports', 'transactions'];
+            const he = ['סקירה', 'חלוקה', 'דוחות', 'סך הפקדות', 'עסקאות'];
+            const en = ['overview', 'allocation', 'reports', 'total deposits', 'transactions'];
 
             for (const list of lists) {
               const labels = Array.from(list.querySelectorAll('[data-baseweb="tab"]')).map((tab) =>
@@ -780,6 +781,56 @@ def call_apps_script_(web_app_url: str, payload: Dict[str, object]) -> Dict[str,
     return json.loads(body)
 
 
+def load_manual_deposits_store() -> Dict[str, List[Dict[str, object]]]:
+    if not MANUAL_DEPOSITS_FILE.exists():
+        return {"live": [], "demo": []}
+    try:
+        raw = json.loads(MANUAL_DEPOSITS_FILE.read_text(encoding="utf-8"))
+        out: Dict[str, List[Dict[str, object]]] = {"live": [], "demo": []}
+        for mode in ["live", "demo"]:
+            rows = raw.get(mode, []) if isinstance(raw, dict) else []
+            if not isinstance(rows, list):
+                rows = []
+            clean_rows = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                platform = _clean(row.get("Platform", ""))
+                if not platform:
+                    continue
+                clean_rows.append({
+                    "Platform": platform,
+                    "Manual_Deposit_ILS": _num(row.get("Manual_Deposit_ILS", 0.0)),
+                })
+            out[mode] = clean_rows
+        return out
+    except Exception:
+        return {"live": [], "demo": []}
+
+
+def save_manual_deposits_store(store: Dict[str, List[Dict[str, object]]]) -> bool:
+    try:
+        payload = {"live": [], "demo": []}
+        for mode in ["live", "demo"]:
+            rows = store.get(mode, []) if isinstance(store, dict) else []
+            clean_rows = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                platform = _clean(row.get("Platform", ""))
+                if not platform:
+                    continue
+                clean_rows.append({
+                    "Platform": platform,
+                    "Manual_Deposit_ILS": _num(row.get("Manual_Deposit_ILS", 0.0)),
+                })
+            payload[mode] = clean_rows
+        MANUAL_DEPOSITS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def load_local_settings() -> Dict[str, str]:
     if not LOCAL_SETTINGS_FILE.exists():
         return {}
@@ -896,6 +947,16 @@ def _service_account_from_runtime_secrets() -> Optional[Dict[str, object]]:
             return None
         # Ensure real newlines in private key for google-auth.
         out["private_key"] = str(out.get("private_key", "")).replace("\\n", "\n")
+
+        # Ignore template/placeholder secrets so local/env fallback can work.
+        pk = out["private_key"].strip()
+        if (
+            not pk
+            or "YOUR_PRIVATE_KEY" in pk
+            or "BEGIN PRIVATE KEY" not in pk
+            or "END PRIVATE KEY" not in pk
+        ):
+            return None
         return out
 
     try:
@@ -1410,10 +1471,10 @@ def main() -> None:
 
     st.sidebar.title(tr("Navigation", "ניווט"))
     page_dashboard = tr("Dashboard", "דשבורד")
-    page_risk = tr("Risk & FIFO", "סיכונים ו-FIFO")
     page_manage = tr("Trade Management", "ניהול עסקאות")
+    page_risk = tr("Risk & FIFO", "סיכונים ו-FIFO")
     page_quality = tr("Data Quality", "בקרת נתונים")
-    page = st.sidebar.radio(tr("Page", "עמוד"), [page_dashboard, page_risk, page_manage, page_quality])
+    page = st.sidebar.radio(tr("Page", "עמוד"), [page_dashboard, page_manage, page_risk, page_quality])
 
     connection_state_box = None
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
@@ -1583,11 +1644,12 @@ def main() -> None:
                 fig_track.update_layout(template=template, title=tr("Portfolio Build-Up", "התפתחות בניית התיק"), xaxis_title=tr("Date", "תאריך"), yaxis_title="ILS")
                 st.plotly_chart(fig_track, use_container_width=True)
 
-        tab_overview, tab_allocation, tab_reports, tab_transactions = st.tabs(
+        tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
             [
                 tr("Overview", "סקירה"),
                 tr("Allocation", "חלוקה"),
                 tr("Reports", "דוחות"),
+                tr("Total Deposits", "סך הפקדות"),
                 tr("Transactions", "עסקאות"),
             ]
         )
@@ -1723,6 +1785,78 @@ def main() -> None:
                 ),
                 use_container_width=True,
             )
+
+        with tab_deposits:
+            st.caption(tr("Manual deposits table by platform. This table is informational only and does not affect other calculations.", "טבלת הפקדות ידנית לפי פלטפורמה. הטבלה אינפורמטיבית בלבד ואינה משפיעה על חישובים אחרים."))
+
+            all_platforms = sorted([p for p in trades.get("Platform", pd.Series(dtype=str)).dropna().astype(str).map(_clean).unique() if p])
+            if not all_platforms:
+                all_platforms = ["Bit2C", "הורייזון", "אקסלנס"]
+
+            deposits_mode = "demo" if is_demo else "live"
+            deposits_key = "manual_deposits_table_demo" if is_demo else "manual_deposits_table_live"
+            if is_demo:
+                demo_vals = [120000.0, 85000.0, 43000.0, 26000.0, 14000.0]
+                seeded = [demo_vals[i % len(demo_vals)] for i in range(len(all_platforms))]
+                base_df = pd.DataFrame({
+                    "Platform": all_platforms,
+                    "Manual_Deposit_ILS": seeded,
+                })
+            else:
+                base_df = pd.DataFrame({
+                    "Platform": all_platforms,
+                    "Manual_Deposit_ILS": [0.0] * len(all_platforms),
+                })
+
+            if deposits_key not in st.session_state:
+                store = load_manual_deposits_store()
+                persisted = store.get(deposits_mode, [])
+                if persisted:
+                    persisted_df = pd.DataFrame(persisted)
+                    st.session_state[deposits_key] = persisted_df
+                else:
+                    st.session_state[deposits_key] = base_df
+            else:
+                existing = st.session_state[deposits_key].copy()
+                for col, default in {"Platform": "", "Manual_Deposit_ILS": 0.0}.items():
+                    if col not in existing.columns:
+                        existing[col] = default
+                existing["Platform"] = existing["Platform"].map(_clean)
+                existing["Manual_Deposit_ILS"] = existing["Manual_Deposit_ILS"].map(_num)
+                known = set(existing["Platform"].tolist())
+                missing = [p for p in all_platforms if p not in known]
+                if missing:
+                    existing = pd.concat(
+                        [existing, pd.DataFrame({"Platform": missing, "Manual_Deposit_ILS": [0.0] * len(missing)})],
+                        ignore_index=True,
+                    )
+                st.session_state[deposits_key] = existing
+
+            edited_deposits = st.data_editor(
+                st.session_state[deposits_key],
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                column_config={
+                    "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
+                    "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), format="%0.2f"),
+                },
+                key="manual_deposits_editor_demo" if is_demo else "manual_deposits_editor_live",
+            )
+
+            edited_deposits = edited_deposits.copy()
+            edited_deposits["Platform"] = edited_deposits["Platform"].map(_clean)
+            edited_deposits = edited_deposits[edited_deposits["Platform"] != ""]
+            edited_deposits["Manual_Deposit_ILS"] = edited_deposits["Manual_Deposit_ILS"].map(_num)
+            st.session_state[deposits_key] = edited_deposits
+
+            # Persist deposits across app restarts, separated by live/demo mode.
+            store = load_manual_deposits_store()
+            store[deposits_mode] = edited_deposits.to_dict("records")
+            save_manual_deposits_store(store)
+
+            total_manual_deposits = float(edited_deposits["Manual_Deposit_ILS"].sum()) if not edited_deposits.empty else 0.0
+            st.metric(tr("Total Manual Deposits (ILS)", "סך הפקדות ידני (₪)"), f"{total_manual_deposits:,.0f}")
 
         with tab_transactions:
             with st.expander(tr("Full snapshot transactions (including closed)", "רשימת העסקאות המלאה בתמונת מצב כולל סגורות"), expanded=True):
@@ -1919,7 +2053,28 @@ def main() -> None:
             if sort_cols:
                 asc = [False if c == "Purchase_Date" else True for c in sort_cols]
                 trade_view = trade_view.sort_values(sort_cols, ascending=asc)
-            st.dataframe(localize_snapshot_view(trade_view[preview_cols], language), use_container_width=True)
+
+            manage_select_df = trade_view[preview_cols].copy()
+            selected_trade_id = st.session_state.get("selected_trade_id", "")
+            manage_select_df.insert(0, "__select__", manage_select_df["Trade_ID"].astype(str) == str(selected_trade_id))
+            manage_select_df = manage_select_df.rename(columns={"__select__": tr("Select", "בחר")})
+
+            edited_manage_df = st.data_editor(
+                localize_snapshot_view(manage_select_df, language),
+                use_container_width=True,
+                hide_index=True,
+                key="manage_table_selector",
+            )
+
+            select_col = tr("Select", "בחר")
+            trade_id_col = SNAPSHOT_HEADERS["Trade_ID"][language]
+            selected_rows = edited_manage_df[edited_manage_df[select_col] == True] if select_col in edited_manage_df.columns else pd.DataFrame()
+            if not selected_rows.empty and trade_id_col in selected_rows.columns:
+                st.session_state["selected_trade_id"] = _clean(selected_rows.iloc[0][trade_id_col])
+            selected_trade_id = _clean(st.session_state.get("selected_trade_id", ""))
+
+            if selected_trade_id:
+                st.caption(f"{tr('Selected Trade_ID', 'Trade_ID נבחר')}: `{selected_trade_id}`")
 
         mode_label_map = {
             tr("Add", "הוספה"): "add",
@@ -1969,11 +2124,10 @@ def main() -> None:
                         st.error(f"{tr('Add failed', 'הוספה נכשלה')}: {msg}")
 
         elif mode == "edit":
-            options = trades["Trade_ID"].dropna().astype(str).tolist()
-            if not options:
-                st.info(tr("No Trade_ID available for edit", "אין Trade_ID זמין לעריכה"))
+            selected = _clean(st.session_state.get("selected_trade_id", ""))
+            if not selected:
+                st.info(tr("Select a row in the table above to edit", "סמן שורה בטבלה למעלה כדי לערוך"))
                 return
-            selected = st.selectbox(tr("Select Trade_ID", "בחר Trade_ID"), options)
             row_idx = trades.index[trades["Trade_ID"].astype(str) == selected]
             if len(row_idx) == 0:
                 st.warning(tr("Row not found", "לא נמצאה רשומה"))
@@ -2021,11 +2175,10 @@ def main() -> None:
                             st.error(f"{tr('Update failed', 'עדכון נכשל')}: {msg}")
 
         else:
-            options = trades["Trade_ID"].dropna().astype(str).tolist()
-            if not options:
-                st.info(tr("No Trade_ID available for delete", "אין Trade_ID זמין למחיקה"))
+            selected = _clean(st.session_state.get("selected_trade_id", ""))
+            if not selected:
+                st.info(tr("Select a row in the table above to delete", "סמן שורה בטבלה למעלה כדי למחוק"))
                 return
-            selected = st.selectbox(tr("Select Trade_ID to delete", "בחר Trade_ID למחיקה"), options)
             if st.button(tr("Delete trade", "מחק רשומה")):
                 if not write_enabled:
                     st.error(tr("Cannot delete in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן למחוק במצב gspread. הגדר Web App URL תקין בצד שמאל."))
