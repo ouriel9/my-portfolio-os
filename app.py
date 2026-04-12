@@ -133,6 +133,11 @@ def inject_global_styles(language: str) -> None:
     css = f"""
     <style>
     .block-container {{padding-top: 3.0rem;}}
+    footer {{display: none !important;}}
+    [data-testid="stFooter"] {{display: none !important;}}
+    [data-testid="stAppCreator"] {{display: none !important;}}
+    [data-testid="stDecoration"] {{display: none !important;}}
+    [href*="streamlit.io"] {{display: none !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
