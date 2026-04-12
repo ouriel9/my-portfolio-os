@@ -134,7 +134,6 @@ def inject_global_styles(language: str) -> None:
     align = "right" if rtl else "left"
     css = f"""
     <style>
-    #MainMenu {{visibility: hidden !important;}}
     .block-container {{padding-top: 3.0rem;}}
     footer,
     footer *,
@@ -150,14 +149,9 @@ def inject_global_styles(language: str) -> None:
         opacity: 0 !important;
         pointer-events: none !important;
     }}
-    [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"],
-    [data-testid="stBottom"],
-    [data-testid="stFloatingActionButton"],
-    [data-testid="stAppViewBlockContainer"] + div:has(a[href*="streamlit.io"]) {{display: none !important;}}
-    a[href*="streamlit.io"],
-    a[href*="share.streamlit.io"] {{display: none !important;}}
+    [data-testid="stDecoration"] {{display: none !important;}}
     [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
+    [data-testid="stToolbarActions"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
@@ -206,10 +200,11 @@ def inject_global_styles(language: str) -> None:
         padding: 0.9rem 1rem;
         background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,247,250,0.98));
         box-shadow: 0 6px 18px rgba(10, 20, 30, 0.06);
+        color: #1f2937 !important;
     }}
-    .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem;}}
-    .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15;}}
-    .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem;}}
+    .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem; color: #4b5563 !important;}}
+    .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: #111827 !important;}}
+    .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem; color: #374151 !important;}}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
@@ -227,10 +222,7 @@ def inject_global_styles(language: str) -> None:
         footer,
         [data-testid="stFooter"],
         [data-testid="stAppCreator"],
-        [data-testid="stDecoration"],
-        [data-testid="stStatusWidget"],
-        [data-testid="stBottom"],
-        [data-testid="stFloatingActionButton"] {{display: none !important;}}
+        [data-testid="stDecoration"] {{display: none !important;}}
     }}
     @media (max-width: 420px) {{
         h1 {{font-size: 1.42rem !important;}}
@@ -249,12 +241,9 @@ def inject_client_fixes() -> None:
         <script>
         (function () {
           const hideCss = `
-            #MainMenu { visibility: hidden !important; }
             footer, footer *, [data-testid="stFooter"], [data-testid="stFooter"] *,
             [data-testid="stAppCreator"], [data-testid="stAppCreator"] *,
-            [data-testid="stDecoration"], [data-testid="stStatusWidget"],
-            [data-testid="stBottom"], [data-testid="stFloatingActionButton"],
-            [role="contentinfo"], a[href*="streamlit.io"], a[href*="share.streamlit.io"] {
+            [data-testid="stDecoration"], [role="contentinfo"] {
               display: none !important;
               visibility: hidden !important;
               opacity: 0 !important;
@@ -302,8 +291,6 @@ def inject_client_fixes() -> None:
               '[data-testid="stFooter"]',
               '[data-testid="stAppCreator"]',
               '[data-testid="stDecoration"]',
-              '[data-testid="stStatusWidget"]',
-              '[data-testid="stToolbarActions"]',
               '[role="contentinfo"]'
             ];
 
@@ -323,20 +310,13 @@ def inject_client_fixes() -> None:
             });
 
             rootDoc.querySelectorAll('a[href*="streamlit.io"], a[href*="share.streamlit.io"]').forEach((link) => {
-              const holder = link.closest('footer, [data-testid="stFooter"], [data-testid="stAppCreator"], [role="contentinfo"], div');
+              const holder = link.closest('footer, [data-testid="stFooter"], [data-testid="stAppCreator"], [role="contentinfo"]');
               const text = ((holder && holder.innerText) || link.innerText || '').toLowerCase();
               if (text.includes('streamlit') || text.includes('hosted with') || text.includes('created by')) {
                 (holder || link).style.display = 'none';
               }
             });
 
-            rootDoc.querySelectorAll('div, span, p, small').forEach((el) => {
-              const text = (el.innerText || '').trim().toLowerCase();
-              if (!text) return;
-              if (text.includes('hosted with streamlit') || text === 'made with streamlit') {
-                el.style.display = 'none';
-              }
-            });
 
             // Fallback: hide tiny fixed bottom-right badges that include Streamlit links.
             rootDoc.querySelectorAll('div, section, aside').forEach((el) => {
