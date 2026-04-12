@@ -148,12 +148,17 @@ def inject_global_styles(language: str) -> None:
         white-space: nowrap;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
-    [data-testid="collapsedControl"] button svg {{display: none;}}
-    [data-testid="collapsedControl"] button::before {{
+    [data-testid="collapsedControl"] button svg,
+    [data-testid="stSidebarCollapsedControl"] button svg,
+    [aria-label="Open sidebar"] svg {{display: none !important;}}
+    [data-testid="collapsedControl"] button::before,
+    [data-testid="stSidebarCollapsedControl"] button::before,
+    [aria-label="Open sidebar"]::before {{
         content: "\2630";
-        font-size: 1.2rem;
+        font-size: 1.28rem;
         font-weight: 700;
         line-height: 1;
+        display: inline-block;
     }}
     .modern-card {{
         border: 1px solid rgba(120,120,120,0.18);
@@ -182,9 +187,9 @@ def inject_global_styles(language: str) -> None:
     }}
     @media (max-width: 640px) {{
         .pm-metric-grid {{grid-template-columns: 1fr;}}
-        h1 {{font-size: 1.45rem !important; line-height: 1.25 !important;}}
-        h2 {{font-size: 1.18rem !important; line-height: 1.25 !important;}}
-        h3 {{font-size: 1.02rem !important; line-height: 1.25 !important;}}
+        h1 {{font-size: 1.62rem !important; line-height: 1.25 !important;}}
+        h2 {{font-size: 1.3rem !important; line-height: 1.25 !important;}}
+        h3 {{font-size: 1.12rem !important; line-height: 1.25 !important;}}
         [data-testid="stMetricValue"] {{font-size: 1.22rem !important;}}
         [data-testid="stMetricLabel"] {{font-size: 0.8rem !important;}}
         .pm-title {{font-size: 0.76rem;}}
@@ -193,9 +198,9 @@ def inject_global_styles(language: str) -> None:
         .block-container {{padding-top: 2.6rem; padding-left: 0.6rem; padding-right: 0.6rem;}}
     }}
     @media (max-width: 420px) {{
-        h1 {{font-size: 1.25rem !important;}}
-        h2 {{font-size: 1.06rem !important;}}
-        h3 {{font-size: 0.95rem !important;}}
+        h1 {{font-size: 1.42rem !important;}}
+        h2 {{font-size: 1.16rem !important;}}
+        h3 {{font-size: 1.0rem !important;}}
     }}
     </style>
     """
@@ -1153,9 +1158,7 @@ def main() -> None:
     template = "plotly_white"
 
     settings = load_local_settings()
-    language_default = settings.get("language", DEFAULT_LANGUAGE)
-    if language_default not in {"English", "עברית"}:
-        language_default = DEFAULT_LANGUAGE
+    language_default = DEFAULT_LANGUAGE
 
     inject_global_styles(language_default)
 
