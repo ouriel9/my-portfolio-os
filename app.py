@@ -521,15 +521,34 @@ def inject_client_fixes() -> None:
           function forceMobileSidebarLeft() {
             if (!rootWin || !rootDoc) return;
             if (rootWin.innerWidth > 768) return;
-            const sidebars = rootDoc.querySelectorAll('[data-testid="stSidebar"]');
+            const sidebars = rootDoc.querySelectorAll('[data-testid="stSidebar"], section[data-testid="stSidebar"]');
             sidebars.forEach((sb) => {
-              sb.style.left = '0';
-              sb.style.right = 'auto';
+              const expanded = (sb.getAttribute('aria-expanded') || '').toLowerCase() === 'true';
+              sb.style.setProperty('left', '0', 'important');
+              sb.style.setProperty('right', 'auto', 'important');
+              sb.style.setProperty('inset-inline-start', 'auto', 'important');
+              sb.style.setProperty('inset-inline-end', 'auto', 'important');
+              sb.style.setProperty('width', '280px', 'important');
+              sb.style.setProperty('min-width', '280px', 'important');
+              sb.style.setProperty('max-width', '80vw', 'important');
+              sb.style.setProperty('transition', 'transform 240ms ease', 'important');
+              sb.style.setProperty('transform', expanded ? 'translateX(0)' : 'translateX(-100%)', 'important');
+
+              // Some Streamlit builds animate/anchor through a wrapper div.
+              const wrapper = sb.parentElement;
+              if (wrapper && wrapper !== rootDoc.body) {
+                wrapper.style.setProperty('left', '0', 'important');
+                wrapper.style.setProperty('right', 'auto', 'important');
+                wrapper.style.setProperty('inset-inline-start', 'auto', 'important');
+                wrapper.style.setProperty('inset-inline-end', 'auto', 'important');
+                wrapper.style.setProperty('transition', 'transform 240ms ease', 'important');
+                wrapper.style.setProperty('transform', expanded ? 'translateX(0)' : 'translateX(-100%)', 'important');
+              }
             });
             const controls = rootDoc.querySelectorAll('[data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"], button[aria-label*="sidebar"], button[aria-label*="Sidebar"]');
             controls.forEach((el) => {
-              el.style.left = '0.65rem';
-              el.style.right = 'auto';
+              el.style.setProperty('left', '0.65rem', 'important');
+              el.style.setProperty('right', 'auto', 'important');
             });
           }
 
