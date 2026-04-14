@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +17,10 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
+try:
+    from streamlit_option_menu import option_menu
+except Exception:
+    option_menu = None
 
 try:
     import gspread
@@ -130,6 +133,36 @@ def render_modern_metrics(items: List[Tuple[str, str, str]]) -> None:
             "</div>"
         )
     st.markdown(f"<div class='pm-metric-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
+
+
+def _is_mobile_client() -> bool:
+    try:
+        headers = getattr(st.context, "headers", {}) or {}
+        user_agent = _clean(headers.get("user-agent", "")).lower()
+        if any(token in user_agent for token in ["android", "iphone", "ipad", "mobile"]):
+            return True
+    except Exception:
+        pass
+    try:
+        qp = st.query_params if hasattr(st, "query_params") else {}
+        if _clean(qp.get("mobile", "")).lower() in {"1", "true", "yes"}:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = False) -> go.Figure:
+    if not is_mobile:
+        return fig
+    fig.update_layout(
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        margin=dict(l=10, r=10, t=30, b=10),
+        hoverlabel=dict(font=dict(size=14)),
+    )
+    if is_bar:
+        fig.update_xaxes(tickangle=-30, tickfont=dict(size=10))
+    return fig
 
 
 def inject_global_styles(language: str) -> None:
@@ -368,6 +401,66 @@ def inject_global_styles(language: str) -> None:
         h1 {{font-size: 1.42rem !important;}}
         h2 {{font-size: 1.16rem !important;}}
         h3 {{font-size: 1.0rem !important;}}
+    }}
+    @media (max-width: 768px) {{
+        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
+            direction: rtl !important;
+            text-align: right !important;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
+        }}
+        header, #MainMenu, footer, [data-testid="stToolbar"] {{display: none !important;}}
+        [data-testid="stSidebar"], [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {{display: none !important;}}
+        .block-container {{
+            padding-top: 0.45rem !important;
+            padding-bottom: calc(5.2rem + env(safe-area-inset-bottom)) !important;
+            padding-left: 0.65rem !important;
+            padding-right: 0.65rem !important;
+        }}
+        .mobile-bottom-nav {{
+            position: fixed;
+            left: 0.55rem;
+            right: 0.55rem;
+            bottom: calc(0.45rem + env(safe-area-inset-bottom));
+            z-index: 9999;
+            border-radius: 16px;
+            padding: 0.25rem;
+            background: rgba(15, 23, 42, 0.58);
+            border: 1px solid rgba(148, 163, 184, 0.34);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            box-shadow: 0 10px 24px rgba(2, 6, 23, 0.32);
+        }}
+        .mobile-bottom-nav .nav {{
+            display: grid !important;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.25rem;
+            background: transparent !important;
+        }}
+        .mobile-bottom-nav .nav-link {{
+            border-radius: 12px !important;
+            color: #e2e8f0 !important;
+            font-size: 0.76rem !important;
+            font-weight: 700 !important;
+            text-align: center !important;
+            padding: 0.56rem 0.2rem !important;
+        }}
+        .mobile-bottom-nav .nav-link.active {{
+            background: linear-gradient(180deg, rgba(59,130,246,0.96), rgba(29,78,216,0.95)) !important;
+            color: #ffffff !important;
+            box-shadow: 0 7px 16px rgba(37, 99, 235, 0.32);
+        }}
+        .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.48rem !important;}}
+        .pm-card, [data-testid="stMetric"] {{
+            border-radius: 12px !important;
+            padding: 0.58rem 0.62rem !important;
+            box-shadow: 0 6px 14px rgba(15, 23, 42, 0.09) !important;
+        }}
+        [data-testid="stMetricValue"] {{font-size: 1.02rem !important;}}
+        [data-testid="stMetricLabel"] {{font-size: 0.75rem !important;}}
+        [data-testid="stDataFrame"] {{overflow-x: auto !important; -ms-overflow-style: none; scrollbar-width: none;}}
+        [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
+        [data-testid="stDataFrame"] table {{font-size: 12px !important;}}
+        [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td {{padding: 0.28rem 0.36rem !important;}}
     }}
     </style>
     """
@@ -1815,7 +1908,24 @@ def main() -> None:
     page_manage = tr("Trade Management", "ניהול עסקאות")
     page_risk = tr("Risk & FIFO", "סיכונים ופיפו")
     page_quality = tr("Data Quality", "בקרת נתונים")
-    page = st.sidebar.radio(tr("Page", "עמוד"), [page_dashboard, page_manage, page_risk, page_quality])
+    page_options = [page_dashboard, page_manage, page_risk, page_quality]
+    is_mobile = _is_mobile_client()
+    if is_mobile and option_menu is not None:
+        current_page = _clean(st.session_state.get("mobile_page", page_dashboard)) or page_dashboard
+        default_index = page_options.index(current_page) if current_page in page_options else 0
+        st.markdown("<div class='mobile-bottom-nav'>", unsafe_allow_html=True)
+        page = option_menu(
+            menu_title=None,
+            options=page_options,
+            icons=["grid", "pencil-square", "bar-chart-line", "shield-check"],
+            orientation="horizontal",
+            default_index=default_index,
+            key="mobile_bottom_nav",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.session_state["mobile_page"] = page
+    else:
+        page = st.sidebar.radio(tr("Page", "עמוד"), page_options)
 
     connection_state_box = None
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
@@ -1974,7 +2084,7 @@ def main() -> None:
                     title=tr("Asset Class Composition", "הרכב מחלקות נכסים"),
                     template=template,
                 )
-                st.plotly_chart(fig_type_mix, use_container_width=True)
+                st.plotly_chart(_optimize_plotly_for_mobile(fig_type_mix, is_mobile), use_container_width=True)
             with demo_cols[1]:
                 perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
@@ -1983,7 +2093,7 @@ def main() -> None:
                 fig_track.add_trace(go.Scatter(x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"], mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת")))
                 fig_track.add_trace(go.Scatter(x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"], mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר")))
                 fig_track.update_layout(template=template, title=tr("Portfolio Build-Up", "התפתחות בניית התיק"), xaxis_title=tr("Date", "תאריך"), yaxis_title="ILS")
-                st.plotly_chart(fig_track, use_container_width=True)
+                st.plotly_chart(_optimize_plotly_for_mobile(fig_track, is_mobile), use_container_width=True)
 
         tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
             [
@@ -2006,7 +2116,7 @@ def main() -> None:
                     hole=0.52,
                     template=template,
                 )
-                st.plotly_chart(fig_pie, use_container_width=True)
+                st.plotly_chart(_optimize_plotly_for_mobile(fig_pie, is_mobile), use_container_width=True)
             with col_b:
                 fig_bar = px.bar(
                     summary.sort_values("Net_PnL_ILS", ascending=False),
@@ -2016,67 +2126,140 @@ def main() -> None:
                     title=tr("Net P/L by Asset", "רווח/הפסד לפי נכס"),
                     template=template,
                 )
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(_optimize_plotly_for_mobile(fig_bar, is_mobile, is_bar=True), use_container_width=True)
 
-            st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
-            exposure_cols = ["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
-            exposure_work = summary[exposure_cols].copy()
-            exposure_work["Ticker"] = exposure_work["Ticker"].map(_internal_chart_link)
-            exposure_view = localize_dataframe_columns(exposure_work, language)
-            ticker_col = localize_column_name("Ticker", language)
-            st.dataframe(
-                exposure_view,
-                column_config={
-                    ticker_col: st.column_config.LinkColumn(
-                        ticker_col,
-                        help=tr("Click ticker to open in-app TradingView chart", "לחץ על טיקר לפתיחת הגרף בתוך האפליקציה"),
-                        display_text=r".*[?&]pm_ticker=([^&]+).*$",
-                    ),
-                    localize_column_name("Open_Qty", language): st.column_config.NumberColumn(format="%.8f"),
-                    localize_column_name("Cost_ILS", language): st.column_config.NumberColumn(format="%.0f"),
-                    localize_column_name("Value_ILS", language): st.column_config.NumberColumn(format="%.0f"),
-                    localize_column_name("Net_PnL_ILS", language): st.column_config.NumberColumn(format="%.0f"),
-                    localize_column_name("Yield_Origin", language): st.column_config.NumberColumn(format="%.2f%%"),
-                    localize_column_name("Yield_ILS", language): st.column_config.NumberColumn(format="%.2f%%"),
-                },
-                use_container_width=True,
-                hide_index=True,
-            )
-            exposure_tickers = [t for t in summary.get("Ticker", pd.Series(dtype=str)).dropna().astype(str).map(_clean).tolist() if t]
-            if exposure_tickers:
-                clicked_ticker = _clean(_get_query_param("tv_ticker")).upper()
-                if clicked_ticker and clicked_ticker in {t.upper() for t in exposure_tickers}:
-                    st.session_state["tv_chart_ticker"] = clicked_ticker
-                elif "tv_chart_ticker" not in st.session_state:
-                    st.session_state["tv_chart_ticker"] = _clean(exposure_tickers[0]).upper()
+            def _build_summary_for_exposure(local_open_trades: pd.DataFrame) -> pd.DataFrame:
+                if local_open_trades.empty:
+                    return pd.DataFrame(columns=["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"])
+                fx_local = _safe_quote("USDILS=X")
+                if fx_local <= 0:
+                    fx_local = 3.6
+                local_df = enrich_open_trades_with_prices(local_open_trades.copy())
+                local_df["Cost_Origin_With_Fee"] = local_df["Cost_Origin"] + local_df["Commission"]
+                local_df["Value_Origin_Est"] = np.where(
+                    local_df["Origin_Currency"].str.upper() == "USD",
+                    local_df["Current_Value_ILS"] / fx_local,
+                    local_df["Current_Value_ILS"],
+                )
+                out = local_df.groupby("Ticker", as_index=False).agg(
+                    Open_Qty=("Quantity", "sum"),
+                    Cost_ILS=("Cost_ILS", "sum"),
+                    Value_ILS=("Current_Value_ILS", "sum"),
+                    Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+                    Value_Origin=("Value_Origin_Est", "sum"),
+                )
+                out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS"]
+                out["Yield_Origin"] = np.where(out["Cost_Origin"] > 0, (out["Value_Origin"] - out["Cost_Origin"]) / out["Cost_Origin"], 0.0)
+                out["Yield_ILS"] = np.where(out["Cost_ILS"] > 0, out["Net_PnL_ILS"] / out["Cost_ILS"], 0.0)
+                return out
 
-                active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
-                if active_ticker:
-                    c_open, c_close = st.columns([6, 1])
-                    c_open.markdown(f"**{tr('TradingView Chart', 'גרף TradingView')}: `{active_ticker}`**")
-                    if c_close.button(tr("Close", "סגור"), key="tv_close_btn"):
+            def render_exposure_section(summary_df: pd.DataFrame, watch_open_trades_df: pd.DataFrame) -> None:
+                st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
+                exposure_cols = ["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
+                exposure_base = summary_df[exposure_cols].copy() if not summary_df.empty else pd.DataFrame(columns=exposure_cols)
+                exposure_view = localize_dataframe_columns(exposure_base, language)
+                ticker_col = localize_column_name("Ticker", language)
+                selection = st.dataframe(
+                    exposure_view,
+                    column_config={
+                        ticker_col: st.column_config.TextColumn(
+                            ticker_col,
+                            help=tr("Click a ticker cell to open chart below", "לחץ על תא הטיקר כדי לפתוח גרף למטה"),
+                        ),
+                        localize_column_name("Open_Qty", language): st.column_config.NumberColumn(format="%.8f"),
+                        localize_column_name("Cost_ILS", language): st.column_config.NumberColumn(format="%.0f"),
+                        localize_column_name("Value_ILS", language): st.column_config.NumberColumn(format="%.0f"),
+                        localize_column_name("Net_PnL_ILS", language): st.column_config.NumberColumn(format="%.0f"),
+                        localize_column_name("Yield_Origin", language): st.column_config.NumberColumn(format="%.2f%%"),
+                        localize_column_name("Yield_ILS", language): st.column_config.NumberColumn(format="%.2f%%"),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-cell",
+                    key="exposure_table_select",
+                )
+
+                selected_row = None
+                selected_col = None
+                selection_data = getattr(selection, "selection", selection if isinstance(selection, dict) else {})
+                if isinstance(selection_data, Mapping):
+                    rows = selection_data.get("rows", []) or []
+                    cols = selection_data.get("columns", []) or []
+                    cells = selection_data.get("cells", []) or []
+                    if rows:
+                        selected_row = int(rows[0])
+                    if cols:
+                        selected_col = cols[0]
+                    if cells and isinstance(cells[0], dict):
+                        selected_row = int(cells[0].get("row", selected_row if selected_row is not None else 0))
+                        selected_col = cells[0].get("column", selected_col)
+
+                col_name = selected_col
+                if isinstance(selected_col, int) and 0 <= selected_col < len(exposure_view.columns):
+                    col_name = exposure_view.columns[selected_col]
+                if selected_row is not None and col_name == ticker_col and 0 <= selected_row < len(exposure_base):
+                    st.session_state["tv_chart_ticker"] = _clean(exposure_base.iloc[selected_row]["Ticker"]).upper()
+                    st.session_state["tv_chart_open"] = True
+
+                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
+                watch_df = watch_open_trades_df[["Ticker", "Type"]].copy() if all(c in watch_open_trades_df.columns for c in ["Ticker", "Type"]) else pd.DataFrame(columns=["Ticker", "Type"])
+                if not watch_df.empty:
+                    watch_df["Ticker"] = watch_df["Ticker"].map(_clean).str.upper()
+                    watch_df["Type"] = watch_df["Type"].map(_clean)
+                    watch_df = watch_df[watch_df["Ticker"] != ""].drop_duplicates(subset=["Ticker"])
+                    watch_df["Category"] = watch_df.apply(
+                        lambda r: (
+                            tr("Crypto", "קריפטו")
+                            if r["Ticker"] in {"BTC", "ETH", "SOL"} or r["Type"] == "קריפטו"
+                            else (tr("ETFs", "קרנות סל") if r["Type"] == "ETF" or r["Ticker"] in CRYPTO_ETFS else tr("Stocks", "מניות"))
+                        ),
+                        axis=1,
+                    )
+                    watch_df["Symbol"] = watch_df["Ticker"].map(_tradingview_symbol)
+                    watch_df = watch_df[watch_df["Symbol"] != ""]
+                    open_container = st.popover(watchlist_label, use_container_width=True) if hasattr(st, "popover") else st.expander(watchlist_label, expanded=False)
+                    with open_container:
+                        for cat in [tr("Crypto", "קריפטו"), tr("ETFs", "קרנות סל"), tr("Stocks", "מניות")]:
+                            part = watch_df[watch_df["Category"] == cat]
+                            if part.empty:
+                                continue
+                            st.markdown(f"**{cat}**")
+                            for row in part.itertuples(index=False):
+                                if st.button(f"{row.Ticker}  |  {row.Symbol}", key=f"watch_{cat}_{row.Ticker}"):
+                                    st.session_state["tv_chart_ticker"] = _clean(row.Ticker).upper()
+                                    st.session_state["tv_chart_open"] = True
+
+                if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
+                    active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
+                    st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
+                    _, close_col = st.columns([8, 1])
+                    if close_col.button(tr("Close", "סגור"), key="tv_inline_close"):
+                        st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
-                        _clear_query_param("tv_ticker")
                         st.rerun()
                     _render_tradingview_widget(active_ticker, height=560)
 
-                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
-                watch_symbols = []
-                for t in exposure_tickers:
-                    symbol = _tradingview_symbol(t)
-                    if symbol:
-                        watch_symbols.append((t.upper(), symbol))
-                if watch_symbols:
-                    if hasattr(st, "popover"):
-                        with st.popover(watchlist_label, use_container_width=True):
-                            st.caption(tr("Tracked symbols", "סימבולים במעקב"))
-                            watch_md = "\n".join([f"- [{t}]({_internal_chart_link(t)}) - `{s}`" for t, s in watch_symbols])
-                            st.markdown(watch_md)
-                    else:
-                        with st.expander(watchlist_label, expanded=False):
-                            st.caption(tr("Tracked symbols", "סימבולים במעקב"))
-                            watch_md = "\n".join([f"- [{t}]({_internal_chart_link(t)}) - `{s}`" for t, s in watch_symbols])
-                            st.markdown(watch_md)
+            if live_updates and hasattr(st, "fragment"):
+                @st.fragment(run_every=f"{int(refresh_seconds)}s")
+                def _exposure_fragment() -> None:
+                    live_summary = summary
+                    live_open_for_watchlist = open_trades
+                    if not is_demo:
+                        try:
+                            load_google_snapshot_data.clear()
+                            load_google_snapshot_data_via_gspread.clear()
+                            live_df, _ = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
+                            live_core = prepare_core_views(live_df)
+                            live_open_for_watchlist = live_core["open_trades"].copy()
+                            live_summary = _build_summary_for_exposure(live_open_for_watchlist)
+                        except Exception:
+                            pass
+                    render_exposure_section(live_summary, live_open_for_watchlist)
+
+                _exposure_fragment()
+            else:
+                render_exposure_section(summary, open_trades)
 
         reports = build_home_inspired_reports(open_trades)
         with tab_allocation:
@@ -2121,7 +2304,7 @@ def main() -> None:
                 )
                 fig_ratio = px.bar(ratio_df, x="Category", y="Yield", title=report_label, template=template)
                 fig_ratio.update_yaxes(tickformat=".0%")
-                st.plotly_chart(fig_ratio, use_container_width=True)
+                st.plotly_chart(_optimize_plotly_for_mobile(fig_ratio, is_mobile, is_bar=True), use_container_width=True)
                 st.dataframe(ratio_df.style.format({"Yield": "{:.2%}"}), use_container_width=True)
 
             elif report_key == "concentration":
@@ -2437,7 +2620,7 @@ def main() -> None:
                 xaxis_title=tr("Date", "תאריך"),
                 yaxis_title=tr("Value", "שווי"),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(_optimize_plotly_for_mobile(fig, is_mobile), use_container_width=True)
 
         if is_demo and total_value > 0:
             st.markdown(f"#### {tr('Scenario Lab (Demo)', 'מעבדת תרחישים (דמו)')}")
@@ -2663,7 +2846,7 @@ def main() -> None:
         status_counts_view = status_counts_view.rename(columns={"Status": SNAPSHOT_HEADERS["Status"][language], "count": tr("Count", "כמות")})
         st.dataframe(status_counts_view)
         fig = px.pie(status_counts, names="Status", values="count", title=tr("Trade Status Distribution", "פיזור סטטוסי עסקאות"), template=template)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(_optimize_plotly_for_mobile(fig, is_mobile), use_container_width=True)
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
         st.dataframe(localize_snapshot_view(df.tail(30), language))
@@ -2672,8 +2855,7 @@ def main() -> None:
         if page == page_manage:
             st.sidebar.caption(tr("Live updates are paused on Trade Management page.", "עדכון חי מושהה בדף ניהול עסקאות."))
         else:
-            time.sleep(int(refresh_seconds))
-            st.rerun()
+            st.sidebar.caption(tr("Live updates run on table fragments only.", "עדכון חי פועל רק על מקטעי טבלאות."))
 
 
 if __name__ == "__main__":
