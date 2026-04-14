@@ -277,7 +277,9 @@ def inject_global_styles(language: str) -> None:
             background-color: #f8f9fa !important;
             z-index: 999999 !important;
             direction: rtl !important;
-            transition: width 180ms ease, min-width 180ms ease, max-width 180ms ease !important;
+            left: 0 !important;
+            right: auto !important;
+            transition: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] {{
             width: 280px !important;
@@ -303,6 +305,7 @@ def inject_global_styles(language: str) -> None:
             overflow-y: auto !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
+            transition: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
         [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
@@ -356,8 +359,8 @@ def inject_global_styles(language: str) -> None:
             opacity: 1 !important;
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top));
-            right: 0.65rem;
-            left: auto !important;
+            left: 0.65rem !important;
+            right: auto !important;
             z-index: 100002 !important;
             direction: rtl !important;
         }}
