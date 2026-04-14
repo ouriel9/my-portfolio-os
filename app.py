@@ -266,7 +266,8 @@ def inject_global_styles(language: str) -> None:
             text-align: right !important;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
-        #MainMenu, footer {{display: none !important;}}
+        footer {{display: none !important;}}
+        #MainMenu {{display: block !important; visibility: visible !important;}}
         header, [data-testid="stHeader"] {{
             display: block !important;
             background: transparent !important;
@@ -288,6 +289,21 @@ def inject_global_styles(language: str) -> None:
             background-color: #f8f9fa !important;
             z-index: 999999 !important;
             direction: rtl !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="false"] {{
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            background: transparent !important;
+            background-color: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            overflow: hidden !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="true"] {{
+            width: 280px !important;
+            min-width: 280px !important;
+            max-width: 82vw !important;
         }}
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
