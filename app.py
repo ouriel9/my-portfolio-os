@@ -294,7 +294,7 @@ def inject_global_styles(language: str) -> None:
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             opacity: 1 !important;
-            border-left: 1px solid #eef2f7;
+            border-left: 0 !important;
             z-index: 999999 !important;
             direction: rtl !important;
             text-align: right !important;
@@ -302,6 +302,17 @@ def inject_global_styles(language: str) -> None:
             overflow-y: auto !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
+        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
+            border-left: 1px solid #eef2f7 !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
+        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
+            border: 0 !important;
+            background: transparent !important;
+            background-color: transparent !important;
+            box-shadow: none !important;
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
