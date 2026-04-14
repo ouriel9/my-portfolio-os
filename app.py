@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +68,7 @@ SNAPSHOT_HEADERS = {
     "Cost_Origin": {LANG_EN: "Cost (Origin)", LANG_HE: "עלות מקור"},
     "Cost_ILS": {LANG_EN: "Cost (ILS)", LANG_HE: "עלות שקלית"},
     "Current_Value_ILS": {LANG_EN: "Current Value (ILS)", LANG_HE: "שווי שקלי"},
+    "Current_Asset_Value_ILS": {LANG_EN: "Current Asset Value (ILS)", LANG_HE: "שווי נוכחי לנכס (₪)"},
     "Commission": {LANG_EN: "Commission", LANG_HE: "עמלה"},
     "Status": {LANG_EN: "Status", LANG_HE: "סטטוס"},
     "validation_status": {LANG_EN: "Validation", LANG_HE: "אימות"},
@@ -345,7 +347,8 @@ def inject_global_styles(language: str) -> None:
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
     @media (max-width: 640px) {{
-        .pm-metric-grid {{grid-template-columns: 1fr;}}
+        .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem;}}
+        .pm-card {{padding: 0.62rem 0.66rem; border-radius: 12px;}}
         h1 {{font-size: 1.62rem !important; line-height: 1.25 !important;}}
         h2 {{font-size: 1.3rem !important; line-height: 1.25 !important;}}
         h3 {{font-size: 1.12rem !important; line-height: 1.25 !important;}}
@@ -835,6 +838,7 @@ def risk_metrics(value_series: pd.Series) -> Dict[str, float]:
     return {"vol": vol, "sharpe": sharpe, "mdd": mdd, "cagr": cagr}
 
 
+@st.cache_data(ttl=30)
 def _safe_quote(symbol: str) -> float:
     try:
         return float(yf.Ticker(symbol).info.get("regularMarketPrice", 0) or 0)
@@ -929,7 +933,11 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         if asset == "BTC":
             mstr_val = float(work.loc[work["Ticker"] == "MSTR", "Current_Value_ILS"].sum())
             indirect_btc_ils = etf_val + mstr_val
-            if fx > 0 and btc_usd > 0:
+            btc_ils_basis = (direct_val / direct_qty) if direct_qty > 1e-9 else 0.0
+            if btc_ils_basis > 0:
+                estimated_btc_qty = direct_qty + (indirect_btc_ils / btc_ils_basis)
+            elif fx > 0 and btc_usd > 0:
+                # Fallback when there is no direct BTC position to infer a portfolio-based BTC ILS price.
                 estimated_btc_qty = direct_qty + (indirect_btc_ils / fx / btc_usd)
             else:
                 estimated_btc_qty = direct_qty
@@ -1701,6 +1709,13 @@ def main() -> None:
     st.sidebar.markdown("### App")
     language = st.sidebar.selectbox("Language / שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
     demo_mode = st.sidebar.checkbox("Demo view / מצב הדגמה", value=bool(settings.get("demo_mode", False)))
+    live_updates = st.sidebar.checkbox("Live updates / עדכון חי", value=False)
+    refresh_seconds = st.sidebar.selectbox(
+        "Refresh every / רענון כל",
+        [5, 10, 15, 30, 60],
+        index=2,
+        disabled=not live_updates,
+    )
 
     inject_global_styles(language)
     inject_client_fixes()
@@ -2147,6 +2162,12 @@ def main() -> None:
                 snapshot_view["Commission"] = snapshot_view.get("Commission", 0).map(_num)
                 snapshot_view["Cost_ILS"] = snapshot_view.get("Cost_ILS", 0).map(_num)
                 snapshot_view["Current_Value_ILS"] = snapshot_view.get("Current_Value_ILS", 0).map(_num)
+                qty_abs = snapshot_view.get("Quantity", 0).map(_num).abs()
+                snapshot_view["Current_Asset_Value_ILS"] = np.where(
+                    qty_abs > 1e-9,
+                    snapshot_view["Current_Value_ILS"] / qty_abs,
+                    0.0,
+                )
                 snapshot_view["Origin_Currency"] = snapshot_view.get("Origin_Currency", "").map(_clean)
                 snapshot_view["Status"] = snapshot_view.get("Status", "").map(_clean)
                 snapshot_view["Cost_Origin_With_Fee"] = snapshot_view["Cost_Origin"] + snapshot_view["Commission"]
@@ -2172,6 +2193,7 @@ def main() -> None:
                         "Platform",
                         "Quantity",
                         "Origin_Buy_Price",
+                        "Current_Asset_Value_ILS",
                         "Cost_ILS",
                         "Current_Value_ILS",
                         "Yield_Origin",
@@ -2190,6 +2212,7 @@ def main() -> None:
                     platform_col = SNAPSHOT_HEADERS["Platform"][language]
                     qty_col = SNAPSHOT_HEADERS["Quantity"][language]
                     buy_col = SNAPSHOT_HEADERS["Origin_Buy_Price"][language]
+                    asset_value_col = SNAPSHOT_HEADERS["Current_Asset_Value_ILS"][language]
                     cost_col = SNAPSHOT_HEADERS["Cost_ILS"][language]
                     value_col = SNAPSHOT_HEADERS["Current_Value_ILS"][language]
                     yield_col = SNAPSHOT_HEADERS["Yield_Origin"][language]
@@ -2199,6 +2222,7 @@ def main() -> None:
                             {
                                 qty_col: "{:.8f}",
                                 buy_col: "{:,.2f}",
+                                asset_value_col: "{:,.2f}",
                                 cost_col: "{:,.0f}",
                                 value_col: "{:,.0f}",
                                 yield_col: "{:.2%}",
@@ -2210,6 +2234,7 @@ def main() -> None:
                             platform_col: st.column_config.TextColumn(width="medium"),
                             qty_col: st.column_config.NumberColumn(width="small"),
                             buy_col: st.column_config.NumberColumn(width="small"),
+                            asset_value_col: st.column_config.NumberColumn(width="small"),
                             cost_col: st.column_config.NumberColumn(width="small"),
                             value_col: st.column_config.NumberColumn(width="small"),
                             yield_col: st.column_config.NumberColumn(width="small"),
@@ -2309,10 +2334,16 @@ def main() -> None:
 
         st.caption(tr(f"Showing {len(trades):,} snapshot transactions, including closed trades.", f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות."))
         trade_view = trades.copy()
+        trade_qty_abs = trade_view.get("Quantity", 0).map(_num).abs()
+        trade_view["Current_Asset_Value_ILS"] = np.where(
+            trade_qty_abs > 1e-9,
+            trade_view.get("Current_Value_ILS", 0).map(_num) / trade_qty_abs,
+            0.0,
+        )
         status_filter = st.multiselect(tr("Status filter", "סינון סטטוס"), sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[])
         if status_filter:
             trade_view = trade_view[trade_view["Status"].isin(status_filter)]
-        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
+        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_ILS", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
         if preview_cols:
             sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in trade_view.columns]
             if sort_cols:
@@ -2484,6 +2515,13 @@ def main() -> None:
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
         st.dataframe(localize_snapshot_view(df.tail(30), language))
+
+    if live_updates:
+        if page == page_manage:
+            st.sidebar.caption(tr("Live updates are paused on Trade Management page.", "עדכון חי מושהה בדף ניהול עסקאות."))
+        else:
+            time.sleep(int(refresh_seconds))
+            st.rerun()
 
 
 if __name__ == "__main__":
