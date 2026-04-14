@@ -175,52 +175,32 @@ def inject_global_styles(language: str) -> None:
     .block-container {{padding-top: 3.0rem;}}
     footer,
     footer *,
-        [data-testid="stSidebar"] {
-            background: #f8f9fa !important;
-            background-color: #f8f9fa !important;
-            z-index: 999999 !important;
-            direction: rtl !important;
-            transition: width 180ms ease, min-width 180ms ease, max-width 180ms ease !important;
-        }
-        [data-testid="stSidebar"][aria-expanded="true"] {
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 80vw !important;
-        }
-        [data-testid="stSidebar"][aria-expanded="false"] {
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            overflow: hidden !important;
-        }
-        [data-testid="stSidebar"] > div:first-child,
-        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
-            background: #f8f9fa !important;
-            background-color: #f8f9fa !important;
-            opacity: 1 !important;
-            border-left: 1px solid #eef2f7;
-            z-index: 999999 !important;
-            direction: rtl !important;
-            text-align: right !important;
-            overflow-x: hidden !important;
-            overflow-y: auto !important;
-            backdrop-filter: none !important;
-            -webkit-backdrop-filter: none !important;
-        }
-        [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 80vw !important;
-        }
-        [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            border: 0 !important;
-            padding: 0 !important;
-        }
+    [data-testid="stFooter"],
+    [data-testid="stFooter"] *,
+    [data-testid="stAppCreator"],
+    [data-testid="stAppCreator"] * {{
+        display: none !important;
+        visibility: hidden !important;
+        max-height: 0 !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }}
+    [data-testid="stDecoration"] {{display: none !important;}}
+    [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
+    [data-testid="stToolbarActions"] {{display: flex !important; visibility: visible !important;}}
+    [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
+    [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataFrame"] td {{unicode-bidi: plaintext;}}
+    [data-testid="stDataFrame"] {{overflow-x: auto;}}
+    [data-testid="stMetric"] {{direction: {direction};}}
+    [data-baseweb="tab-list"] {{
+        display: flex !important;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scroll-snap-type: x mandatory;
         touch-action: pan-x;
         scrollbar-width: thin;
         white-space: nowrap;
@@ -241,97 +221,6 @@ def inject_global_styles(language: str) -> None:
         font-weight: 700;
         line-height: 1;
         display: inline-block;
-    }}
-    /* Sidebar navigation: modern large buttons without radio dots. */
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type,
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type > div,
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type > div > div {{
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-        box-sizing: border-box !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type > label {{
-        font-weight: 700;
-        margin-bottom: 0.45rem;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type div[role="radiogroup"] {{
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: stretch !important;
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-        gap: 0.58rem;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type div[role="radiogroup"] > label,
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type div[role="radiogroup"] [data-baseweb="radio"] {{
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-        box-sizing: border-box !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] {{
-        display: flex;
-        align-items: center;
-        width: 100% !important;
-        max-width: 100% !important;
-        min-width: 100% !important;
-        box-sizing: border-box !important;
-        border: 1px solid rgba(148, 163, 184, 0.42);
-        border-radius: 14px;
-        padding: 0.66rem 0.84rem;
-        background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(243,246,252,0.98));
-        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
-        transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:hover,
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:hover {{
-        transform: translateY(-1px);
-        border-color: rgba(37, 99, 235, 0.52);
-        box-shadow: 0 10px 18px rgba(37, 99, 235, 0.16);
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"] > div:first-child,
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] > div:first-child {{
-        display: none !important;
-        width: 0 !important;
-        min-width: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"] p,
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] p {{
-        margin: 0;
-        width: 100%;
-        font-weight: 700;
-        font-size: 1.02rem;
-        letter-spacing: 0.01em;
-    }}
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
-    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked) {{
-        border-color: rgba(30, 64, 175, 0.8);
-        background: linear-gradient(180deg, rgba(219, 234, 254, 0.95), rgba(191, 219, 254, 0.96));
-        box-shadow: 0 12px 20px rgba(30, 64, 175, 0.22);
-    }}
-    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
-    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
-    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"],
-    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"],
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] {{
-        border: 1px solid rgba(148, 163, 184, 0.35);
-        background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98));
-        box-shadow: 0 8px 20px rgba(2, 6, 23, 0.45);
-    }}
-    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
-    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
-    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked),
-    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked),
-    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked) {{
-        border-color: rgba(96, 165, 250, 0.9);
-        background: linear-gradient(180deg, rgba(30, 58, 138, 0.88), rgba(37, 99, 235, 0.84));
     }}
     .modern-card {{
         border: 1px solid rgba(120,120,120,0.18);
@@ -357,71 +246,8 @@ def inject_global_styles(language: str) -> None:
     .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem; color: #4b5563 !important;}}
     .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: #111827 !important;}}
     .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem; color: #374151 !important;}}
-    /* Dark theme cards follow the app palette with light text. */
-    @media (prefers-color-scheme: dark) {{
-        .modern-card {{
-            border: 1px solid rgba(148, 163, 184, 0.25);
-            background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.92));
-            color: #e5e7eb !important;
-        }}
-        .pm-card {{
-            border: 1px solid rgba(148, 163, 184, 0.28);
-            background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
-            box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
-            color: #f9fafb !important;
-        }}
-        .pm-title {{color: #cbd5e1 !important;}}
-        .pm-value {{color: #ffffff !important;}}
-        .pm-delta {{color: #d1d5db !important;}}
-    }}
-    html[data-theme="dark"] .modern-card,
-    body[data-theme="dark"] .modern-card,
-    [data-theme="dark"] .modern-card {{
-        border: 1px solid rgba(148, 163, 184, 0.25);
-        background: linear-gradient(180deg, rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.92));
-        color: #e5e7eb !important;
-    }}
-    html[data-theme="dark"] .pm-card,
-    body[data-theme="dark"] .pm-card,
-    [data-theme="dark"] .pm-card {{
-        border: 1px solid rgba(148, 163, 184, 0.28);
-        background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
-        box-shadow: 0 8px 20px rgba(2, 6, 23, 0.35);
-        color: #f9fafb !important;
-    }}
-    html[data-theme="dark"] .pm-title,
-    body[data-theme="dark"] .pm-title,
-    [data-theme="dark"] .pm-title {{color: #cbd5e1 !important;}}
-    html[data-theme="dark"] .pm-value,
-    body[data-theme="dark"] .pm-value,
-    [data-theme="dark"] .pm-value {{color: #ffffff !important;}}
-    html[data-theme="dark"] .pm-delta,
-    body[data-theme="dark"] .pm-delta,
-    [data-theme="dark"] .pm-delta {{color: #d1d5db !important;}}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
-    }}
-    @media (max-width: 640px) {{
-        .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem;}}
-        .pm-card {{padding: 0.62rem 0.66rem; border-radius: 12px;}}
-        h1 {{font-size: 1.62rem !important; line-height: 1.25 !important;}}
-        h2 {{font-size: 1.3rem !important; line-height: 1.25 !important;}}
-        h3 {{font-size: 1.12rem !important; line-height: 1.25 !important;}}
-        [data-testid="stMetricValue"] {{font-size: 1.22rem !important;}}
-        [data-testid="stMetricLabel"] {{font-size: 0.8rem !important;}}
-        .pm-title {{font-size: 0.76rem;}}
-        .pm-value {{font-size: 1.12rem;}}
-        .pm-delta {{font-size: 0.75rem;}}
-        .block-container {{padding-top: 2.6rem; padding-left: 0.6rem; padding-right: 0.6rem;}}
-        footer,
-        [data-testid="stFooter"],
-        [data-testid="stAppCreator"],
-        [data-testid="stDecoration"] {{display: none !important;}}
-    }}
-    @media (max-width: 420px) {{
-        h1 {{font-size: 1.42rem !important;}}
-        h2 {{font-size: 1.16rem !important;}}
-        h3 {{font-size: 1.0rem !important;}}
     }}
     @media (max-width: 768px) {{
         html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
@@ -439,20 +265,27 @@ def inject_global_styles(language: str) -> None:
         h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
+
         [data-testid="stSidebar"] {{
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 80vw !important;
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             z-index: 999999 !important;
             direction: rtl !important;
+            transition: width 180ms ease, min-width 180ms ease, max-width 180ms ease !important;
         }}
-        [data-testid="stSidebar"] > div:first-child,
-        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+        [data-testid="stSidebar"][aria-expanded="true"] {{
             width: 280px !important;
             min-width: 280px !important;
             max-width: 80vw !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="false"] {{
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            overflow: hidden !important;
+        }}
+        [data-testid="stSidebar"] > div:first-child,
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             opacity: 1 !important;
@@ -464,6 +297,20 @@ def inject_global_styles(language: str) -> None:
             overflow-y: auto !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
+        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
+            width: 280px !important;
+            min-width: 280px !important;
+            max-width: 80vw !important;
+        }}
+        [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
+        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            border: 0 !important;
+            padding: 0 !important;
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
@@ -496,10 +343,6 @@ def inject_global_styles(language: str) -> None:
             overflow-wrap: break-word !important;
             white-space: normal !important;
         }}
-        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked),
-        [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {{
-            background: #eef6ff !important;
-        }}
         [data-testid="collapsedControl"],
         [data-testid="stSidebarCollapsedControl"] {{
             position: fixed !important;
@@ -519,13 +362,6 @@ def inject_global_styles(language: str) -> None:
             box-shadow: 0 6px 14px rgba(15, 23, 42, 0.16) !important;
             direction: rtl !important;
             unicode-bidi: plaintext !important;
-        }}
-        [data-testid="collapsedControl"] button::before,
-        [data-testid="stSidebarCollapsedControl"] button::before {{
-            content: "☰";
-            font-size: 1.2rem;
-            color: #1f2937;
-            line-height: 1;
         }}
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.48rem !important;}}
         .pm-card, [data-testid="stMetric"] {{
