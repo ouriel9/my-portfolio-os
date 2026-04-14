@@ -48,6 +48,7 @@ COLUMN_LABELS = {
     "ETF_Qty": {LANG_EN: "ETF Holding (Units)", LANG_HE: "דרך קרן סל (יחידות)"},
     "ETF_ILS": {LANG_EN: "ETF Holding (ILS)", LANG_HE: "דרך קרן סל (₪)"},
     "Total_Exposure_ILS": {LANG_EN: "Total Exposure (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
+    "Estimated_BTC_Qty": {LANG_EN: "Estimated BTC Qty (incl. IBIT/MSTR)", LANG_HE: "כמות BTC מוערכת (כולל IBIT/MSTR)"},
     "Category": {LANG_EN: "Category", LANG_HE: "סוג"},
     "Yield": {LANG_EN: "Return", LANG_HE: "תשואה"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
@@ -154,6 +155,8 @@ def inject_global_styles(language: str) -> None:
     [data-testid="stToolbarActions"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataFrame"] td {{unicode-bidi: plaintext;}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
     [data-testid="stMetric"] {{direction: {direction};}}
     [data-baseweb="tab-list"] {{
@@ -181,6 +184,97 @@ def inject_global_styles(language: str) -> None:
         font-weight: 700;
         line-height: 1;
         display: inline-block;
+    }}
+    /* Sidebar navigation: modern large buttons without radio dots. */
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type,
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type > div,
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type > div > div {{
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type > label {{
+        font-weight: 700;
+        margin-bottom: 0.45rem;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type div[role="radiogroup"] {{
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 100% !important;
+        gap: 0.58rem;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type div[role="radiogroup"] > label,
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type div[role="radiogroup"] [data-baseweb="radio"] {{
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 100% !important;
+        box-sizing: border-box !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] {{
+        display: flex;
+        align-items: center;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 100% !important;
+        box-sizing: border-box !important;
+        border: 1px solid rgba(148, 163, 184, 0.42);
+        border-radius: 14px;
+        padding: 0.66rem 0.84rem;
+        background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(243,246,252,0.98));
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+        transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:hover,
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:hover {{
+        transform: translateY(-1px);
+        border-color: rgba(37, 99, 235, 0.52);
+        box-shadow: 0 10px 18px rgba(37, 99, 235, 0.16);
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"] > div:first-child,
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] > div:first-child {{
+        display: none !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"] p,
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] p {{
+        margin: 0;
+        width: 100%;
+        font-weight: 700;
+        font-size: 1.02rem;
+        letter-spacing: 0.01em;
+    }}
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
+    [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked) {{
+        border-color: rgba(30, 64, 175, 0.8);
+        background: linear-gradient(180deg, rgba(219, 234, 254, 0.95), rgba(191, 219, 254, 0.96));
+        box-shadow: 0 12px 20px rgba(30, 64, 175, 0.22);
+    }}
+    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
+    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
+    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"],
+    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"],
+    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"],
+    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"] {{
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: linear-gradient(180deg, rgba(30, 41, 59, 0.98), rgba(15, 23, 42, 0.98));
+        box-shadow: 0 8px 20px rgba(2, 6, 23, 0.45);
+    }}
+    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
+    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
+    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type label[data-baseweb="radio"]:has(input:checked),
+    html[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked),
+    body[data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked),
+    [data-theme="dark"] [data-testid="stSidebar"] [data-testid="stRadio"]:first-of-type [data-baseweb="radio"]:has(input:checked) {{
+        border-color: rgba(96, 165, 250, 0.9);
+        background: linear-gradient(180deg, rgba(30, 58, 138, 0.88), rgba(37, 99, 235, 0.84));
     }}
     .modern-card {{
         border: 1px solid rgba(120,120,120,0.18);
@@ -469,6 +563,42 @@ def inject_client_fixes() -> None:
 class FifoLot:
     qty: float
     cost_per_unit: float
+    display_cost_per_unit: float
+    display_currency: str
+
+
+def _normalize_currency_code(value: object) -> str:
+    raw = _clean(value).upper()
+    if raw in {"", "NAN"}:
+        return ""
+    if raw in {"ILS", "NIS", "₪", "שח", 'ש"ח'}:
+        return "ILS"
+    if raw in {"USD", "$"}:
+        return "USD"
+    return raw
+
+
+def _infer_display_currency(ticker: str, origin_currency: object) -> str:
+    base = _normalize_currency_code(origin_currency)
+    if ticker in {"BTC", "ETH", "SOL"}:
+        return "USD"
+    return base or "ILS"
+
+
+def _format_currency_value(value: float, currency: str) -> str:
+    cur = _normalize_currency_code(currency)
+    if cur == "USD":
+        return f"${value:,.2f}"
+    if cur == "ILS":
+        return f"{value:,.2f} ₪"
+    if cur:
+        return f"{value:,.2f} {cur}"
+    return f"{value:,.2f}"
+
+
+def _mix_he_with_ltr(token: str) -> str:
+    # Isolate Latin tokens so bidi layout stays stable inside Hebrew text.
+    return f"\u2066{token}\u2069"
 
 
 def _clean(value: object) -> str:
@@ -618,6 +748,9 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
 
 def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict[str, float]] = []
+    usd_ils_rate = _safe_quote("USDILS=X")
+    if usd_ils_rate <= 0:
+        usd_ils_rate = 3.6
 
     for ticker, tdf in trades.sort_values("Purchase_Date").groupby("Ticker"):
         lots: List[FifoLot] = []
@@ -626,8 +759,32 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
             qty = float(row["Quantity"])
             cost_ils = float(row["Cost_ILS"] if row["Cost_ILS"] else row["Cost_Origin"])
             unit_cost = abs(cost_ils / qty) if qty else 0.0
+            origin_currency = _normalize_currency_code(row.get("Origin_Currency", ""))
+            display_currency = _infer_display_currency(ticker, origin_currency)
+            cost_origin = float(row.get("Cost_Origin", 0.0) or 0.0)
+            if display_currency == "USD" and origin_currency == "USD" and cost_origin:
+                display_unit_cost = abs(cost_origin / qty) if qty else 0.0
+            elif display_currency == "USD" and cost_ils:
+                display_unit_cost = abs((cost_ils / usd_ils_rate) / qty) if qty else 0.0
+            elif display_currency == "USD" and cost_origin:
+                display_unit_cost = abs((cost_origin / usd_ils_rate) / qty) if qty else 0.0
+            elif display_currency == "ILS" and cost_ils:
+                display_unit_cost = abs(cost_ils / qty) if qty else 0.0
+            elif display_currency == "ILS" and origin_currency == "USD" and cost_origin:
+                display_unit_cost = abs((cost_origin * usd_ils_rate) / qty) if qty else 0.0
+            elif cost_origin:
+                display_unit_cost = abs(cost_origin / qty) if qty else 0.0
+            else:
+                display_unit_cost = unit_cost
             if row["Action"] == "BUY" and qty > 0:
-                lots.append(FifoLot(qty=qty, cost_per_unit=unit_cost))
+                lots.append(
+                    FifoLot(
+                        qty=qty,
+                        cost_per_unit=unit_cost,
+                        display_cost_per_unit=display_unit_cost,
+                        display_currency=display_currency,
+                    )
+                )
             elif row["Action"] == "SELL" and qty != 0:
                 sell_qty = abs(qty)
                 sell_price = abs(row["Current_Value_ILS"]) / sell_qty if sell_qty and row["Current_Value_ILS"] else unit_cost
@@ -641,14 +798,19 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                         lots.pop(0)
 
         open_qty = sum(lot.qty for lot in lots)
+        if open_qty <= 1e-9:
+            continue
         open_cost = sum(lot.qty * lot.cost_per_unit for lot in lots)
+        open_display_cost = sum(lot.qty * lot.display_cost_per_unit for lot in lots)
+        open_display_currency = lots[0].display_currency if lots else _infer_display_currency(ticker, "")
         rows.append(
             {
                 "Ticker": ticker,
                 "כמות פתוחה (FIFO)": open_qty,
                 "עלות פתוחה (₪)": open_cost,
                 "רווח ממומש (₪)": realized,
-                "מחיר ממוצע פתוח (₪)": open_cost / open_qty if open_qty else 0.0,
+                "מחיר קנייה ממוצע": open_display_cost / open_qty if open_qty else 0.0,
+                "מטבע מחיר קנייה ממוצע": open_display_currency,
             }
         )
     return pd.DataFrame(rows)
@@ -714,7 +876,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
 
     crypto_mask = (work["Type"] == "קריפטו") | (work["Ticker"].isin(CRYPTO_ETFS))
     crypto_value = float(work.loc[crypto_mask, "Current_Value_ILS"].sum())
-    btc_value = float(work.loc[work["Ticker"].isin(["BTC", "IBIT"]), "Current_Value_ILS"].sum())
+    btc_value = float(work.loc[work["Ticker"].isin(["BTC", "IBIT", "MSTR"]), "Current_Value_ILS"].sum())
 
     fx = _safe_quote("USDILS=X")
     if fx <= 0:
@@ -753,6 +915,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     if not platform_summary.empty:
         platform_summary["PnL_ILS"] = platform_summary["Current_Value_ILS"] - platform_summary["Net_Investment_ILS"]
 
+    btc_usd = _safe_quote("BTC-USD")
     asset_map = {"BTC": "IBIT", "ETH": "ETHA", "SOL": "BSOL"}
     concentration_rows: List[Dict[str, float]] = []
     for asset, etf in asset_map.items():
@@ -762,6 +925,14 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         direct_val = float(direct["Current_Value_ILS"].sum())
         etf_qty = float(etf_df["Quantity"].sum())
         etf_val = float(etf_df["Current_Value_ILS"].sum())
+        estimated_btc_qty = 0.0
+        if asset == "BTC":
+            mstr_val = float(work.loc[work["Ticker"] == "MSTR", "Current_Value_ILS"].sum())
+            indirect_btc_ils = etf_val + mstr_val
+            if fx > 0 and btc_usd > 0:
+                estimated_btc_qty = direct_qty + (indirect_btc_ils / fx / btc_usd)
+            else:
+                estimated_btc_qty = direct_qty
         concentration_rows.append(
             {
                 "Asset": asset,
@@ -770,6 +941,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
                 "ETF_Qty": etf_qty,
                 "ETF_ILS": etf_val,
                 "Total_Exposure_ILS": direct_val + etf_val,
+                "Estimated_BTC_Qty": estimated_btc_qty,
             }
         )
 
@@ -1538,7 +1710,7 @@ def main() -> None:
     st.sidebar.title(tr("Navigation", "ניווט"))
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
-    page_risk = tr("Risk & FIFO", "סיכונים ו-FIFO")
+    page_risk = tr("Risk & FIFO", "סיכונים ופיפו")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page = st.sidebar.radio(tr("Page", "עמוד"), [page_dashboard, page_manage, page_risk, page_quality])
 
@@ -1776,6 +1948,7 @@ def main() -> None:
                         localize_column_name("ETF_Qty", language): "{:.8f}",
                         localize_column_name("ETF_ILS", language): "{:,.0f}",
                         localize_column_name("Total_Exposure_ILS", language): "{:,.0f}",
+                        localize_column_name("Estimated_BTC_Qty", language): "{:.8f}",
                     }
                 ),
                 use_container_width=True,
@@ -2049,28 +2222,34 @@ def main() -> None:
 
 
     elif page == page_risk:
-        st.title(tr("Risk, Performance and FIFO", "סיכונים, ביצועים ועלות FIFO"))
+        st.title(tr("Risk, Performance and FIFO", "סיכונים, ביצועים ועלות פיפו"))
         fifo_df = fifo_metrics(trades)
-        st.subheader(tr("FIFO Engine", "מנוע FIFO"))
+        st.subheader(tr("FIFO Engine", "מנוע פיפו"))
         if fifo_df.empty:
             st.info(tr("Not enough data for FIFO", "אין מספיק נתונים לחישוב FIFO"))
         else:
+            avg_price_col = tr("Average Buy Price", "מחיר קנייה ממוצע")
+            avg_price_currency_col = "מטבע מחיר קנייה ממוצע"
             fifo_view = fifo_df.rename(
                 columns={
                     "Ticker": tr("Ticker", "טיקר"),
                     "כמות פתוחה (FIFO)": tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"),
                     "עלות פתוחה (₪)": tr("Open Cost (ILS)", "עלות פתוחה (₪)"),
                     "רווח ממומש (₪)": tr("Realized P/L (ILS)", "רווח ממומש (₪)"),
-                    "מחיר ממוצע פתוח (₪)": tr("Avg Open Price (ILS)", "מחיר ממוצע פתוח (₪)"),
+                    "מחיר קנייה ממוצע": avg_price_col,
                 }
             )
+            fifo_view[avg_price_col] = fifo_view.apply(
+                lambda r: _format_currency_value(float(r[avg_price_col]), r.get(avg_price_currency_col, "")),
+                axis=1,
+            )
+            fifo_view = fifo_view.drop(columns=[avg_price_currency_col], errors="ignore")
             st.dataframe(
                 fifo_view.style.format(
                     {
                         tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): "{:.8f}",
                         tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
                         tr("Realized P/L (ILS)", "רווח ממומש (₪)"): "₪{:,.0f}",
-                        tr("Avg Open Price (ILS)", "מחיר ממוצע פתוח (₪)"): "₪{:,.2f}",
                     }
                 )
             )
@@ -2101,7 +2280,7 @@ def main() -> None:
             scenario_df = pd.DataFrame(
                 [
                     {"Scenario": tr("Calm market", "שוק רגוע"), "Shock": -0.03},
-                    {"Scenario": tr("Risk-off week", "שבוע Risk-off"), "Shock": -0.08},
+                    {"Scenario": tr("Risk-off week", "שבוע ירידות"), "Shock": -0.08},
                     {"Scenario": tr("Macro stress", "סטרס מאקרו"), "Shock": -0.15},
                     {"Scenario": tr("Tail event", "אירוע קיצון"), "Shock": -0.25},
                 ]
