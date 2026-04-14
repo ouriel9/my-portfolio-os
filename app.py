@@ -420,11 +420,38 @@ def inject_global_styles(language: str) -> None:
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
         [data-testid="stSidebar"] {{
-            background: #f8fafc !important;
+            width: 280px !important;
+            min-width: 280px !important;
+            max-width: 80vw !important;
+            background: #f8f9fa !important;
+            background-color: #f8f9fa !important;
+            z-index: 999999 !important;
+            direction: rtl !important;
         }}
+        [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
-            background: #f8fafc !important;
+            width: 280px !important;
+            min-width: 280px !important;
+            max-width: 80vw !important;
+            background: #f8f9fa !important;
+            background-color: #f8f9fa !important;
+            opacity: 1 !important;
             border-left: 1px solid #eef2f7;
+            z-index: 999999 !important;
+            direction: rtl !important;
+            text-align: right !important;
+            overflow-x: hidden !important;
+            overflow-y: auto !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }}
+        [data-testid="stSidebar"] *,
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
+            writing-mode: horizontal-tb !important;
+            word-break: normal !important;
+            overflow-wrap: normal !important;
+            white-space: normal !important;
+            line-break: auto !important;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"],
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] {{
@@ -445,6 +472,9 @@ def inject_global_styles(language: str) -> None:
             color: #333 !important;
             font-size: 0.96rem !important;
             margin: 0 !important;
+            word-break: normal !important;
+            overflow-wrap: break-word !important;
+            white-space: normal !important;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked),
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {{
@@ -455,7 +485,9 @@ def inject_global_styles(language: str) -> None:
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top));
             right: 0.65rem;
+            left: auto !important;
             z-index: 10000 !important;
+            direction: rtl !important;
         }}
         [data-testid="collapsedControl"] button,
         [data-testid="stSidebarCollapsedControl"] button {{
@@ -465,6 +497,8 @@ def inject_global_styles(language: str) -> None:
             border: 1px solid rgba(203, 213, 225, 0.9) !important;
             background: rgba(255, 255, 255, 0.92) !important;
             box-shadow: 0 6px 14px rgba(15, 23, 42, 0.16) !important;
+            direction: rtl !important;
+            unicode-bidi: plaintext !important;
         }}
         [data-testid="collapsedControl"] button::before,
         [data-testid="stSidebarCollapsedControl"] button::before {{
