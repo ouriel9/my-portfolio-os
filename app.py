@@ -283,7 +283,7 @@ def inject_global_styles(language: str) -> None:
             direction: ltr !important;
             left: 0 !important;
             right: auto !important;
-            inset-inline-start: 0 !important;
+            inset-inline-start: auto !important;
             inset-inline-end: auto !important;
             transition: none !important;
         }}
@@ -314,7 +314,7 @@ def inject_global_styles(language: str) -> None:
             -webkit-backdrop-filter: none !important;
             left: 0 !important;
             right: auto !important;
-            inset-inline-start: 0 !important;
+            inset-inline-start: auto !important;
             inset-inline-end: auto !important;
             transform: translateX(-100%);
             transition: transform 220ms ease, opacity 220ms ease !important;
