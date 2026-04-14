@@ -298,12 +298,15 @@ def inject_global_styles(language: str) -> None:
             transform: translateX(-100%);
             transition: transform 240ms ease !important;
             will-change: transform;
+            pointer-events: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] {{
             transform: translateX(0) !important;
+            pointer-events: auto !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] {{
             transform: translateX(-100%) !important;
+            pointer-events: none !important;
         }}
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
@@ -374,7 +377,9 @@ def inject_global_styles(language: str) -> None:
             white-space: normal !important;
         }}
         [data-testid="collapsedControl"],
-        [data-testid="stSidebarCollapsedControl"] {{
+        [data-testid="stSidebarCollapsedControl"],
+        button[aria-label*="sidebar"],
+        button[aria-label*="Sidebar"] {{
             display: flex !important;
             visibility: visible !important;
             opacity: 1 !important;
@@ -386,7 +391,9 @@ def inject_global_styles(language: str) -> None:
             direction: rtl !important;
         }}
         [data-testid="collapsedControl"] button,
-        [data-testid="stSidebarCollapsedControl"] button {{
+        [data-testid="stSidebarCollapsedControl"] button,
+        button[aria-label*="sidebar"],
+        button[aria-label*="Sidebar"] {{
             width: 44px !important;
             height: 44px !important;
             border-radius: 12px !important;
@@ -511,6 +518,21 @@ def inject_client_fixes() -> None:
             });
           }
 
+          function forceMobileSidebarLeft() {
+            if (!rootWin || !rootDoc) return;
+            if (rootWin.innerWidth > 768) return;
+            const sidebars = rootDoc.querySelectorAll('[data-testid="stSidebar"]');
+            sidebars.forEach((sb) => {
+              sb.style.left = '0';
+              sb.style.right = 'auto';
+            });
+            const controls = rootDoc.querySelectorAll('[data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"], button[aria-label*="sidebar"], button[aria-label*="Sidebar"]');
+            controls.forEach((el) => {
+              el.style.left = '0.65rem';
+              el.style.right = 'auto';
+            });
+          }
+
           function findDashboardTabList() {
             const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
             const he = ['סקירה', 'חלוקה', 'דוחות', 'סך הפקדות', 'עסקאות'];
@@ -584,6 +606,7 @@ def inject_client_fixes() -> None:
 
           function run() {
             removeBranding();
+            forceMobileSidebarLeft();
             setupTabSwipe();
           }
 
