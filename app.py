@@ -348,6 +348,12 @@ def inject_global_styles(language: str) -> None:
             overflow-wrap: normal !important;
             white-space: normal !important;
             line-break: auto !important;
+            transition: none !important;
+            animation: none !important;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: geometricPrecision;
+            backface-visibility: hidden;
+            text-shadow: none !important;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"],
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] {{
@@ -376,7 +382,7 @@ def inject_global_styles(language: str) -> None:
             transition: none !important;
             animation: none !important;
             -webkit-font-smoothing: antialiased;
-            text-rendering: optimizeLegibility;
+            text-rendering: geometricPrecision;
             backface-visibility: hidden;
         }}
         [data-testid="collapsedControl"],
