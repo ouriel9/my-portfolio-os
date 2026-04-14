@@ -667,11 +667,29 @@ def _tradingview_symbol(ticker: object) -> str:
     t = _clean(ticker).upper()
     if not t:
         return ""
+    if ":" in t:
+        return t
     if t in {"BTC", "ETH", "SOL"}:
         return f"BINANCE:{t}USDT"
     if re.match(r"^[A-Z0-9._-]+$", t):
         return f"NASDAQ:{t}"
     return t
+
+
+def _parse_followed_symbols(raw: object) -> List[str]:
+    text = _clean(raw)
+    if not text:
+        return []
+    parts = re.split(r"[\s,;\n\r]+", text)
+    out: List[str] = []
+    seen = set()
+    for p in parts:
+        sym = _clean(p).upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        out.append(sym)
+    return out
 
 
 def _tradingview_chart_url(ticker: object) -> str:
@@ -1236,6 +1254,7 @@ def load_local_settings() -> Dict[str, str]:
             "service_account_file": _clean(raw.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))),
             "language": _clean(raw.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
             "demo_mode": str(raw.get("demo_mode", "false")).lower() == "true",
+            "followed_symbols": _clean(raw.get("followed_symbols", "")),
         }
     except Exception:
         return {}
@@ -1249,6 +1268,7 @@ def save_local_settings(
     service_account_file: str,
     language: str,
     demo_mode: bool,
+    followed_symbols: str,
 ) -> bool:
     try:
         payload = {
@@ -1259,6 +1279,7 @@ def save_local_settings(
             "service_account_file": _clean(service_account_file),
             "language": _clean(language) or DEFAULT_LANGUAGE,
             "demo_mode": bool(demo_mode),
+            "followed_symbols": _clean(followed_symbols),
         }
         LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
@@ -1903,6 +1924,15 @@ def main() -> None:
             tr("Service Account JSON path", "נתיב קובץ Service Account JSON"),
             value=settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)),
         )
+        followed_symbols_text = st.text_area(
+            tr("TradingView followed symbols", "סימבולים במעקב ב-TradingView"),
+            value=settings.get("followed_symbols", ""),
+            help=tr(
+                "Paste symbols separated by comma/space/new line (supports BTC, IBIT, BINANCE:BTCUSDT).",
+                "הדבק סימבולים מופרדים בפסיק/רווח/שורה חדשה (תומך BTC, IBIT, BINANCE:BTCUSDT).",
+            ),
+            height=90,
+        )
 
         if st.button(tr("Save settings on this machine", "שמור חיבור למחשב הזה")):
             ok = save_local_settings(
@@ -1913,6 +1943,7 @@ def main() -> None:
                 service_account_file,
                 language,
                 demo_mode,
+                followed_symbols_text,
             )
             if ok:
                 st.success(tr("Settings saved locally", "החיבור נשמר מקומית"))
@@ -1929,6 +1960,8 @@ def main() -> None:
     if _looks_like_private_key_blob(api_token):
         st.error(tr("API Token appears invalid (looks like a private key). Paste your Apps Script API token instead.", "נראה שבשדה API Token הודבק מפתח פרטי. יש להדביק את ה-API Token של Apps Script."))
         st.stop()
+
+    followed_symbols = _parse_followed_symbols(followed_symbols_text)
 
     if demo_mode:
         df, source_mode = build_demo_snapshot_data(), "demo"
@@ -2164,21 +2197,22 @@ def main() -> None:
                     st.session_state["tv_chart_open"] = True
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
-                watch_df = watch_open_trades_df[["Ticker", "Type"]].copy() if all(c in watch_open_trades_df.columns for c in ["Ticker", "Type"]) else pd.DataFrame(columns=["Ticker", "Type"])
-                if not watch_df.empty:
-                    watch_df["Ticker"] = watch_df["Ticker"].map(_clean).str.upper()
-                    watch_df["Type"] = watch_df["Type"].map(_clean)
-                    watch_df = watch_df[watch_df["Ticker"] != ""].drop_duplicates(subset=["Ticker"])
-                    watch_df["Category"] = watch_df.apply(
-                        lambda r: (
-                            tr("Crypto", "קריפטו")
-                            if r["Ticker"] in {"BTC", "ETH", "SOL"} or r["Type"] == "קריפטו"
-                            else (tr("ETFs", "קרנות סל") if r["Type"] == "ETF" or r["Ticker"] in CRYPTO_ETFS else tr("Stocks", "מניות"))
-                        ),
-                        axis=1,
-                    )
-                    watch_df["Symbol"] = watch_df["Ticker"].map(_tradingview_symbol)
-                    watch_df = watch_df[watch_df["Symbol"] != ""]
+                watch_rows = []
+                for sym in followed_symbols:
+                    tv_symbol = _tradingview_symbol(sym)
+                    if not tv_symbol:
+                        continue
+                    display = sym.split(":", 1)[-1]
+                    if tv_symbol.startswith(("BINANCE:", "BYBIT:", "COINBASE:", "KRAKEN:")) or any(k in display for k in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE"]):
+                        category = tr("Crypto", "קריפטו")
+                    elif display in CRYPTO_ETFS or display.endswith("ETF"):
+                        category = tr("ETFs", "קרנות סל")
+                    else:
+                        category = tr("Stocks", "מניות")
+                    watch_rows.append({"Ticker": display, "Symbol": tv_symbol, "Category": category})
+
+                if watch_rows:
+                    watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
                     open_container = st.popover(watchlist_label, use_container_width=True) if hasattr(st, "popover") else st.expander(watchlist_label, expanded=False)
                     with open_container:
                         for cat in [tr("Crypto", "קריפטו"), tr("ETFs", "קרנות סל"), tr("Stocks", "מניות")]:
@@ -2187,9 +2221,12 @@ def main() -> None:
                                 continue
                             st.markdown(f"**{cat}**")
                             for row in part.itertuples(index=False):
-                                if st.button(f"{row.Ticker}  |  {row.Symbol}", key=f"watch_{cat}_{row.Ticker}"):
-                                    st.session_state["tv_chart_ticker"] = _clean(row.Ticker).upper()
+                                if st.button(f"{row.Ticker}  |  {row.Symbol}", key=f"watch_{cat}_{row.Symbol}"):
+                                    st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
                                     st.session_state["tv_chart_open"] = True
+                                    st.rerun()
+                else:
+                    st.caption(tr("Watchlist is empty. Add followed symbols in Connection & Data Settings.", "רשימת המעקב ריקה. הוסף סימבולים בהגדרות חיבור ונתונים."))
 
                 if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
                     active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
