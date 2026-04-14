@@ -196,6 +196,13 @@ def inject_global_styles(language: str) -> None:
     [data-testid="stDataFrame"] td {{unicode-bidi: plaintext;}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
     [data-testid="stMetric"] {{direction: {direction};}}
+    .app-main-title {{
+        text-align: center;
+        font-size: 2.05rem;
+        font-weight: 800;
+        margin: 0.15rem 0 0.7rem 0;
+        letter-spacing: 0.01em;
+    }}
     [data-baseweb="tab-list"] {{
         display: flex !important;
         overflow-x: auto;
@@ -282,21 +289,21 @@ def inject_global_styles(language: str) -> None:
             z-index: 999999 !important;
             direction: ltr !important;
             left: 0 !important;
-            right: auto !important;
+            right: unset !important;
             inset-inline-start: auto !important;
             inset-inline-end: auto !important;
-            transition: none !important;
-        }}
-        [data-testid="stSidebar"][aria-expanded="true"] {{
             width: 280px !important;
             min-width: 280px !important;
             max-width: 80vw !important;
+            transform: translateX(-100%);
+            transition: transform 240ms ease !important;
+            will-change: transform;
+        }}
+        [data-testid="stSidebar"][aria-expanded="true"] {{
+            transform: translateX(0) !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] {{
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            overflow: hidden !important;
+            transform: translateX(-100%) !important;
         }}
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
@@ -317,7 +324,7 @@ def inject_global_styles(language: str) -> None:
             inset-inline-start: auto !important;
             inset-inline-end: auto !important;
             transform: translateX(-100%);
-            transition: transform 220ms ease, opacity 220ms ease !important;
+            transition: opacity 200ms ease !important;
             will-change: transform;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
@@ -325,15 +332,15 @@ def inject_global_styles(language: str) -> None:
             width: 280px !important;
             min-width: 280px !important;
             max-width: 80vw !important;
-            transform: translateX(0);
-            animation: sidebarSlideInMobile 220ms ease-out;
+            transform: none !important;
+            animation: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
         [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
             width: 280px !important;
             min-width: 280px !important;
             max-width: 80vw !important;
-            transform: translateX(-100%);
+            transform: none !important;
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
@@ -1825,8 +1832,6 @@ def main() -> None:
 
     inject_global_styles(language_default)
 
-    st.markdown("### Portfolio Manager OS")
-
     st.sidebar.markdown("### App")
     language = st.sidebar.selectbox("Language / שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
     demo_mode = st.sidebar.checkbox("Demo view / מצב הדגמה", value=bool(settings.get("demo_mode", False)))
@@ -1842,6 +1847,7 @@ def main() -> None:
     inject_client_fixes()
 
     tr = (lambda en, he: he if language == LANG_HE else en)
+    st.markdown(f"<h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>", unsafe_allow_html=True)
 
     st.sidebar.title(tr("Navigation", "ניווט"))
     page_dashboard = tr("Dashboard", "דשבורד")
