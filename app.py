@@ -287,34 +287,14 @@ def inject_global_styles(language: str) -> None:
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             z-index: 999999 !important;
-            direction: ltr !important;
-            left: 0 !important;
-            right: unset !important;
-            inset-inline-start: auto !important;
-            inset-inline-end: auto !important;
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 80vw !important;
-            transform: translateX(-100%);
-            transition: transform 240ms ease !important;
-            will-change: transform;
-            pointer-events: none !important;
-        }}
-        [data-testid="stSidebar"][aria-expanded="true"] {{
-            transform: translateX(0) !important;
-            pointer-events: auto !important;
-        }}
-        [data-testid="stSidebar"][aria-expanded="false"] {{
-            transform: translateX(-100%) !important;
-            pointer-events: none !important;
+            direction: rtl !important;
         }}
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             opacity: 1 !important;
-            border-right: 1px solid #eef2f7;
-            border-left: 0 !important;
+            border-left: 1px solid #eef2f7;
             z-index: 999999 !important;
             direction: rtl !important;
             text-align: right !important;
@@ -322,28 +302,6 @@ def inject_global_styles(language: str) -> None:
             overflow-y: auto !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
-            left: 0 !important;
-            right: auto !important;
-            inset-inline-start: auto !important;
-            inset-inline-end: auto !important;
-            transform: translateX(-100%);
-            transition: opacity 200ms ease !important;
-            will-change: transform;
-        }}
-        [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 80vw !important;
-            transform: none !important;
-            animation: none !important;
-        }}
-        [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 80vw !important;
-            transform: none !important;
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
@@ -385,8 +343,8 @@ def inject_global_styles(language: str) -> None:
             opacity: 1 !important;
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top));
-            left: 0.65rem !important;
-            right: auto !important;
+            right: 0.65rem !important;
+            left: auto !important;
             z-index: 100002 !important;
             direction: rtl !important;
         }}
@@ -518,39 +476,6 @@ def inject_client_fixes() -> None:
             });
           }
 
-          function forceMobileSidebarLeft() {
-            if (!rootWin || !rootDoc) return;
-            if (rootWin.innerWidth > 768) return;
-            const sidebars = rootDoc.querySelectorAll('[data-testid="stSidebar"], section[data-testid="stSidebar"]');
-            sidebars.forEach((sb) => {
-              const expanded = (sb.getAttribute('aria-expanded') || '').toLowerCase() === 'true';
-              sb.style.setProperty('left', '0', 'important');
-              sb.style.setProperty('right', 'auto', 'important');
-              sb.style.setProperty('inset-inline-start', 'auto', 'important');
-              sb.style.setProperty('inset-inline-end', 'auto', 'important');
-              sb.style.setProperty('width', '280px', 'important');
-              sb.style.setProperty('min-width', '280px', 'important');
-              sb.style.setProperty('max-width', '80vw', 'important');
-              sb.style.setProperty('transition', 'transform 240ms ease', 'important');
-              sb.style.setProperty('transform', expanded ? 'translateX(0)' : 'translateX(-100%)', 'important');
-
-              // Some Streamlit builds animate/anchor through a wrapper div.
-              const wrapper = sb.parentElement;
-              if (wrapper && wrapper !== rootDoc.body) {
-                wrapper.style.setProperty('left', '0', 'important');
-                wrapper.style.setProperty('right', 'auto', 'important');
-                wrapper.style.setProperty('inset-inline-start', 'auto', 'important');
-                wrapper.style.setProperty('inset-inline-end', 'auto', 'important');
-                wrapper.style.setProperty('transition', 'transform 240ms ease', 'important');
-                wrapper.style.setProperty('transform', expanded ? 'translateX(0)' : 'translateX(-100%)', 'important');
-              }
-            });
-            const controls = rootDoc.querySelectorAll('[data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"], button[aria-label*="sidebar"], button[aria-label*="Sidebar"]');
-            controls.forEach((el) => {
-              el.style.setProperty('left', '0.65rem', 'important');
-              el.style.setProperty('right', 'auto', 'important');
-            });
-          }
 
           function findDashboardTabList() {
             const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
@@ -625,7 +550,6 @@ def inject_client_fixes() -> None:
 
           function run() {
             removeBranding();
-            forceMobileSidebarLeft();
             setupTabSwipe();
           }
 
