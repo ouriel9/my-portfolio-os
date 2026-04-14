@@ -255,7 +255,13 @@ def inject_global_styles(language: str) -> None:
             text-align: right !important;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
-        header, #MainMenu, footer {{display: none !important;}}
+        #MainMenu, footer {{display: none !important;}}
+        header, [data-testid="stHeader"] {{
+            display: block !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            z-index: 100001 !important;
+        }}
         .block-container {{
             padding-top: 0.45rem !important;
             padding-bottom: 0.8rem !important;
@@ -345,11 +351,14 @@ def inject_global_styles(language: str) -> None:
         }}
         [data-testid="collapsedControl"],
         [data-testid="stSidebarCollapsedControl"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top));
             right: 0.65rem;
             left: auto !important;
-            z-index: 10000 !important;
+            z-index: 100002 !important;
             direction: rtl !important;
         }}
         [data-testid="collapsedControl"] button,
