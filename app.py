@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Tuple
 from urllib import error as urlerror
+from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 import numpy as np
@@ -68,7 +69,7 @@ SNAPSHOT_HEADERS = {
     "Cost_Origin": {LANG_EN: "Cost (Origin)", LANG_HE: "עלות מקור"},
     "Cost_ILS": {LANG_EN: "Cost (ILS)", LANG_HE: "עלות שקלית"},
     "Current_Value_ILS": {LANG_EN: "Current Value (ILS)", LANG_HE: "שווי שקלי"},
-    "Current_Asset_Value_ILS": {LANG_EN: "Current Asset Value (ILS)", LANG_HE: "שווי נוכחי לנכס (₪)"},
+    "Current_Asset_Value_Display": {LANG_EN: "Current Asset Value", LANG_HE: "שווי נוכחי לנכס"},
     "Commission": {LANG_EN: "Commission", LANG_HE: "עמלה"},
     "Status": {LANG_EN: "Status", LANG_HE: "סטטוס"},
     "validation_status": {LANG_EN: "Validation", LANG_HE: "אימות"},
@@ -602,6 +603,93 @@ def _format_currency_value(value: float, currency: str) -> str:
 def _mix_he_with_ltr(token: str) -> str:
     # Isolate Latin tokens so bidi layout stays stable inside Hebrew text.
     return f"\u2066{token}\u2069"
+
+
+def _tradingview_symbol(ticker: object) -> str:
+    t = _clean(ticker).upper()
+    if not t:
+        return ""
+    if t in {"BTC", "ETH", "SOL"}:
+        return f"BINANCE:{t}USDT"
+    if re.match(r"^[A-Z0-9._-]+$", t):
+        return f"NASDAQ:{t}"
+    return t
+
+
+def _tradingview_chart_url(ticker: object) -> str:
+    t = _clean(ticker).upper()
+    symbol = _tradingview_symbol(t)
+    if not symbol:
+        return ""
+    return f"https://www.tradingview.com/chart/?symbol={symbol.replace(':', '%3A')}&pm_ticker={t}"
+
+
+def _internal_chart_link(ticker: object) -> str:
+    t = _clean(ticker).upper()
+    if not t:
+        return ""
+    safe = urlparse.quote(t)
+    return f"?tv_ticker={safe}&pm_ticker={safe}"
+
+
+def _get_query_param(name: str) -> str:
+    try:
+        if hasattr(st, "query_params"):
+            val = st.query_params.get(name, "")
+            if isinstance(val, list):
+                return _clean(val[0]) if val else ""
+            return _clean(val)
+    except Exception:
+        pass
+    try:
+        values = st.experimental_get_query_params().get(name, [])
+        return _clean(values[0]) if values else ""
+    except Exception:
+        return ""
+
+
+def _clear_query_param(name: str) -> None:
+    try:
+        if hasattr(st, "query_params"):
+            if name in st.query_params:
+                del st.query_params[name]
+            return
+    except Exception:
+        pass
+    try:
+        q = st.experimental_get_query_params()
+        if name in q:
+            q.pop(name, None)
+            st.experimental_set_query_params(**q)
+    except Exception:
+        return
+
+
+def _render_tradingview_widget(ticker: object, height: int = 560) -> None:
+    symbol = _tradingview_symbol(ticker)
+    if not symbol:
+        st.info("No chart symbol")
+        return
+    widget_html = f"""
+    <div class="tradingview-widget-container" style="height:{height - 24}px;width:100%">
+      <div id="tradingview_chart" style="height:100%;width:100%"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+        new TradingView.widget({{
+          "autosize": true,
+          "symbol": "{symbol}",
+          "interval": "240",
+          "timezone": "Etc/UTC",
+          "theme": "dark",
+          "style": "1",
+          "locale": "en",
+          "allow_symbol_change": true,
+          "container_id": "tradingview_chart"
+        }});
+      </script>
+    </div>
+    """
+    components.html(widget_html, height=height, scrolling=False)
 
 
 def _clean(value: object) -> str:
@@ -1932,20 +2020,63 @@ def main() -> None:
 
             st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
             exposure_cols = ["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
-            exposure_view = localize_dataframe_columns(summary[exposure_cols], language)
+            exposure_work = summary[exposure_cols].copy()
+            exposure_work["Ticker"] = exposure_work["Ticker"].map(_internal_chart_link)
+            exposure_view = localize_dataframe_columns(exposure_work, language)
+            ticker_col = localize_column_name("Ticker", language)
             st.dataframe(
-                exposure_view.style.format(
-                    {
-                        localize_column_name("Open_Qty", language): "{:.8f}",
-                        localize_column_name("Cost_ILS", language): "{:,.0f}",
-                        localize_column_name("Value_ILS", language): "{:,.0f}",
-                        localize_column_name("Net_PnL_ILS", language): "{:,.0f}",
-                        localize_column_name("Yield_Origin", language): "{:.2%}",
-                        localize_column_name("Yield_ILS", language): "{:.2%}",
-                    }
-                ),
+                exposure_view,
+                column_config={
+                    ticker_col: st.column_config.LinkColumn(
+                        ticker_col,
+                        help=tr("Click ticker to open in-app TradingView chart", "לחץ על טיקר לפתיחת הגרף בתוך האפליקציה"),
+                        display_text=r".*[?&]pm_ticker=([^&]+).*$",
+                    ),
+                    localize_column_name("Open_Qty", language): st.column_config.NumberColumn(format="%.8f"),
+                    localize_column_name("Cost_ILS", language): st.column_config.NumberColumn(format="%.0f"),
+                    localize_column_name("Value_ILS", language): st.column_config.NumberColumn(format="%.0f"),
+                    localize_column_name("Net_PnL_ILS", language): st.column_config.NumberColumn(format="%.0f"),
+                    localize_column_name("Yield_Origin", language): st.column_config.NumberColumn(format="%.2f%%"),
+                    localize_column_name("Yield_ILS", language): st.column_config.NumberColumn(format="%.2f%%"),
+                },
                 use_container_width=True,
+                hide_index=True,
             )
+            exposure_tickers = [t for t in summary.get("Ticker", pd.Series(dtype=str)).dropna().astype(str).map(_clean).tolist() if t]
+            if exposure_tickers:
+                clicked_ticker = _clean(_get_query_param("tv_ticker")).upper()
+                if clicked_ticker and clicked_ticker in {t.upper() for t in exposure_tickers}:
+                    st.session_state["tv_chart_ticker"] = clicked_ticker
+                elif "tv_chart_ticker" not in st.session_state:
+                    st.session_state["tv_chart_ticker"] = _clean(exposure_tickers[0]).upper()
+
+                active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
+                if active_ticker:
+                    c_open, c_close = st.columns([6, 1])
+                    c_open.markdown(f"**{tr('TradingView Chart', 'גרף TradingView')}: `{active_ticker}`**")
+                    if c_close.button(tr("Close", "סגור"), key="tv_close_btn"):
+                        st.session_state.pop("tv_chart_ticker", None)
+                        _clear_query_param("tv_ticker")
+                        st.rerun()
+                    _render_tradingview_widget(active_ticker, height=560)
+
+                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
+                watch_symbols = []
+                for t in exposure_tickers:
+                    symbol = _tradingview_symbol(t)
+                    if symbol:
+                        watch_symbols.append((t.upper(), symbol))
+                if watch_symbols:
+                    if hasattr(st, "popover"):
+                        with st.popover(watchlist_label, use_container_width=True):
+                            st.caption(tr("Tracked symbols", "סימבולים במעקב"))
+                            watch_md = "\n".join([f"- [{t}]({_internal_chart_link(t)}) - `{s}`" for t, s in watch_symbols])
+                            st.markdown(watch_md)
+                    else:
+                        with st.expander(watchlist_label, expanded=False):
+                            st.caption(tr("Tracked symbols", "סימבולים במעקב"))
+                            watch_md = "\n".join([f"- [{t}]({_internal_chart_link(t)}) - `{s}`" for t, s in watch_symbols])
+                            st.markdown(watch_md)
 
         reports = build_home_inspired_reports(open_trades)
         with tab_allocation:
@@ -2162,13 +2293,22 @@ def main() -> None:
                 snapshot_view["Commission"] = snapshot_view.get("Commission", 0).map(_num)
                 snapshot_view["Cost_ILS"] = snapshot_view.get("Cost_ILS", 0).map(_num)
                 snapshot_view["Current_Value_ILS"] = snapshot_view.get("Current_Value_ILS", 0).map(_num)
-                qty_abs = snapshot_view.get("Quantity", 0).map(_num).abs()
-                snapshot_view["Current_Asset_Value_ILS"] = np.where(
-                    qty_abs > 1e-9,
-                    snapshot_view["Current_Value_ILS"] / qty_abs,
-                    0.0,
-                )
                 snapshot_view["Origin_Currency"] = snapshot_view.get("Origin_Currency", "").map(_clean)
+                qty_abs = snapshot_view.get("Quantity", 0).map(_num).abs()
+                origin_currency_series = snapshot_view["Origin_Currency"].map(_normalize_currency_code)
+                value_origin = np.where(
+                    origin_currency_series == "USD",
+                    snapshot_view["Current_Value_ILS"] / fx_local,
+                    snapshot_view["Current_Value_ILS"],
+                )
+                snapshot_view["Current_Asset_Value_Display"] = pd.Series(
+                    np.where(qty_abs > 1e-9, value_origin / qty_abs, 0.0),
+                    index=snapshot_view.index,
+                )
+                snapshot_view["Current_Asset_Value_Display"] = snapshot_view.apply(
+                    lambda r: _format_currency_value(float(r["Current_Asset_Value_Display"]), r.get("Origin_Currency", "")),
+                    axis=1,
+                )
                 snapshot_view["Status"] = snapshot_view.get("Status", "").map(_clean)
                 snapshot_view["Cost_Origin_With_Fee"] = snapshot_view["Cost_Origin"] + snapshot_view["Commission"]
                 snapshot_view["Value_Origin_Est"] = np.where(
@@ -2193,7 +2333,7 @@ def main() -> None:
                         "Platform",
                         "Quantity",
                         "Origin_Buy_Price",
-                        "Current_Asset_Value_ILS",
+                        "Current_Asset_Value_Display",
                         "Cost_ILS",
                         "Current_Value_ILS",
                         "Yield_Origin",
@@ -2212,7 +2352,7 @@ def main() -> None:
                     platform_col = SNAPSHOT_HEADERS["Platform"][language]
                     qty_col = SNAPSHOT_HEADERS["Quantity"][language]
                     buy_col = SNAPSHOT_HEADERS["Origin_Buy_Price"][language]
-                    asset_value_col = SNAPSHOT_HEADERS["Current_Asset_Value_ILS"][language]
+                    asset_value_col = SNAPSHOT_HEADERS["Current_Asset_Value_Display"][language]
                     cost_col = SNAPSHOT_HEADERS["Cost_ILS"][language]
                     value_col = SNAPSHOT_HEADERS["Current_Value_ILS"][language]
                     yield_col = SNAPSHOT_HEADERS["Yield_Origin"][language]
@@ -2222,7 +2362,6 @@ def main() -> None:
                             {
                                 qty_col: "{:.8f}",
                                 buy_col: "{:,.2f}",
-                                asset_value_col: "{:,.2f}",
                                 cost_col: "{:,.0f}",
                                 value_col: "{:,.0f}",
                                 yield_col: "{:.2%}",
@@ -2234,7 +2373,7 @@ def main() -> None:
                             platform_col: st.column_config.TextColumn(width="medium"),
                             qty_col: st.column_config.NumberColumn(width="small"),
                             buy_col: st.column_config.NumberColumn(width="small"),
-                            asset_value_col: st.column_config.NumberColumn(width="small"),
+                            asset_value_col: st.column_config.TextColumn(width="small"),
                             cost_col: st.column_config.NumberColumn(width="small"),
                             value_col: st.column_config.NumberColumn(width="small"),
                             yield_col: st.column_config.NumberColumn(width="small"),
@@ -2334,16 +2473,29 @@ def main() -> None:
 
         st.caption(tr(f"Showing {len(trades):,} snapshot transactions, including closed trades.", f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות."))
         trade_view = trades.copy()
+        manage_fx = _safe_quote("USDILS=X")
+        if manage_fx <= 0:
+            manage_fx = 3.6
         trade_qty_abs = trade_view.get("Quantity", 0).map(_num).abs()
-        trade_view["Current_Asset_Value_ILS"] = np.where(
-            trade_qty_abs > 1e-9,
-            trade_view.get("Current_Value_ILS", 0).map(_num) / trade_qty_abs,
-            0.0,
+        trade_origin_currency = trade_view.get("Origin_Currency", "").map(_normalize_currency_code)
+        trade_current_ils = trade_view.get("Current_Value_ILS", 0).map(_num)
+        trade_current_origin = np.where(
+            trade_origin_currency == "USD",
+            trade_current_ils / manage_fx,
+            trade_current_ils,
+        )
+        trade_view["Current_Asset_Value_Display"] = pd.Series(
+            np.where(trade_qty_abs > 1e-9, trade_current_origin / trade_qty_abs, 0.0),
+            index=trade_view.index,
+        )
+        trade_view["Current_Asset_Value_Display"] = trade_view.apply(
+            lambda r: _format_currency_value(float(r["Current_Asset_Value_Display"]), r.get("Origin_Currency", "")),
+            axis=1,
         )
         status_filter = st.multiselect(tr("Status filter", "סינון סטטוס"), sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[])
         if status_filter:
             trade_view = trade_view[trade_view["Status"].isin(status_filter)]
-        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_ILS", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
+        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_Display", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
         if preview_cols:
             sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in trade_view.columns]
             if sort_cols:
