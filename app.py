@@ -257,10 +257,6 @@ def inject_global_styles(language: str) -> None:
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
     @media (max-width: 768px) {{
-        @keyframes sidebarSlideInMobile {{
-            from {{transform: translateX(-14px); opacity: 0.96;}}
-            to {{transform: translateX(0); opacity: 1;}}
-        }}
         html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
             direction: rtl !important;
             text-align: right !important;
@@ -291,6 +287,8 @@ def inject_global_styles(language: str) -> None:
             direction: rtl !important;
             transition: none !important;
             animation: none !important;
+            opacity: 1 !important;
+            transition: opacity 160ms ease-out !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] {{
             width: 0 !important;
@@ -301,11 +299,13 @@ def inject_global_styles(language: str) -> None:
             border: 0 !important;
             box-shadow: none !important;
             overflow: hidden !important;
+            opacity: 0 !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] {{
             width: 280px !important;
             min-width: 280px !important;
             max-width: 82vw !important;
+            opacity: 1 !important;
         }}
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
