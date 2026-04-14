@@ -161,7 +161,8 @@ def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = 
         hoverlabel=dict(font=dict(size=14)),
     )
     if is_bar:
-        fig.update_xaxes(tickangle=-30, tickfont=dict(size=10))
+        fig.update_layout(showlegend=False, coloraxis_showscale=False)
+        fig.update_xaxes(tickangle=45, tickfont=dict(size=10))
     return fig
 
 
@@ -408,46 +409,69 @@ def inject_global_styles(language: str) -> None:
             text-align: right !important;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
-        header, #MainMenu, footer, [data-testid="stToolbar"] {{display: none !important;}}
-        [data-testid="stSidebar"], [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {{display: none !important;}}
+        header, #MainMenu, footer {{display: none !important;}}
         .block-container {{
             padding-top: 0.45rem !important;
-            padding-bottom: calc(5.2rem + env(safe-area-inset-bottom)) !important;
+            padding-bottom: 0.8rem !important;
             padding-left: 0.65rem !important;
             padding-right: 0.65rem !important;
         }}
-        .mobile-bottom-nav {{
-            position: fixed;
-            left: 0.55rem;
-            right: 0.55rem;
-            bottom: calc(0.45rem + env(safe-area-inset-bottom));
-            z-index: 9999;
-            border-radius: 16px;
-            padding: 0.25rem;
-            background: rgba(15, 23, 42, 0.58);
-            border: 1px solid rgba(148, 163, 184, 0.34);
-            backdrop-filter: blur(14px);
-            -webkit-backdrop-filter: blur(14px);
-            box-shadow: 0 10px 24px rgba(2, 6, 23, 0.32);
+        h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
+        h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
+        h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
+        [data-testid="stSidebar"] {{
+            background: #f8fafc !important;
         }}
-        .mobile-bottom-nav .nav {{
-            display: grid !important;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 0.25rem;
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+            background: #f8fafc !important;
+            border-left: 1px solid #eef2f7;
+        }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"],
+        [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] {{
+            width: 100% !important;
+            text-align: right !important;
+            border: none !important;
+            border-bottom: 1px solid #f0f0f0 !important;
+            border-radius: 0 !important;
+            padding: 15px 8px !important;
             background: transparent !important;
+            box-shadow: none !important;
+            color: #333 !important;
         }}
-        .mobile-bottom-nav .nav-link {{
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] p,
+        [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] p {{
+            text-align: right !important;
+            font-weight: 500 !important;
+            color: #333 !important;
+            font-size: 0.96rem !important;
+            margin: 0 !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked),
+        [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {{
+            background: #eef6ff !important;
+        }}
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapsedControl"] {{
+            position: fixed !important;
+            top: calc(0.55rem + env(safe-area-inset-top));
+            right: 0.65rem;
+            z-index: 10000 !important;
+        }}
+        [data-testid="collapsedControl"] button,
+        [data-testid="stSidebarCollapsedControl"] button {{
+            width: 44px !important;
+            height: 44px !important;
             border-radius: 12px !important;
-            color: #e2e8f0 !important;
-            font-size: 0.76rem !important;
-            font-weight: 700 !important;
-            text-align: center !important;
-            padding: 0.56rem 0.2rem !important;
+            border: 1px solid rgba(203, 213, 225, 0.9) !important;
+            background: rgba(255, 255, 255, 0.92) !important;
+            box-shadow: 0 6px 14px rgba(15, 23, 42, 0.16) !important;
         }}
-        .mobile-bottom-nav .nav-link.active {{
-            background: linear-gradient(180deg, rgba(59,130,246,0.96), rgba(29,78,216,0.95)) !important;
-            color: #ffffff !important;
-            box-shadow: 0 7px 16px rgba(37, 99, 235, 0.32);
+        [data-testid="collapsedControl"] button::before,
+        [data-testid="stSidebarCollapsedControl"] button::before {{
+            content: "☰";
+            font-size: 1.2rem;
+            color: #1f2937;
+            line-height: 1;
         }}
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.48rem !important;}}
         .pm-card, [data-testid="stMetric"] {{
@@ -455,7 +479,7 @@ def inject_global_styles(language: str) -> None:
             padding: 0.58rem 0.62rem !important;
             box-shadow: 0 6px 14px rgba(15, 23, 42, 0.09) !important;
         }}
-        [data-testid="stMetricValue"] {{font-size: 1.02rem !important;}}
+        [data-testid="stMetricValue"] {{font-size: 0.94rem !important; white-space: nowrap !important;}}
         [data-testid="stMetricLabel"] {{font-size: 0.75rem !important;}}
         [data-testid="stDataFrame"] {{overflow-x: auto !important; -ms-overflow-style: none; scrollbar-width: none;}}
         [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
@@ -1910,22 +1934,7 @@ def main() -> None:
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_options = [page_dashboard, page_manage, page_risk, page_quality]
     is_mobile = _is_mobile_client()
-    if is_mobile and option_menu is not None:
-        current_page = _clean(st.session_state.get("mobile_page", page_dashboard)) or page_dashboard
-        default_index = page_options.index(current_page) if current_page in page_options else 0
-        st.markdown("<div class='mobile-bottom-nav'>", unsafe_allow_html=True)
-        page = option_menu(
-            menu_title=None,
-            options=page_options,
-            icons=["grid", "pencil-square", "bar-chart-line", "shield-check"],
-            orientation="horizontal",
-            default_index=default_index,
-            key="mobile_bottom_nav",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.session_state["mobile_page"] = page
-    else:
-        page = st.sidebar.radio(tr("Page", "עמוד"), page_options)
+    page = st.sidebar.radio(tr("Page", "עמוד"), page_options)
 
     connection_state_box = None
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
