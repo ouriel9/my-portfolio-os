@@ -289,6 +289,8 @@ def inject_global_styles(language: str) -> None:
             background-color: #f8f9fa !important;
             z-index: 999999 !important;
             direction: rtl !important;
+            transition: none !important;
+            animation: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] {{
             width: 0 !important;
@@ -318,6 +320,8 @@ def inject_global_styles(language: str) -> None:
             overflow-y: auto !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
+            transition: none !important;
+            animation: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
         [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
@@ -356,6 +360,8 @@ def inject_global_styles(language: str) -> None:
             background: transparent !important;
             box-shadow: none !important;
             color: #333 !important;
+            transition: none !important;
+            animation: none !important;
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] p,
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] p {{
@@ -367,6 +373,11 @@ def inject_global_styles(language: str) -> None:
             word-break: normal !important;
             overflow-wrap: break-word !important;
             white-space: normal !important;
+            transition: none !important;
+            animation: none !important;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+            backface-visibility: hidden;
         }}
         [data-testid="collapsedControl"],
         [data-testid="stSidebarCollapsedControl"],
@@ -572,7 +583,8 @@ def inject_client_fixes() -> None:
               const active = currentTabs.findIndex((t) => t.getAttribute('aria-selected') === 'true');
               if (active < 0) return;
 
-              const next = dx < 0 ? active + 1 : active - 1;
+              // Swipe right should move to the tab on the left, swipe left to the right.
+              const next = dx > 0 ? active - 1 : active + 1;
               if (next >= 0 && next < currentTabs.length) {
                 currentTabs[next].click();
                 currentTabs[next].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
