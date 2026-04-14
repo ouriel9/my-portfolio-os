@@ -329,6 +329,13 @@ def inject_global_styles(language: str) -> None:
             background: transparent !important;
             background-color: transparent !important;
             box-shadow: none !important;
+            display: none !important;
+            width: 0 !important;
+            min-width: 0 !important;
+            max-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: hidden !important;
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
@@ -1765,9 +1772,21 @@ def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     if "Status" not in trades.columns:
         trades["Status"] = ""
     trades["Status"] = trades["Status"].replace("", "פתוח")
+    status_norm = trades["Status"].map(_clean).str.lower()
+    closed_values = {"סגור", "closed", "close", "sold", "נמכר"}
+    closed_mask = status_norm.isin(closed_values)
+    open_trades = trades[~closed_mask].copy()
+    closed_trades = trades[closed_mask].copy()
 
-    open_trades = trades[trades["Status"] != "סגור"].copy()
-    closed_trades = trades[trades["Status"] == "סגור"].copy()
+    # Safety fallback: if status labels are malformed and everything appears closed,
+    # infer open trades by positive position/value so top-level totals are not zeroed.
+    if open_trades.empty and not trades.empty and "Current_Value_ILS" in trades.columns:
+        value_mask = trades["Current_Value_ILS"].map(_num) > 0
+        qty_mask = trades["Quantity"].map(_num) > 0 if "Quantity" in trades.columns else False
+        inferred_open_mask = value_mask | qty_mask
+        if inferred_open_mask.any():
+            open_trades = trades[inferred_open_mask].copy()
+            closed_trades = trades[~inferred_open_mask].copy()
 
     total_cost = float(open_trades["Cost_ILS"].sum()) if "Cost_ILS" in open_trades.columns else 0.0
     total_value = float(open_trades["Current_Value_ILS"].sum()) if "Current_Value_ILS" in open_trades.columns else 0.0
