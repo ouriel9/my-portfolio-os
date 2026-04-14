@@ -250,6 +250,10 @@ def inject_global_styles(language: str) -> None:
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
     @media (max-width: 768px) {{
+        @keyframes sidebarSlideInMobile {{
+            from {{transform: translateX(-14px); opacity: 0.96;}}
+            to {{transform: translateX(0); opacity: 1;}}
+        }}
         html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
             direction: rtl !important;
             text-align: right !important;
@@ -276,9 +280,11 @@ def inject_global_styles(language: str) -> None:
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             z-index: 999999 !important;
-            direction: rtl !important;
+            direction: ltr !important;
             left: 0 !important;
             right: auto !important;
+            inset-inline-start: 0 !important;
+            inset-inline-end: auto !important;
             transition: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] {{
@@ -297,7 +303,8 @@ def inject_global_styles(language: str) -> None:
             background: #f8f9fa !important;
             background-color: #f8f9fa !important;
             opacity: 1 !important;
-            border-left: 1px solid #eef2f7;
+            border-right: 1px solid #eef2f7;
+            border-left: 0 !important;
             z-index: 999999 !important;
             direction: rtl !important;
             text-align: right !important;
@@ -305,21 +312,28 @@ def inject_global_styles(language: str) -> None:
             overflow-y: auto !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
-            transition: none !important;
+            left: 0 !important;
+            right: auto !important;
+            inset-inline-start: 0 !important;
+            inset-inline-end: auto !important;
+            transform: translateX(-100%);
+            transition: transform 220ms ease, opacity 220ms ease !important;
+            will-change: transform;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
         [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
             width: 280px !important;
             min-width: 280px !important;
             max-width: 80vw !important;
+            transform: translateX(0);
+            animation: sidebarSlideInMobile 220ms ease-out;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
         [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            border: 0 !important;
-            padding: 0 !important;
+            width: 280px !important;
+            min-width: 280px !important;
+            max-width: 80vw !important;
+            transform: translateX(-100%);
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
@@ -1929,7 +1943,7 @@ def main() -> None:
     is_demo = source_mode == "demo"
 
     if page == page_dashboard:
-        st.title(tr("Portfolio Manager OS - Advanced Dashboard", "Portfolio Manager OS - דשבורד מתקדם"))
+        st.title(tr("Dashboard", "דשבורד"))
         if is_demo:
             st.markdown(
                 """
