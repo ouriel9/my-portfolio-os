@@ -2745,52 +2745,19 @@ def main() -> None:
                 if exposure_view.empty:
                     st.info(tr("No open positions to show in Exposure Table.", "אין פוזיציות פתוחות להצגה בטבלת החשיפה."))
                 else:
-                    def _fmt_num(val: object, fmt: str) -> str:
-                        parsed = pd.to_numeric(pd.Series([val]), errors="coerce").iloc[0]
-                        if pd.isna(parsed):
-                            return "-"
-                        return format(float(parsed), fmt)
-
-                    def _signed_html(val: object, fmt: str) -> str:
-                        txt = _fmt_num(val, fmt)
-                        signed = _num(val)
-                        if signed > 0:
-                            return f"<span style='color:#16a34a;font-weight:600;'>{txt}</span>"
-                        if signed < 0:
-                            return f"<span style='color:#dc2626;font-weight:600;'>{txt}</span>"
-                        return txt
-
-                    row_widths = [1.05, 0.9, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95]
-                    header_labels = [
-                        localize_column_name("Ticker", language),
-                        current_price_col,
-                        localize_column_name("Open_Qty", language),
-                        localize_column_name("Cost_ILS", language),
-                        localize_column_name("Value_ILS", language),
-                        pnl_col,
-                        yield_origin_col,
-                        yield_ils_col,
-                    ]
-                    header_cols = st.columns(row_widths)
-                    for i, label in enumerate(header_labels):
-                        header_cols[i].markdown(f"**{label}**")
-
-                    for idx, row in enumerate(exposure_work.itertuples(index=False), 1):
-                        ticker = _clean(getattr(row, "Ticker", "")).upper()
-                        if not ticker:
-                            continue
-                        row_cols = st.columns(row_widths)
-                        if row_cols[0].button(ticker, key=f"{widget_prefix}_exp_ticker_btn_{idx}_{ticker}", type="tertiary", use_container_width=True):
-                            st.session_state["tv_chart_ticker"] = ticker
-                            st.session_state["tv_chart_open"] = True
-                            st.rerun()
-                        row_cols[1].markdown(_fmt_num(getattr(row, "Current_Price", np.nan), ",.4f"))
-                        row_cols[2].markdown(_fmt_num(getattr(row, "Open_Qty", np.nan), ".8f"))
-                        row_cols[3].markdown(_fmt_num(getattr(row, "Cost_ILS", np.nan), ",.0f"))
-                        row_cols[4].markdown(_fmt_num(getattr(row, "Value_ILS", np.nan), ",.0f"))
-                        row_cols[5].markdown(_signed_html(getattr(row, "Net_PnL_ILS", np.nan), ",.0f"), unsafe_allow_html=True)
-                        row_cols[6].markdown(_signed_html(getattr(row, "Yield_Origin", np.nan), ".2%"), unsafe_allow_html=True)
-                        row_cols[7].markdown(_signed_html(getattr(row, "Yield_ILS", np.nan), ".2%"), unsafe_allow_html=True)
+                    exposure_styled = exposure_view.style.format(
+                        {
+                            current_price_col: "{:,.4f}",
+                            localize_column_name("Open_Qty", language): "{:.8f}",
+                            localize_column_name("Cost_ILS", language): "{:,.0f}",
+                            localize_column_name("Value_ILS", language): "{:,.0f}",
+                            pnl_col: "{:,.0f}",
+                            yield_origin_col: "{:.2%}",
+                            yield_ils_col: "{:.2%}",
+                        }
+                    )
+                    exposure_styled = _apply_signed_color(exposure_styled, [pnl_col, yield_origin_col, yield_ils_col])
+                    st.dataframe(exposure_styled, use_container_width=True, hide_index=True)
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
                 category_labels = {
@@ -2811,7 +2778,11 @@ def main() -> None:
 
                 if watch_rows:
                     watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    open_container = st.expander(watchlist_label, expanded=False)
+                    watchlist_reset_key = f"{widget_prefix}_watchlist_reset_token"
+                    if watchlist_reset_key not in st.session_state:
+                        st.session_state[watchlist_reset_key] = False
+                    reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
+                    open_container = st.expander(f"{watchlist_label}{reset_char}", expanded=False)
                     with open_container:
                         for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
                             part = watch_df[watch_df["Category"] == cat]
@@ -2822,18 +2793,40 @@ def main() -> None:
                                 if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
                                     st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
                                     st.session_state["tv_chart_open"] = True
+                                    st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
+                                    st.session_state[watchlist_reset_key] = not bool(st.session_state.get(watchlist_reset_key, False))
                                     st.rerun()
                 else:
                     st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
                 if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
                     active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
+                    chart_anchor_id = f"tv-chart-anchor-{widget_prefix}"
+                    st.markdown(f"<div id='{chart_anchor_id}'></div>", unsafe_allow_html=True)
                     st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
                     _, close_col = st.columns([8, 1])
                     if close_col.button(tr("Close", "סגור"), key=f"{widget_prefix}_tv_inline_close"):
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
+                        st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
                     _render_tradingview_widget(active_ticker, height=560)
+                    if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
+                        components.html(
+                            f"""
+                            <script>
+                            (function() {{
+                              const doc = (window.parent && window.parent.document) ? window.parent.document : document;
+                              const el = doc.getElementById('{chart_anchor_id}');
+                              if (el && el.scrollIntoView) {{
+                                setTimeout(function() {{ el.scrollIntoView({{ behavior: 'smooth', block: 'start' }}); }}, 80);
+                              }}
+                            }})();
+                            </script>
+                            """,
+                            height=0,
+                            width=0,
+                        )
+                        st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
 
             if live_updates and hasattr(st, "fragment"):
                 @st.fragment(run_every=f"{int(refresh_seconds)}s")
