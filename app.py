@@ -278,7 +278,11 @@ def _resolve_theme_base(theme_mode: str) -> str:
 
 def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     rtl = language == LANG_HE
-    direction = "rtl" if rtl else "ltr"
+    # ALWAYS use ltr for layout direction — the browser's Unicode BiDi algorithm
+    # renders Hebrew text correctly without direction:rtl on CSS containers.
+    # Setting direction:rtl on ANY flex ancestor of the sidebar flips its position
+    # to the right. Keeping layout 100% LTR keeps the sidebar on the LEFT.
+    direction = "ltr"
     align = "right" if rtl else "left"
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
@@ -803,6 +807,193 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     }}
     </style>
     """
+
+    # ── Comprehensive dark mode: override ALL Streamlit native elements ──────
+    if is_dark:
+        dark_bg = "#0f172a"
+        dark_bg2 = "#1e293b"
+        dark_text = "#f1f5f9"
+        dark_muted = "#94a3b8"
+        dark_border = "#334155"
+        dark_accent = "#6366f1"
+        css += f"""
+    <style>
+    /* ══════════════ COMPREHENSIVE DARK MODE ══════════════ */
+    html, body {{
+        background-color: {dark_bg} !important;
+        color: {dark_text} !important;
+    }}
+    [data-testid="stApp"] {{
+        background-color: {dark_bg} !important;
+    }}
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMainBlockContainer"],
+    .block-container,
+    .main .block-container {{
+        background-color: {dark_bg} !important;
+    }}
+    [data-testid="stHeader"],
+    header[data-testid="stHeader"] {{
+        background-color: {dark_bg} !important;
+        border-bottom: 1px solid {dark_border} !important;
+    }}
+    /* General text */
+    p, span, label, li,
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] * {{
+        color: {dark_text} !important;
+    }}
+    h1, h2, h3, h4, h5, h6 {{
+        color: {dark_text} !important;
+    }}
+    /* Caption / muted text */
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] *,
+    small, .stCaption {{
+        color: {dark_muted} !important;
+    }}
+    /* Dividers */
+    hr {{
+        border-color: {dark_border} !important;
+    }}
+    /* Input fields */
+    input, textarea {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+        border-color: {dark_border} !important;
+    }}
+    [data-baseweb="input"],
+    [data-baseweb="textarea"] {{
+        background-color: {dark_bg2} !important;
+        border-color: {dark_border} !important;
+    }}
+    [data-baseweb="input"] input,
+    [data-baseweb="textarea"] textarea {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+    }}
+    /* Selectbox / Dropdown */
+    [data-baseweb="select"] > div,
+    [data-baseweb="select"] > div > div {{
+        background-color: {dark_bg2} !important;
+        border-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    [data-baseweb="popover"] > div,
+    [data-baseweb="menu"],
+    [data-baseweb="menu"] ul,
+    [data-baseweb="menu"] li {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+    }}
+    [data-baseweb="menu"] li:hover,
+    [data-baseweb="menu"] [aria-selected="true"] {{
+        background-color: {dark_border} !important;
+    }}
+    /* Tabs */
+    [data-baseweb="tab-list"] {{
+        background-color: {dark_bg} !important;
+        border-bottom: 1px solid {dark_border} !important;
+    }}
+    [data-baseweb="tab"] {{
+        background-color: transparent !important;
+        color: {dark_muted} !important;
+    }}
+    [data-baseweb="tab"][aria-selected="true"] {{
+        color: {dark_text} !important;
+        border-bottom: 2px solid {dark_accent} !important;
+    }}
+    [data-baseweb="tab-panel"] {{
+        background-color: {dark_bg} !important;
+    }}
+    /* Expanders */
+    [data-testid="stExpander"] {{
+        background-color: {dark_bg2} !important;
+        border: 1px solid {dark_border} !important;
+    }}
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] summary * {{
+        color: {dark_text} !important;
+    }}
+    /* Expander content */
+    [data-testid="stExpander"] > div[data-testid="stExpanderDetails"] {{
+        background-color: {dark_bg2} !important;
+    }}
+    /* Radio buttons */
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] label * {{
+        color: {dark_text} !important;
+    }}
+    /* Checkbox */
+    [data-testid="stCheckbox"] label,
+    [data-testid="stCheckbox"] label * {{
+        color: {dark_text} !important;
+    }}
+    /* Buttons */
+    button[data-testid="baseButton-secondary"],
+    button[kind="secondary"] {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+        border-color: {dark_border} !important;
+    }}
+    button[data-testid="baseButton-primary"],
+    button[kind="primary"] {{
+        background-color: {dark_accent} !important;
+        color: #ffffff !important;
+    }}
+    /* Number/Date input containers */
+    [data-testid="stNumberInput"] > div,
+    [data-testid="stDateInput"] > div {{
+        background-color: {dark_bg2} !important;
+        border-color: {dark_border} !important;
+    }}
+    [data-testid="stNumberInput"] input,
+    [data-testid="stDateInput"] input {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+    }}
+    /* Multiselect tags */
+    [data-testid="stMultiSelect"] [data-baseweb="tag"] {{
+        background-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    /* Alert boxes */
+    [data-testid="stAlert"] {{
+        background-color: {dark_bg2} !important;
+        border-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    [data-testid="stAlert"] * {{
+        color: {dark_text} !important;
+    }}
+    /* Code blocks */
+    [data-testid="stCodeBlock"] pre,
+    code {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+    }}
+    /* Spinner */
+    [data-testid="stSpinner"] p {{
+        color: {dark_muted} !important;
+    }}
+    /* Hamburger/toolbar buttons in dark mode */
+    [data-testid="collapsedControl"] button,
+    [data-testid="stSidebarCollapsedControl"] button,
+    button[aria-label*="sidebar"],
+    button[aria-label*="Sidebar"],
+    [data-testid="stToolbar"] button {{
+        background-color: rgba(30,41,59,0.92) !important;
+        border-color: rgba(100,116,139,0.4) !important;
+        color: {dark_text} !important;
+    }}
+    /* Main menu */
+    #MainMenu svg, [data-testid="stToolbar"] svg {{
+        fill: {dark_text} !important;
+    }}
+    /* ══════════════ END DARK MODE ══════════════ */
+    </style>
+    """
+
     st.markdown(css, unsafe_allow_html=True)
 
 
@@ -1093,11 +1284,14 @@ def inject_client_fixes() -> None:
             try {
               const d = rootDoc;
 
-              // 1. Remove dir="rtl" from <html> – this is the layout root cause.
-              //    We keep direction:rtl only on text content containers, not the layout host.
+              // 1. Force <html> to LTR — this is the "English trick".
+              //    Streamlit's flex layout reads direction from the HTML root.
+              //    Setting dir="ltr" (even in Hebrew mode) keeps sidebar on LEFT.
+              //    Hebrew text still renders RTL correctly via Unicode BiDi.
               const htmlEl = d.documentElement;
-              if (htmlEl && htmlEl.getAttribute('dir') === 'rtl') {
-                htmlEl.setAttribute('dir', 'ltr');
+              if (htmlEl) {
+                if (htmlEl.getAttribute('dir') !== 'ltr') htmlEl.setAttribute('dir', 'ltr');
+                if (htmlEl.getAttribute('lang') !== 'en')  htmlEl.setAttribute('lang', 'en');
               }
 
               // 2. Force stApp (Streamlit layout root) to LTR flex direction.
@@ -1124,6 +1318,9 @@ def inject_client_fixes() -> None:
                 d.head.appendChild(pmStyle);
               }
               const css = [
+                'html, body {',
+                '  direction: ltr !important;',
+                '}',
                 '[data-testid="stApp"] {',
                 '  direction: ltr !important;',
                 '  flex-direction: row !important;',
