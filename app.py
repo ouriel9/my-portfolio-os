@@ -196,13 +196,7 @@ def render_modern_metrics(items: List[Tuple[str, str, str]]) -> None:
 
 
 def _space(height: int = 16) -> None:
-    if hasattr(st, "space"):
-        try:
-            st.space(height=height)
-            return
-        except Exception:
-            pass
-    st.write("")
+    st.markdown(f"<div style='margin-top:{height}px;'></div>", unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=21600)
@@ -442,11 +436,11 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         display: inline-block;
     }}
     .modern-card {{
-        border: 1px solid rgba(120,120,120,0.18);
+        border: 1px solid {metric_border};
         border-radius: 16px;
         padding: 0.9rem 1rem;
-        background: linear-gradient(180deg, rgba(250,250,250,0.95), rgba(245,247,250,0.95));
-        color: #111827;
+        background: {metric_bg};
+        color: {metric_text};
     }}
     .pm-metric-grid {{
         display: grid;
@@ -455,16 +449,16 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         margin: 0.35rem 0 1rem 0;
     }}
     .pm-card {{
-        border: 1px solid rgba(120,120,120,0.2);
+        border: 1px solid {metric_border};
         border-radius: 16px;
         padding: 0.9rem 1rem;
-        background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,247,250,0.98));
+        background: {metric_bg};
         box-shadow: 0 6px 18px rgba(10, 20, 30, 0.06);
-        color: #1f2937 !important;
+        color: {metric_text} !important;
     }}
-    .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem; color: #4b5563 !important;}}
-    .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: #111827 !important;}}
-    .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem; color: #374151 !important;}}
+    .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem; color: {metric_label} !important;}}
+    .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: {metric_text} !important;}}
+    .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem; color: {metric_label} !important;}}
     @media (min-width: 769px) {{
         .block-container,
         [data-testid="stAppViewContainer"],
@@ -880,7 +874,7 @@ def _normalize_currency_code(value: object) -> str:
     if raw in {"USD", "$"}:
         return "USD"
     return raw
-##
+
 
 def _infer_display_currency(ticker: str, origin_currency: object) -> str:
     base = _normalize_currency_code(origin_currency)
@@ -2426,15 +2420,12 @@ def dataframe_completeness(df: pd.DataFrame) -> Tuple[int, int, float]:
 
 def main() -> None:
     st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
-    template = "plotly_white"
 
     settings = load_local_settings()
     language_default = _clean(settings.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE
     if language_default not in {LANG_EN, LANG_HE}:
         language_default = DEFAULT_LANGUAGE
     theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_SYSTEM))
-
-    inject_global_styles(language_default, theme_default)
 
     st.sidebar.markdown("### App")
     language = st.sidebar.selectbox("Language" if language_default == LANG_EN else "שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
@@ -2748,6 +2739,12 @@ def main() -> None:
         if not open_trades.empty and {"Type", "Current_Value_ILS"}.issubset(open_trades.columns):
             type_mix = open_trades.groupby("Type", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
 
+        _BRAND_PALETTE = [
+            "#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
+            "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
+            "#84cc16", "#0ea5e9", "#a855f7", "#fb923c", "#22d3ee",
+        ]
+
         if is_demo and not open_trades.empty:
             demo_cols = st.columns(2)
             with demo_cols[0]:
@@ -2758,6 +2755,10 @@ def main() -> None:
                         values="Current_Value_ILS",
                         title=tr("Asset Class Composition", "הרכב מחלקות נכסים"),
                         template=template,
+                        color_discrete_sequence=_BRAND_PALETTE,
+                    )
+                    fig_type_mix.update_traces(
+                        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
                     st.plotly_chart(_optimize_plotly_for_mobile(fig_type_mix, is_mobile), use_container_width=True)
             with demo_cols[1]:
@@ -2765,9 +2766,28 @@ def main() -> None:
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
                 perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
                 fig_track = go.Figure()
-                fig_track.add_trace(go.Scatter(x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"], mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת")))
-                fig_track.add_trace(go.Scatter(x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"], mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר")))
-                fig_track.update_layout(template=template, title=tr("Portfolio Build-Up", "התפתחות בניית התיק"), xaxis_title=tr("Date", "תאריך"), yaxis_title=tr("Value", "שווי"))
+                fig_track.add_trace(go.Scatter(
+                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
+                    mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת"),
+                    line=dict(color="#94a3b8", width=2),
+                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
+                ))
+                fig_track.add_trace(go.Scatter(
+                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
+                    mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר"),
+                    line=dict(color="#4f46e5", width=2),
+                    fill="tonexty", fillcolor="rgba(79,70,229,0.08)",
+                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
+                ))
+                fig_track.update_layout(
+                    template=template,
+                    title=tr("Portfolio Build-Up", "התפתחות בניית התיק"),
+                    xaxis_title=tr("Date", "תאריך"),
+                    yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                    yaxis_tickformat=",.0f",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
                 st.plotly_chart(_optimize_plotly_for_mobile(fig_track, is_mobile), use_container_width=True)
 
         tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
@@ -2790,24 +2810,39 @@ def main() -> None:
                     title=tr("Portfolio Allocation by Asset", "חלוקת תיק לפי נכס"),
                     hole=0.52,
                     template=template,
+                    color_discrete_sequence=_BRAND_PALETTE,
                 )
                 fig_pie.update_layout(
                     legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
                     margin=dict(l=10, r=10, t=40, b=40),
                 )
+                fig_pie.update_traces(
+                    hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
+                    textinfo="percent+label",
+                )
                 st.plotly_chart(_optimize_plotly_for_mobile(fig_pie, is_mobile), use_container_width=True)
             with col_b:
                 bar_df = pnl_by_asset if not pnl_by_asset.empty else summary[["Ticker", "Net_PnL_ILS"]].copy()
+                _bar_src = bar_df.sort_values("Net_PnL_ILS", ascending=False).copy()
+                _bar_src["_color"] = _bar_src["Net_PnL_ILS"].apply(lambda v: "Profit" if v >= 0 else "Loss")
                 fig_bar = px.bar(
-                    bar_df.sort_values("Net_PnL_ILS", ascending=False),
+                    _bar_src,
                     x="Ticker",
                     y="Net_PnL_ILS",
-                    color="Net_PnL_ILS",
+                    color="_color",
+                    color_discrete_map={"Profit": "#16a34a", "Loss": "#dc2626"},
                     title=tr("Net P/L by Asset", "רווח/הפסד לפי נכס"),
                     template=template,
+                    labels={"Net_PnL_ILS": tr("Net P/L (ILS)", "רווח/הפסד (₪)"), "_color": ""},
                 )
-                fig_bar.update_coloraxes(showscale=False)
-                fig_bar.update_layout(coloraxis_showscale=False)
+                fig_bar.update_layout(
+                    showlegend=False,
+                    yaxis_tickformat=",.0f",
+                    hovermode="x unified",
+                )
+                fig_bar.update_traces(
+                    hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
+                )
                 st.plotly_chart(_optimize_plotly_for_mobile(fig_bar, is_mobile, is_bar=True), use_container_width=True)
 
             def _build_summary_for_exposure(local_open_trades: pd.DataFrame) -> pd.DataFrame:
@@ -2963,8 +2998,11 @@ def main() -> None:
             else:
                 render_exposure_section(summary, widget_prefix="overview")
 
+        # Compute once and share across both Allocation and Reports tabs.
+        _shared_reports_payload = build_home_inspired_reports(open_trades)
+
         with tab_allocation:
-            allocation_payload = build_home_inspired_reports(open_trades)
+            allocation_payload = _shared_reports_payload
             alloc_kpi_cols = st.columns(3)
             alloc_kpi_cols[0].metric(
                 tr("Crypto Share", "משקל קריפטו"),
@@ -2991,6 +3029,11 @@ def main() -> None:
                         title=tr("Allocation by Ticker", "חלוקה לפי טיקר"),
                         hole=0.45,
                         template=template,
+                        color_discrete_sequence=_BRAND_PALETTE,
+                    )
+                    alloc_fig.update_traces(
+                        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
+                        textinfo="percent+label",
                     )
                     st.plotly_chart(_optimize_plotly_for_mobile(alloc_fig, is_mobile), use_container_width=True)
                 else:
@@ -3003,13 +3046,17 @@ def main() -> None:
                         values="Current_Value_ILS",
                         title=tr("Allocation by Asset Class", "חלוקה לפי סוג נכס"),
                         template=template,
+                        color_discrete_sequence=_BRAND_PALETTE,
+                    )
+                    type_fig.update_traces(
+                        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
                     st.plotly_chart(_optimize_plotly_for_mobile(type_fig, is_mobile), use_container_width=True)
                 else:
                     st.info(tr("No asset-class data", "אין נתוני סוגי נכסים"))
 
         with tab_reports:
-            reports_payload = build_home_inspired_reports(open_trades)
+            reports_payload = _shared_reports_payload
             report_options = {
                 tr("Crypto Concentration", "ריכוזיות קריפטו"): "concentration_table",
                 tr("Winner / Loser", "המנצח / המפסיד"): "winner_loser_table",
@@ -3164,6 +3211,26 @@ def main() -> None:
                 st.dataframe(tx_view, use_container_width=True, hide_index=True)
 
     elif page == page_risk:
+        # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
+        if (not is_mobile) and (not is_demo):
+            last_risk_refresh = float(st.session_state.get("risk_page_last_refresh_ts", 0.0) or 0.0)
+            now_ts = time.time()
+            if (now_ts - last_risk_refresh) > 20:
+                try:
+                    load_google_snapshot_data.clear()
+                    load_google_snapshot_data_via_gspread.clear()
+                    fresh_df, _ = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
+                    if not fresh_df.empty:
+                        core = prepare_core_views(fresh_df)
+                        trades = core["trades"]
+                        open_trades = core["open_trades"].copy()
+                        closed_trades = core["closed_trades"].copy()
+                        total_cost = float(core["total_cost"])
+                        total_value = float(core["total_value"])
+                except Exception:
+                    pass
+                st.session_state["risk_page_last_refresh_ts"] = now_ts
+
         st.markdown(f"### {tr('Risk, Performance and FIFO', 'סיכונים, ביצועים ועלות פיפו')}")
         fifo_df = fifo_metrics(trades)
         st.subheader(tr("FIFO Engine", "מנוע פיפו"))
@@ -3195,9 +3262,7 @@ def main() -> None:
                 }
             )
             fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
-            st.dataframe(
-                fifo_styled
-            )
+            st.dataframe(fifo_styled, use_container_width=True, hide_index=True)
 
         holdings = open_trades.groupby("Ticker", as_index=False)["Quantity"].sum()
         value_series = portfolio_price_history(tuple(holdings["Ticker"]), tuple(holdings["Quantity"]), days=365)
@@ -3210,13 +3275,25 @@ def main() -> None:
         c4.metric("CAGR", f"{metrics['cagr']:.2%}")
 
         if not value_series.empty:
+            _hist_color = "#4f46e5"
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=value_series.index, y=value_series.values, mode="lines", name=tr("Estimated Historical Value", "שווי היסטורי משוער")))
+            fig.add_trace(go.Scatter(
+                x=value_series.index,
+                y=value_series.values,
+                mode="lines",
+                name=tr("Estimated Historical Value", "שווי היסטורי משוער"),
+                line=dict(color=_hist_color, width=2),
+                fill="tozeroy",
+                fillcolor="rgba(79,70,229,0.10)",
+                hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
+            ))
             fig.update_layout(
                 template=template,
                 title=tr("Historical Value Series (Market-Based Estimate)", "סדרת שווי היסטורית (הערכה לפי מחירי שוק)"),
                 xaxis_title=tr("Date", "תאריך"),
-                yaxis_title=tr("Value", "שווי"),
+                yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                yaxis_tickformat=",.0f",
+                hovermode="x unified",
             )
             st.plotly_chart(_optimize_plotly_for_mobile(fig, is_mobile), use_container_width=True)
 
@@ -3240,10 +3317,7 @@ def main() -> None:
                 }
             )
             scenario_styled = _apply_signed_color(scenario_styled, ["Shock", "Estimated P/L (ILS)"])
-            st.dataframe(
-                scenario_styled,
-                use_container_width=True,
-            )
+            st.dataframe(scenario_styled, use_container_width=True, hide_index=True)
 
     elif page == page_manage:
         st.markdown(f"### {tr('Trade Management (Add / Edit / Delete)', 'ניהול עסקאות (הוספה / עריכה / מחיקה)')}")
