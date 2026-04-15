@@ -299,6 +299,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     hamburger_border = "rgba(255,255,255,0.18)" if is_dark else "rgba(203,213,225,0.9)"
     css = f"""
     <style>
+    /* Force the Streamlit root layout container to LTR so the sidebar
+       always appears on the LEFT regardless of page language / direction.
+       RTL direction is applied only to content containers below. */
+    [data-testid="stApp"] {{
+        direction: ltr !important;
+    }}
     .block-container {{padding-top: 1.2rem;}}
     .app-header-wrap {{
         text-align: center !important;
@@ -424,11 +430,24 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         scroll-snap-align: start;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
-    /* Keep sidebar option_menu left-aligned in all languages/themes. */
+    /* ── Sidebar: always LEFT, smooth slide animation ── */
     section[data-testid="stSidebar"],
     [data-testid="stSidebar"] {{
         left: 0 !important;
         right: auto !important;
+        direction: ltr !important;
+        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
+                    width    0.28s cubic-bezier(0.4, 0, 0.2, 1),
+                    opacity  0.22s ease !important;
+    }}
+    /* When collapsed, slide out to the LEFT (off screen left) */
+    section[data-testid="stSidebar"][aria-expanded="false"] {{
+        transform: translateX(-100%) !important;
+        opacity: 0 !important;
+    }}
+    section[data-testid="stSidebar"][aria-expanded="true"] {{
+        transform: translateX(0) !important;
+        opacity: 1 !important;
     }}
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
@@ -518,7 +537,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
     @media (max-width: 768px) {{
-        html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
+        body, [data-testid="stAppViewContainer"] {{
             direction: {direction} !important;
             text-align: {align} !important;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
@@ -1065,16 +1084,87 @@ def inject_client_fixes() -> None:
           }
           // ═══════════════════════════════════════════════════
 
+          // ═══════════════════════════════════════════════
+          // SIDEBAR LEFT-ANCHOR  +  SMOOTH ANIMATION
+          // Directly patches the parent document so the sidebar
+          // always stays on the LEFT even in Hebrew (RTL) mode.
+          // ═══════════════════════════════════════════════
+          function fixSidebarLeft() {
+            try {
+              const d = rootDoc;
+
+              // 1. Remove dir="rtl" from <html> – this is the layout root cause.
+              //    We keep direction:rtl only on text content containers, not the layout host.
+              const htmlEl = d.documentElement;
+              if (htmlEl && htmlEl.getAttribute('dir') === 'rtl') {
+                htmlEl.setAttribute('dir', 'ltr');
+              }
+
+              // 2. Force stApp (Streamlit layout root) to LTR flex direction.
+              const appEl = d.querySelector('[data-testid="stApp"]');
+              if (appEl) {
+                appEl.style.setProperty('direction', 'ltr', 'important');
+                appEl.style.setProperty('flex-direction', 'row', 'important');
+              }
+
+              // 3. Force sidebar inline position so it's always anchored left.
+              const sidebar = d.querySelector('section[data-testid="stSidebar"], [data-testid="stSidebar"]');
+              if (sidebar) {
+                sidebar.style.setProperty('left', '0', 'important');
+                sidebar.style.setProperty('right', 'auto', 'important');
+                sidebar.style.setProperty('direction', 'ltr', 'important');
+              }
+
+              // 4. Inject a persistent <style> into the parent document <head>
+              //    with !important overrides – survives Streamlit rerenders.
+              let pmStyle = d.getElementById('pm-sidebar-ltr-fix');
+              if (!pmStyle) {
+                pmStyle = d.createElement('style');
+                pmStyle.id = 'pm-sidebar-ltr-fix';
+                d.head.appendChild(pmStyle);
+              }
+              const css = [
+                '[data-testid="stApp"] {',
+                '  direction: ltr !important;',
+                '  flex-direction: row !important;',
+                '}',
+                'section[data-testid="stSidebar"],',
+                '[data-testid="stSidebar"] {',
+                '  left: 0 !important;',
+                '  right: auto !important;',
+                '  direction: ltr !important;',
+                '  transition:',
+                '    transform 0.28s cubic-bezier(0.4,0,0.2,1),',
+                '    width    0.28s cubic-bezier(0.4,0,0.2,1),',
+                '    opacity  0.22s ease !important;',
+                '}',
+                'section[data-testid="stSidebar"][aria-expanded="false"],',
+                '[data-testid="stSidebar"][aria-expanded="false"] {',
+                '  transform: translateX(-100%) !important;',
+                '  opacity: 0 !important;',
+                '}',
+                'section[data-testid="stSidebar"][aria-expanded="true"],',
+                '[data-testid="stSidebar"][aria-expanded="true"] {',
+                '  transform: translateX(0) !important;',
+                '  opacity: 1 !important;',
+                '}',
+              ].join('\n');
+              if (pmStyle.textContent !== css) pmStyle.textContent = css;
+            } catch (e) { /* cross-origin iframe – skip */ }
+          }
+
           function run() {
             removeBranding();
             setupTabSwipe();
             scheduleBuildNav();
+            fixSidebarLeft();
           }
 
           run();
           const obs = new MutationObserver(run);
           obs.observe(rootDoc.body, { childList: true, subtree: true });
           rootWin.setInterval(removeBranding, 1200);
+          rootWin.setInterval(fixSidebarLeft, 800);
           // Poll nav active state at 500ms so it stays in sync after Streamlit reruns
           rootWin.setInterval(scheduleBuildNav, 500);
           window.setInterval(function () {
