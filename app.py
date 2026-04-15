@@ -313,8 +313,16 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         pointer-events: none !important;
     }}
     [data-testid="stDecoration"] {{display: block !important; visibility: visible !important;}}
+    #MainMenu {{display: block !important; visibility: visible !important; opacity: 1 !important;}}
+    header, [data-testid="stHeader"] {{overflow: visible !important;}}
     [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
-    [data-testid="stToolbarActions"] {{display: flex !important; visibility: visible !important;}}
+    [data-testid="stToolbarActions"] {{
+        display: flex !important;
+        visibility: visible !important;
+        overflow: visible !important;
+        z-index: 100004 !important;
+        position: relative !important;
+    }}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
     [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align}; border-collapse: collapse !important;}}
     [data-testid="stDataFrame"] th,
@@ -410,6 +418,11 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
     /* Keep sidebar option_menu left-aligned in all languages/themes. */
+    section[data-testid="stSidebar"],
+    [data-testid="stSidebar"] {{
+        left: 0 !important;
+        right: auto !important;
+    }}
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
     [data-testid="stSidebar"] .nav-link {{
@@ -513,11 +526,13 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             background: {sidebar_bg} !important;
             background-color: {sidebar_bg} !important;
             z-index: 999999 !important;
-            direction: rtl !important;
+            direction: ltr !important;
             transition: none !important;
             animation: none !important;
             opacity: 1 !important;
             transition: opacity 160ms ease-out !important;
+            left: 0 !important;
+            right: auto !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] {{
             width: 0 !important;
@@ -543,8 +558,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             opacity: 1 !important;
             border-left: 0 !important;
             z-index: 999999 !important;
-            direction: rtl !important;
-            text-align: right !important;
+            direction: ltr !important;
+            text-align: left !important;
             overflow-x: hidden !important;
             overflow-y: auto !important;
             backdrop-filter: none !important;
@@ -587,7 +602,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"],
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] {{
             width: 100% !important;
-            text-align: right !important;
+            text-align: left !important;
             border: none !important;
             border-bottom: 1px solid #f0f0f0 !important;
             border-radius: 0 !important;
@@ -600,7 +615,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         }}
         [data-testid="stSidebar"] [data-testid="stRadio"] label[data-baseweb="radio"] p,
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] p {{
-            text-align: right !important;
+            text-align: left !important;
             font-weight: 500 !important;
             color: #333 !important;
             font-size: 0.96rem !important;
@@ -623,10 +638,10 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             opacity: 1 !important;
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top));
-            right: 0.65rem !important;
-            left: auto !important;
+            left: 0.65rem !important;
+            right: auto !important;
             z-index: 100002 !important;
-            direction: rtl !important;
+            direction: ltr !important;
         }}
         [data-testid="collapsedControl"] button,
         [data-testid="stSidebarCollapsedControl"] button,
@@ -638,7 +653,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             border: 1px solid rgba(203, 213, 225, 0.9) !important;
             background: rgba(255, 255, 255, 0.92) !important;
             box-shadow: 0 6px 14px rgba(15, 23, 42, 0.16) !important;
-            direction: rtl !important;
+            direction: ltr !important;
             unicode-bidi: plaintext !important;
         }}
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.48rem !important;}}
