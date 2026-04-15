@@ -3429,7 +3429,7 @@ def main() -> None:
                 st.info(tr("No transactions to display", "אין עסקאות להצגה"))
             else:
                 st.dataframe(tx_view, use_container_width=True, hide_index=True)
-
+##
     elif page == page_risk:
         # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
         if (not is_mobile) and (not is_demo):
