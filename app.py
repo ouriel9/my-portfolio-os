@@ -238,25 +238,36 @@ def _is_mobile_client() -> bool:
     return False
 
 
-def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = False) -> go.Figure:
-    if not is_mobile:
-        return fig
-    fig.update_layout(
-        legend=dict(orientation="h", yanchor="bottom", y=-0.30, xanchor="center", x=0.5, font=dict(size=11)),
-        margin=dict(l=6, r=6, t=32, b=8),
-        hoverlabel=dict(font=dict(size=13), bgcolor="rgba(30,30,30,0.85)", font_color="#fff"),
-        title_font=dict(size=14),
-        font=dict(size=11),
-        autosize=True,
-    )
-    if is_bar:
-        fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
-        fig.update_xaxes(tickangle=45, tickfont=dict(size=9))
-        fig.update_yaxes(tickfont=dict(size=9))
-    else:
-        fig.update_xaxes(tickfont=dict(size=9))
-        fig.update_yaxes(tickfont=dict(size=9))
+def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: bool = False) -> go.Figure:
+    """Apply dark/mobile layout to a Plotly figure."""
+    if is_dark:
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(30,41,59,0.5)",
+            font_color="#f1f5f9",
+        )
+    if is_mobile:
+        fig.update_layout(
+            legend=dict(orientation="h", yanchor="bottom", y=-0.30, xanchor="center", x=0.5, font=dict(size=11)),
+            margin=dict(l=6, r=6, t=32, b=8),
+            hoverlabel=dict(font=dict(size=13), bgcolor="rgba(30,30,30,0.85)", font_color="#fff"),
+            title_font=dict(size=14),
+            font=dict(size=11),
+            autosize=True,
+        )
+        if is_bar:
+            fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
+            fig.update_xaxes(tickangle=45, tickfont=dict(size=9))
+            fig.update_yaxes(tickfont=dict(size=9))
+        else:
+            fig.update_xaxes(tickfont=dict(size=9))
+            fig.update_yaxes(tickfont=dict(size=9))
     return fig
+
+
+def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = False) -> go.Figure:
+    """Legacy wrapper — kept for call-site compatibility."""
+    return _apply_plotly_theme(fig, is_dark=False, is_mobile=is_mobile, is_bar=is_bar)
 
 
 def _normalize_theme_mode(theme_mode: str) -> str:
@@ -434,24 +445,27 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         scroll-snap-align: start;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
-    /* ── Sidebar: always LEFT, smooth slide animation ── */
+    /* ── Sidebar: always LEFT — spring animation ── */
     section[data-testid="stSidebar"],
     [data-testid="stSidebar"] {{
         left: 0 !important;
         right: auto !important;
         direction: ltr !important;
-        transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-                    width    0.28s cubic-bezier(0.4, 0, 0.2, 1),
-                    opacity  0.22s ease !important;
+        will-change: transform, opacity;
+        transition: transform 0.42s cubic-bezier(0.16, 1, 0.3, 1),
+                    opacity  0.30s ease-out !important;
     }}
-    /* When collapsed, slide out to the LEFT (off screen left) */
+    /* Collapsed: spring off-screen LEFT */
     section[data-testid="stSidebar"][aria-expanded="false"] {{
         transform: translateX(-100%) !important;
         opacity: 0 !important;
+        pointer-events: none !important;
     }}
+    /* Expanded: spring into view */
     section[data-testid="stSidebar"][aria-expanded="true"] {{
         transform: translateX(0) !important;
         opacity: 1 !important;
+        pointer-events: auto !important;
     }}
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
@@ -534,8 +548,74 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
             background: {sidebar_bg} !important;
         }}
-        /* Hide mobile bottom nav on desktop */
-        #pm-bottom-nav {{ display: none !important; }}
+        /* ── Desktop: page-selector radio as horizontal tab bar ── */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
+            position: static !important;
+            background: {sidebar_bg} !important;
+            border-bottom: 1px solid {metric_border} !important;
+            border-top: none !important;
+            box-shadow: none !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+            margin: -1.4rem -3rem 1.2rem -3rem !important;
+            padding: 0 1.5rem !important;
+            z-index: 10 !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-testid="stWidgetLabel"] {{ display: none !important; }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [role="radiogroup"] {{
+            display: flex !important;
+            flex-direction: row !important;
+            height: 46px !important;
+            width: auto !important;
+            align-items: stretch !important;
+            gap: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] {{
+            flex: 0 0 auto !important;
+            display: flex !important;
+            flex-direction: row !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 0 1.3rem !important;
+            margin: 0 !important;
+            border: none !important;
+            border-radius: 0 !important;
+            border-bottom: 2px solid transparent !important;
+            margin-bottom: -1px !important;
+            background: transparent !important;
+            cursor: pointer !important;
+            position: relative !important;
+            gap: 0.4rem !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]::before {{ display: none !important; }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] svg,
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] input[type="radio"] {{ display: none !important; }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] p {{
+            white-space: nowrap !important;
+            font-size: 14px !important;
+            font-weight: 500 !important;
+            color: {metric_label} !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) {{
+            border-bottom-color: #4f46e5 !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) p {{
+            color: #4f46e5 !important;
+            font-weight: 700 !important;
+        }}
     }}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
@@ -729,81 +809,106 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stFormSubmitButton"] button {{
             min-height: 44px !important;
         }}
-        /* ── Push content above the bottom nav bar ── */
+        /* ── Push content above the fixed bottom nav ── */
         .block-container {{
-            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
+            padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
         }}
-        /* ═══════════════ BOTTOM TAB BAR (injected by JS) ═══════════════ */
-        #pm-bottom-nav {{
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            z-index: 9999999;
-            display: flex;
-            align-items: stretch;
-            height: 56px;
-            padding-bottom: env(safe-area-inset-bottom, 0px);
-            background: {nav_bg};
-            border-top: 1px solid {nav_border};
-            backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
-            box-shadow: 0 -2px 16px rgba(0,0,0,0.10);
-        }}
-        .pm-bn-item {{
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 2px;
-            border: none;
-            background: transparent;
-            cursor: pointer;
-            -webkit-tap-highlight-color: transparent;
-            outline: none;
-            padding: 4px 2px;
-            color: {nav_inactive};
-            font-family: inherit;
-            transition: color 0.12s ease, transform 0.08s ease;
-            position: relative;
-        }}
-        .pm-bn-item:active {{ transform: scale(0.88); }}
-        .pm-bn-icon {{ font-size: 20px; line-height: 1; display: block; }}
-        .pm-bn-label {{
-            font-size: 10px;
-            font-weight: 500;
-            line-height: 1.2;
-            display: block;
-            opacity: 0.7;
-            max-width: 60px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }}
-        .pm-bn-active {{ color: #4f46e5 !important; }}
-        .pm-bn-active .pm-bn-label {{ font-weight: 700 !important; opacity: 1 !important; }}
-        .pm-bn-active::after {{
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 30px;
-            height: 3px;
-            background: #4f46e5;
-            border-radius: 0 0 4px 4px;
-        }}
-        /* ═══════════════ END BOTTOM TAB BAR ═══════════════ */
-        /* Pre-hide the 4-option mobile page-selector radio before JS takes over.
-           :has() is supported in all modern mobile browsers (Chrome 105+, Safari 15.4+). */
+        /* ══════════════════════════════════════════════════════════════════
+           PAGE SELECTOR RADIO → NATIVE CSS BOTTOM TAB BAR
+           Pure CSS — no JS required. Emoji icons come from Python labels.
+           :has() is supported in Chrome 105+, Safari 15.4+, Firefox 121+.
+        ══════════════════════════════════════════════════════════════════ */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
-            position: absolute !important;
-            left: -9999px !important;
-            width: 1px !important;
-            height: 1px !important;
-            overflow: hidden !important;
+            position: fixed !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            z-index: 9999998 !important;
+            background: {nav_bg} !important;
+            border-top: 1px solid {nav_border} !important;
+            padding: 0 !important;
+            padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+            backdrop-filter: blur(24px) !important;
+            -webkit-backdrop-filter: blur(24px) !important;
+            box-shadow: 0 -2px 16px rgba(0,0,0,0.10) !important;
+            margin: 0 !important;
         }}
+        /* Hide the widget label ("Page" / "עמוד") */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-testid="stWidgetLabel"] {{
+            display: none !important;
+        }}
+        /* Radiogroup: full-width horizontal flex, 56px tall */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [role="radiogroup"] {{
+            display: flex !important;
+            flex-direction: row !important;
+            width: 100% !important;
+            height: 56px !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            gap: 0 !important;
+            align-items: stretch !important;
+        }}
+        /* Each radio item: column, centered */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] {{
+            flex: 1 !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            padding: 4px 2px !important;
+            margin: 0 !important;
+            border: none !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            cursor: pointer !important;
+            position: relative !important;
+            gap: 1px !important;
+            -webkit-tap-highlight-color: transparent !important;
+            transition: opacity 0.12s ease !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:active {{ opacity: 0.65 !important; }}
+        /* Hide the radio circle SVG and the input */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] svg,
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] input[type="radio"] {{
+            display: none !important;
+        }}
+        /* Label text — preserve newlines so emoji and text are on separate lines */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] p {{
+            white-space: pre-line !important;
+            font-size: 9.5px !important;
+            font-weight: 500 !important;
+            color: {nav_inactive} !important;
+            line-height: 1.25 !important;
+            text-align: center !important;
+            margin: 0 !important;
+        }}
+        /* Selected item: colored text */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) p {{
+            color: #4f46e5 !important;
+            font-weight: 700 !important;
+        }}
+        /* Selected item: pip indicator at top */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked)::before {{
+            content: '' !important;
+            position: absolute !important;
+            top: 0 !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            width: 30px !important;
+            height: 3px !important;
+            background: #4f46e5 !important;
+            border-radius: 0 0 4px 4px !important;
+        }}
+        /* ══════════════════════════════════════════════════════════════════ */
     }}
     </style>
     """
@@ -819,9 +924,21 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         css += f"""
     <style>
     /* ══════════════ COMPREHENSIVE DARK MODE ══════════════ */
+    /* Override Streamlit CSS custom properties so native components go dark */
+    :root, html {{
+        --background-color: {dark_bg} !important;
+        --secondary-background-color: {dark_bg2} !important;
+        --text-color: {dark_text} !important;
+        --font: system-ui !important;
+    }}
     html, body {{
         background-color: {dark_bg} !important;
         color: {dark_text} !important;
+    }}
+    /* Dark bottom nav bar */
+    [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
+        background: rgba(15,23,42,0.97) !important;
+        border-top-color: rgba(51,65,85,0.8) !important;
     }}
     [data-testid="stApp"] {{
         background-color: {dark_bg} !important;
@@ -990,6 +1107,55 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     #MainMenu svg, [data-testid="stToolbar"] svg {{
         fill: {dark_text} !important;
     }}
+    /* ── Plotly charts: transparent paper so plotly_dark template shows ── */
+    [data-testid="stPlotlyChart"] {{
+        background-color: transparent !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+    }}
+    [data-testid="stPlotlyChart"] > div,
+    [data-testid="stPlotlyChart"] > div > div {{
+        background-color: transparent !important;
+    }}
+    [data-testid="stPlotlyChart"] .svg-container {{
+        background-color: transparent !important;
+    }}
+    [data-testid="stPlotlyChart"] .main-svg {{
+        background: transparent !important;
+    }}
+    [data-testid="stPlotlyChart"] .main-svg .bg {{
+        fill: transparent !important;
+    }}
+    /* ── DataFrames: force all cell layers dark ── */
+    [data-testid="stDataFrame"],
+    [data-testid="stDataFrame"] > div,
+    [data-testid="stDataFrame"] [data-testid="stDataFrameResizable"],
+    [data-testid="stDataFrameContainer"] {{
+        background-color: {dark_bg2} !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+    }}
+    [data-testid="stDataFrame"] [role="gridcell"],
+    [data-testid="stDataFrame"] [role="rowheader"] {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+        border-color: {dark_border} !important;
+    }}
+    [data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"],
+    [data-testid="stDataFrame"] [role="row"]:hover [role="rowheader"] {{
+        background-color: {dark_border} !important;
+    }}
+    /* ── Desktop tab nav in dark mode ── */
+    @media (min-width: 769px) {{
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
+            background: {dark_bg} !important;
+            border-bottom-color: {dark_border} !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] p {{
+            color: {dark_muted} !important;
+        }}
+    }}
     /* ══════════════ END DARK MODE ══════════════ */
     </style>
     """
@@ -1110,15 +1276,13 @@ def inject_client_fixes() -> None:
           }
 
           function setupTabSwipe() {
+            // Re-bind on every run() call (Streamlit rerenders detach listeners)
             if (rootWin.__pmSwipeBound) return;
 
             const blockedSelector = [
               'input',
               'textarea',
               'select',
-              'button',
-              'a',
-              '[role="button"]',
               '.js-plotly-plot',
               '[data-testid="stDataFrame"]',
               'iframe',
@@ -1145,7 +1309,7 @@ def inject_client_fixes() -> None:
               if (!e.changedTouches || !e.changedTouches.length) return;
               const dx = e.changedTouches[0].clientX - startX;
               const dy = e.changedTouches[0].clientY - startY;
-              if (Math.abs(dx) < 55 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+              if (Math.abs(dx) < 38 || Math.abs(dx) < Math.abs(dy) * 1.1) return;
 
               const tabList = findDashboardTabList();
               if (!tabList) return;
@@ -1164,116 +1328,6 @@ def inject_client_fixes() -> None:
 
             rootWin.__pmSwipeBound = true;
           }
-
-          // ═══════════════════════════════════════════════════
-          // MOBILE BOTTOM TAB BAR
-          // Mirrors the Streamlit radio nav as a native-feel
-          // bottom bar with icons + active pip indicator.
-          // ═══════════════════════════════════════════════════
-          const PM_NAV_ICONS = ['📊', '💼', '🛡️', '📋'];
-          let _pmNavTimer = null;
-
-          function _pmIsMobile() {
-            try {
-              if ((rootWin.innerWidth || 769) <= 768) return true;
-              const qp = new URLSearchParams(rootWin.location.search);
-              if (qp.get('mobile') === '1' || qp.get('mobile') === 'true') return true;
-            } catch (_) {}
-            return false;
-          }
-
-          function _pmFindNavGroup() {
-            // The mobile radio nav has exactly 4 items.
-            const groups = Array.from(rootDoc.querySelectorAll('[role="radiogroup"]'));
-            for (const g of groups) {
-              if (g.querySelectorAll('[data-baseweb="radio"]').length === 4) return g;
-            }
-            return null;
-          }
-
-          function _pmLabelText(item) {
-            // Extract visible text from a BaseWeb radio label.
-            const candidates = Array.from(item.querySelectorAll('span, p, div'))
-              .filter(function (el) { return el.children.length === 0; });
-            for (const c of candidates) {
-              const t = (c.textContent || '').trim();
-              if (t && t.length <= 20) return t;
-            }
-            return (item.textContent || '').trim().slice(0, 20);
-          }
-
-          function buildMobileNav() {
-            if (!_pmIsMobile()) return;
-            const group = _pmFindNavGroup();
-            if (!group) return;
-            const items = Array.from(group.querySelectorAll('[data-baseweb="radio"]'));
-            if (items.length !== 4) return;
-
-            const activeIdx = items.findIndex(function (el) {
-              const inp = el.querySelector('input[type="radio"]');
-              return inp && inp.checked;
-            });
-
-            // Create nav element once
-            let nav = rootDoc.getElementById('pm-bottom-nav');
-            const alreadyBuilt = nav && nav.children.length === 4;
-            const currentActive = nav ? Array.from(nav.children).findIndex(function (b) {
-              return b.classList.contains('pm-bn-active');
-            }) : -1;
-
-            if (alreadyBuilt && currentActive === activeIdx) return; // nothing to update
-
-            if (!nav) {
-              nav = rootDoc.createElement('nav');
-              nav.id = 'pm-bottom-nav';
-              nav.setAttribute('aria-label', 'Navigation');
-              rootDoc.body.appendChild(nav);
-            }
-
-            nav.innerHTML = '';
-            items.forEach(function (item, idx) {
-              const label = _pmLabelText(item);
-              const inp = item.querySelector('input[type="radio"]');
-              const isActive = inp && inp.checked;
-
-              const btn = rootDoc.createElement('button');
-              btn.type = 'button';
-              btn.className = 'pm-bn-item' + (isActive ? ' pm-bn-active' : '');
-              btn.setAttribute('aria-pressed', String(isActive));
-              btn.innerHTML =
-                '<span class="pm-bn-icon">' + PM_NAV_ICONS[idx] + '</span>' +
-                '<span class="pm-bn-label">' + label + '</span>';
-
-              btn.addEventListener('click', function () {
-                // Click the underlying radio input to trigger Streamlit rerun
-                if (inp) inp.click();
-                // Instant visual feedback before Streamlit rerun
-                Array.from(nav.children).forEach(function (b, i) {
-                  b.classList.toggle('pm-bn-active', i === idx);
-                  b.setAttribute('aria-pressed', String(i === idx));
-                });
-              }, { passive: false });
-
-              nav.appendChild(btn);
-            });
-
-            // Visually hide the original Streamlit radio widget (keep it DOM-accessible for state)
-            const radioWrapper = group.closest('[data-testid="stRadio"]');
-            if (radioWrapper && !radioWrapper.__pmHidden) {
-              radioWrapper.__pmHidden = true;
-              radioWrapper.setAttribute('style',
-                (radioWrapper.getAttribute('style') || '') +
-                '; position:absolute !important; left:-9999px !important;' +
-                ' width:1px !important; height:1px !important; overflow:hidden !important;'
-              );
-            }
-          }
-
-          function scheduleBuildNav() {
-            clearTimeout(_pmNavTimer);
-            _pmNavTimer = setTimeout(buildMobileNav, 90);
-          }
-          // ═══════════════════════════════════════════════════
 
           // ═══════════════════════════════════════════════
           // SIDEBAR LEFT-ANCHOR  +  SMOOTH ANIMATION
@@ -1330,10 +1384,9 @@ def inject_client_fixes() -> None:
                 '  left: 0 !important;',
                 '  right: auto !important;',
                 '  direction: ltr !important;',
-                '  transition:',
-                '    transform 0.28s cubic-bezier(0.4,0,0.2,1),',
-                '    width    0.28s cubic-bezier(0.4,0,0.2,1),',
-                '    opacity  0.22s ease !important;',
+                '  will-change: transform, opacity;',
+                '  transition: transform 0.42s cubic-bezier(0.16,1,0.3,1),',
+                '              opacity 0.30s ease-out !important;',
                 '}',
                 'section[data-testid="stSidebar"][aria-expanded="false"],',
                 '[data-testid="stSidebar"][aria-expanded="false"] {',
@@ -1353,7 +1406,6 @@ def inject_client_fixes() -> None:
           function run() {
             removeBranding();
             setupTabSwipe();
-            scheduleBuildNav();
             fixSidebarLeft();
           }
 
@@ -1362,8 +1414,6 @@ def inject_client_fixes() -> None:
           obs.observe(rootDoc.body, { childList: true, subtree: true });
           rootWin.setInterval(removeBranding, 1200);
           rootWin.setInterval(fixSidebarLeft, 800);
-          // Poll nav active state at 500ms so it stays in sync after Streamlit reruns
-          rootWin.setInterval(scheduleBuildNav, 500);
           window.setInterval(function () {
             injectHideStyle(document);
             if (rootDoc !== document) injectHideStyle(rootDoc);
@@ -2986,72 +3036,26 @@ def main() -> None:
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
     template = "plotly_dark" if is_dark else "plotly_white"
-    if is_mobile:
-        mobile_label_to_page = {
-            tr("Overview", "סקירה"): page_dashboard,
-            tr("Trades", "עסקאות"): page_manage,
-            tr("Risk", "סיכון"): page_risk,
-            tr("Data", "נתונים"): page_quality,
-        }
-        mobile_choice = st.radio(
-            tr("Page", "עמוד"),
-            list(mobile_label_to_page.keys()),
-            horizontal=True,
-            key="mobile_page_selector",
-            label_visibility="collapsed",
-        )
-        page = mobile_label_to_page.get(mobile_choice, page_dashboard)
-        _space(8)
-    else:
-        st.sidebar.title(tr("Navigation", "ניווט"))
-        if option_menu is not None:
-            nav_align = "left"
-            nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
-            nav_container_border = "0px solid transparent"
-            nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
-            nav_text_color = "#e2e8f0" if is_dark else "#0f172a"
-            nav_hover_color = "#334155" if is_dark else "#e5e7eb"
-            nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
-            nav_selected_text = "#ffffff" if is_dark else "#0f172a"
-            with st.sidebar:
-                page = option_menu(
-                    menu_title=None,
-                    options=page_options,
-                    icons=["house", "wallet", "shield-check", "database-check"],
-                    default_index=0,
-                    orientation="vertical",
-                    styles={
-                        "container": {
-                            "padding": "0.32rem 0.2rem",
-                            "background-color": nav_container_bg,
-                            "border-radius": "10px",
-                            "border": nav_container_border,
-                            "direction": "ltr",
-                        },
-                        "icon": {"color": nav_icon_color, "font-size": "16px"},
-                        "nav-link": {
-                            "font-size": "14px",
-                            "text-align": nav_align,
-                            "direction": "ltr",
-                            "margin": "2px 0",
-                            "padding": "10px 12px 10px 12px",
-                            "border-radius": "8px",
-                            "--hover-color": nav_hover_color,
-                            "color": nav_text_color,
-                        },
-                        "nav-link-selected": {
-                            "background-color": nav_selected_bg,
-                            "color": nav_selected_text,
-                            "font-weight": "600",
-                            "text-align": "left",
-                            "direction": "ltr",
-                        },
-                    },
-                )
-        else:
-            st.sidebar.caption(tr("Install streamlit-option-menu for enhanced navigation.", "להשלמת תפריט הניווט יש להתקין streamlit-option-menu."))
-            page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options)
-    _space(16)
+    # ── Page navigation: always rendered, no server-side mobile detection. ──
+    # CSS transforms this radio into:
+    #   • a fixed bottom tab bar on mobile  (via @media max-width:768px + :has())
+    #   • a horizontal tab bar under the header on desktop (via @media min-width:769px)
+    # This eliminates the unreliable user-agent mobile detection for navigation.
+    page_labels = {
+        tr("📊\nOverview", "📊\nסקירה"): page_dashboard,
+        tr("💼\nTrades", "💼\nעסקאות"): page_manage,
+        tr("🛡\nRisk", "🛡\nסיכון"): page_risk,
+        tr("📋\nData", "📋\nנתונים"): page_quality,
+    }
+    page_choice = st.radio(
+        tr("Page", "עמוד"),
+        list(page_labels.keys()),
+        horizontal=True,
+        key="page_selector",
+        label_visibility="collapsed",
+    )
+    page = page_labels.get(page_choice, page_dashboard)
+    _space(8)
 
     st.markdown(
         f"<div class='app-header-wrap'><h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>"
@@ -3282,7 +3286,7 @@ def main() -> None:
                     fig_type_mix.update_traces(
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
-                    st.plotly_chart(_optimize_plotly_for_mobile(fig_type_mix, is_mobile), use_container_width=True)
+                    st.plotly_chart(_apply_plotly_theme(fig_type_mix, is_dark, is_mobile), use_container_width=True)
             with demo_cols[1]:
                 perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
@@ -3310,7 +3314,7 @@ def main() -> None:
                     hovermode="x unified",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                st.plotly_chart(_optimize_plotly_for_mobile(fig_track, is_mobile), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
 
         tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
             [
@@ -3342,7 +3346,7 @@ def main() -> None:
                     hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
                     textinfo="percent+label",
                 )
-                st.plotly_chart(_optimize_plotly_for_mobile(fig_pie, is_mobile), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), use_container_width=True)
             with col_b:
                 bar_df = pnl_by_asset if not pnl_by_asset.empty else summary[["Ticker", "Net_PnL_ILS"]].copy()
                 _bar_src = bar_df.sort_values("Net_PnL_ILS", ascending=False).copy()
@@ -3365,7 +3369,7 @@ def main() -> None:
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
                 )
-                st.plotly_chart(_optimize_plotly_for_mobile(fig_bar, is_mobile, is_bar=True), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True), use_container_width=True)
 
             def _build_summary_for_exposure(local_open_trades: pd.DataFrame) -> pd.DataFrame:
                 if local_open_trades.empty:
@@ -3557,7 +3561,7 @@ def main() -> None:
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
                         textinfo="percent+label",
                     )
-                    st.plotly_chart(_optimize_plotly_for_mobile(alloc_fig, is_mobile), use_container_width=True)
+                    st.plotly_chart(_apply_plotly_theme(alloc_fig, is_dark, is_mobile), use_container_width=True)
                 else:
                     st.info(tr("No allocation data", "אין נתוני חלוקה"))
             with alloc_col2:
@@ -3573,7 +3577,7 @@ def main() -> None:
                     type_fig.update_traces(
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
-                    st.plotly_chart(_optimize_plotly_for_mobile(type_fig, is_mobile), use_container_width=True)
+                    st.plotly_chart(_apply_plotly_theme(type_fig, is_dark, is_mobile), use_container_width=True)
                 else:
                     st.info(tr("No asset-class data", "אין נתוני סוגי נכסים"))
 
@@ -3817,7 +3821,7 @@ def main() -> None:
                 yaxis_tickformat=",.0f",
                 hovermode="x unified",
             )
-            st.plotly_chart(_optimize_plotly_for_mobile(fig, is_mobile), use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
 
         if is_demo and total_value > 0:
             st.markdown(f"#### {tr('Scenario Lab (Demo)', 'מעבדת תרחישים (דמו)')}")
@@ -4044,7 +4048,7 @@ def main() -> None:
         status_counts_view = status_counts_view.rename(columns={"Status": SNAPSHOT_HEADERS["Status"][language], "count": tr("Count", "כמות")})
         st.dataframe(status_counts_view)
         fig = px.pie(status_counts, names="Status", values="count", title=tr("Trade Status Distribution", "פיזור סטטוסי עסקאות"), template=template)
-        st.plotly_chart(_optimize_plotly_for_mobile(fig, is_mobile), use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
         st.dataframe(localize_snapshot_view(df.tail(30), language))
