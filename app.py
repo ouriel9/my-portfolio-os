@@ -1139,34 +1139,118 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=600)
+def _market_symbol(ticker: str) -> str:
+    t = _clean(ticker).upper()
+    if t in {"BTC", "ETH", "SOL"}:
+        return f"{t}-USD"
+    return t
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _download_close_matrix(symbols: Tuple[str, ...], days: int = 365) -> pd.DataFrame:
+    clean_symbols = tuple(s for s in symbols if _clean(s))
+    if not clean_symbols:
+        return pd.DataFrame()
+    try:
+        raw = yf.download(
+            list(clean_symbols),
+            period=f"{int(days)}d",
+            interval="1d",
+            progress=False,
+            group_by="ticker",
+            auto_adjust=False,
+            threads=True,
+        )
+    except Exception:
+        return pd.DataFrame()
+    if raw is None or getattr(raw, "empty", True):
+        return pd.DataFrame()
+
+    out: Dict[str, pd.Series] = {}
+    if isinstance(raw.columns, pd.MultiIndex):
+        level_zero = {str(v) for v in raw.columns.get_level_values(0)}
+        if "Close" in level_zero:
+            for sym in clean_symbols:
+                try:
+                    s = pd.to_numeric(raw[("Close", sym)], errors="coerce")
+                    if s.notna().any():
+                        out[sym] = s.rename(sym)
+                except Exception:
+                    continue
+        else:
+            for sym in clean_symbols:
+                try:
+                    part = raw[sym]
+                    if isinstance(part, pd.DataFrame) and "Close" in part.columns:
+                        s = pd.to_numeric(part["Close"], errors="coerce")
+                        if s.notna().any():
+                            out[sym] = s.rename(sym)
+                except Exception:
+                    continue
+    elif isinstance(raw, pd.DataFrame):
+        if "Close" in raw.columns and len(clean_symbols) == 1:
+            sym = clean_symbols[0]
+            s = pd.to_numeric(raw["Close"], errors="coerce")
+            if s.notna().any():
+                out[sym] = s.rename(sym)
+
+    if not out:
+        return pd.DataFrame()
+    return pd.concat(out.values(), axis=1)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
+    clean = tuple(dict.fromkeys([_clean(t).upper() for t in tickers if _clean(t)]))
+    if not clean:
+        return {}
+
+    symbol_map = {t: _market_symbol(t) for t in clean}
+    close_df = _download_close_matrix(tuple(dict.fromkeys(symbol_map.values())), days=7)
     out: Dict[str, float] = {}
-    for t in tickers:
-        y_ticker = f"{t}-USD" if t in {"BTC", "ETH", "SOL"} else t
-        try:
-            out[t] = float(yf.Ticker(y_ticker).info.get("regularMarketPrice", 0) or 0)
-        except Exception:
-            out[t] = 0.0
+
+    for t in clean:
+        sym = symbol_map[t]
+        val = 0.0
+        if not close_df.empty and sym in close_df.columns:
+            series = pd.to_numeric(close_df[sym], errors="coerce").dropna()
+            if not series.empty:
+                val = float(series.iloc[-1])
+        if val <= 0:
+            val = float(_safe_quote(sym))
+        out[t] = val if val > 0 else 0.0
     return out
 
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=900, show_spinner=False)
 def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, ...], days: int = 365) -> pd.Series:
-    if not tickers:
+    if not tickers or not quantities:
+        return pd.Series(dtype=float)
+
+    qty_by_ticker: Dict[str, float] = {}
+    for ticker, qty in zip(tickers, quantities):
+        t = _clean(ticker).upper()
+        q = float(_num(qty))
+        if not t or abs(q) <= 1e-12:
+            continue
+        qty_by_ticker[t] = qty_by_ticker.get(t, 0.0) + q
+
+    if not qty_by_ticker:
+        return pd.Series(dtype=float)
+
+    symbol_by_ticker = {t: _market_symbol(t) for t in qty_by_ticker}
+    close_df = _download_close_matrix(tuple(dict.fromkeys(symbol_by_ticker.values())), days=max(int(days), 30))
+    if close_df.empty:
         return pd.Series(dtype=float)
 
     frames = []
-    for ticker, qty in zip(tickers, quantities):
-        symbol = f"{ticker}-USD" if ticker in {"BTC", "ETH", "SOL"} else ticker
-        try:
-            hist = yf.download(symbol, period=f"{days}d", interval="1d", progress=False)["Close"]
-            if isinstance(hist, pd.DataFrame):
-                hist = hist.iloc[:, 0]
-            hist = pd.Series(hist).rename(ticker) * float(qty)
-            frames.append(hist)
-        except Exception:
+    for ticker, qty in qty_by_ticker.items():
+        sym = symbol_by_ticker[ticker]
+        if sym not in close_df.columns:
             continue
+        s = pd.to_numeric(close_df[sym], errors="coerce").rename(ticker)
+        if s.notna().any():
+            frames.append(s * qty)
 
     if not frames:
         return pd.Series(dtype=float)
@@ -2383,7 +2467,6 @@ def main() -> None:
     _render_premium_sidebar_lottie(language)
     _space(16)
 
-    st.sidebar.title(tr("Navigation", "ניווט"))
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
     page_risk = tr("Risk & FIFO", "סיכונים ופיפו")
@@ -2393,53 +2476,57 @@ def main() -> None:
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
     template = "plotly_dark" if is_dark else "plotly_white"
-    if option_menu is not None:
-        nav_align = "left"
-        nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
-        nav_container_border = "0px solid transparent"
-        nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
-        nav_text_color = "#e2e8f0" if is_dark else "#0f172a"
-        nav_hover_color = "#334155" if is_dark else "#e5e7eb"
-        nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
-        nav_selected_text = "#ffffff" if is_dark else "#0f172a"
-        with st.sidebar:
-            page = option_menu(
-                menu_title=None,
-                options=page_options,
-                icons=["house", "wallet", "shield-check", "database-check"],
-                default_index=0,
-                orientation="vertical",
-                styles={
-                    "container": {
-                        "padding": "0.32rem 0.2rem",
-                        "background-color": nav_container_bg,
-                        "border-radius": "10px",
-                        "border": nav_container_border,
-                        "direction": "ltr",
-                    },
-                    "icon": {"color": nav_icon_color, "font-size": "16px"},
-                    "nav-link": {
-                        "font-size": "14px",
-                        "text-align": nav_align,
-                        "direction": "ltr",
-                        "margin": "2px 0",
-                        "padding": "10px 12px 10px 12px",
-                        "border-radius": "8px",
-                        "--hover-color": nav_hover_color,
-                        "color": nav_text_color,
-                    },
-                    "nav-link-selected": {
-                        "background-color": nav_selected_bg,
-                        "color": nav_selected_text,
-                        "font-weight": "600",
-                        "text-align": "left",
-                        "direction": "ltr",
-                    },
-                },
-            )
+    if is_mobile:
+        page = page_dashboard
     else:
-        st.sidebar.caption(tr("Install streamlit-option-menu for enhanced navigation.", "להשלמת תפריט הניווט יש להתקין streamlit-option-menu."))
-        page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options)
+        st.sidebar.title(tr("Navigation", "ניווט"))
+        if option_menu is not None:
+            nav_align = "left"
+            nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
+            nav_container_border = "0px solid transparent"
+            nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
+            nav_text_color = "#e2e8f0" if is_dark else "#0f172a"
+            nav_hover_color = "#334155" if is_dark else "#e5e7eb"
+            nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
+            nav_selected_text = "#ffffff" if is_dark else "#0f172a"
+            with st.sidebar:
+                page = option_menu(
+                    menu_title=None,
+                    options=page_options,
+                    icons=["house", "wallet", "shield-check", "database-check"],
+                    default_index=0,
+                    orientation="vertical",
+                    styles={
+                        "container": {
+                            "padding": "0.32rem 0.2rem",
+                            "background-color": nav_container_bg,
+                            "border-radius": "10px",
+                            "border": nav_container_border,
+                            "direction": "ltr",
+                        },
+                        "icon": {"color": nav_icon_color, "font-size": "16px"},
+                        "nav-link": {
+                            "font-size": "14px",
+                            "text-align": nav_align,
+                            "direction": "ltr",
+                            "margin": "2px 0",
+                            "padding": "10px 12px 10px 12px",
+                            "border-radius": "8px",
+                            "--hover-color": nav_hover_color,
+                            "color": nav_text_color,
+                        },
+                        "nav-link-selected": {
+                            "background-color": nav_selected_bg,
+                            "color": nav_selected_text,
+                            "font-weight": "600",
+                            "text-align": "left",
+                            "direction": "ltr",
+                        },
+                    },
+                )
+        else:
+            st.sidebar.caption(tr("Install streamlit-option-menu for enhanced navigation.", "להשלמת תפריט הניווט יש להתקין streamlit-option-menu."))
+            page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options)
     _space(16)
 
     st.markdown(
