@@ -501,6 +501,18 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             transform: translateY(-2px);
             box-shadow: 0 10px 18px rgba(0,0,0,0.08) !important;
         }}
+        /* Desktop: Fixed sidebar always visible on left */
+        [data-testid="stSidebar"] {{
+            background: {sidebar_bg} !important;
+            border-right: 1px solid {metric_border} !important;
+            min-height: 100vh !important;
+        }}
+        [data-testid="stSidebar"] > div:first-child,
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+            background: {sidebar_bg} !important;
+        }}
+        /* Hide mobile bottom nav on desktop */
+        #pm-bottom-nav {{ display: none !important; }}
     }}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
@@ -2639,7 +2651,7 @@ def dataframe_completeness(df: pd.DataFrame) -> Tuple[int, int, float]:
 
 
 def main() -> None:
-    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
+    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
     settings = load_local_settings()
     language_default = _clean(settings.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE
@@ -2926,8 +2938,9 @@ def main() -> None:
         summary["Yield_Origin"] = np.where(summary["Cost_Origin"] > 0, (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"], 0.0)
         summary["Yield_ILS"] = np.where(summary["Cost_ILS"] > 0, summary["Net_PnL_ILS"] / summary["Cost_ILS"], 0.0)
 
-        # Net P/L by asset should include all snapshot assets (open + closed), so newly added/closed tickers stay visible.
-        pnl_source = trades[trades["Record_Source"] == "STATE_SNAPSHOT"].copy() if "Record_Source" in trades.columns else trades.copy()
+        # Net P/L by asset uses only open trades — closed positions have no sell price stored,
+        # so their Current_Value_ILS=0 would incorrectly show the full cost as a loss.
+        pnl_source = open_trades.copy() if not open_trades.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Current_Value_ILS"])
         for col in ["Ticker", "Cost_ILS", "Current_Value_ILS"]:
             if col not in pnl_source.columns:
                 pnl_source[col] = 0.0 if col != "Ticker" else ""
@@ -2945,13 +2958,15 @@ def main() -> None:
         total_value_txt = f"{total_value:,.0f}"
         total_cost_txt = f"{total_cost:,.0f}"
         total_return_txt = f"{total_return:.2%}"
-        realized_closed = closed_trades["Current_Value_ILS"].sum() - closed_trades["Cost_ILS"].sum()
-        realized_closed_txt = f"{realized_closed:,.0f}"
         kpi_cols = st.columns(4)
         kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
         kpi_cols[1].metric(tr("Total Cost (ILS)", "עלות כוללת (₪)"), total_cost_txt)
         kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), total_return_txt)
-        kpi_cols[3].metric(tr("Realized P/L (Closed)", "רווח ממומש (סגור)"), realized_closed_txt)
+        kpi_cols[3].metric(
+            tr("Closed Positions", "פוזיציות סגורות"),
+            str(len(closed_trades)),
+            f"{len(open_trades)} {tr('open', 'פתוחות')}",
+        )
         style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
         _space(16)
 
@@ -3429,7 +3444,7 @@ def main() -> None:
                 st.info(tr("No transactions to display", "אין עסקאות להצגה"))
             else:
                 st.dataframe(tx_view, use_container_width=True, hide_index=True)
-##
+
     elif page == page_risk:
         # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
         if (not is_mobile) and (not is_demo):
