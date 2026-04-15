@@ -2477,7 +2477,21 @@ def main() -> None:
     is_dark = theme_base == "dark"
     template = "plotly_dark" if is_dark else "plotly_white"
     if is_mobile:
-        page = page_dashboard
+        mobile_label_to_page = {
+            tr("Overview", "סקירה"): page_dashboard,
+            tr("Trades", "עסקאות"): page_manage,
+            tr("Risk", "סיכון"): page_risk,
+            tr("Data", "נתונים"): page_quality,
+        }
+        mobile_choice = st.radio(
+            tr("Page", "עמוד"),
+            list(mobile_label_to_page.keys()),
+            horizontal=True,
+            key="mobile_page_selector",
+            label_visibility="collapsed",
+        )
+        page = mobile_label_to_page.get(mobile_choice, page_dashboard)
+        _space(8)
     else:
         st.sidebar.title(tr("Navigation", "ניווט"))
         if option_menu is not None:
