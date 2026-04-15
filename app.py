@@ -1579,6 +1579,24 @@ def save_manual_deposits_remote(web_app_url: str, token: str, mode: str, rows: L
         return False, str(exc)
 
 
+def _normalize_manual_deposit_rows(rows: List[Dict[str, object]], default_platforms: List[str]) -> List[Dict[str, object]]:
+    by_platform: Dict[str, float] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        platform = _clean(row.get("Platform", ""))
+        if not platform:
+            continue
+        by_platform[platform] = _num(row.get("Manual_Deposit_ILS", 0.0))
+    for platform in default_platforms:
+        p = _clean(platform)
+        if p and p not in by_platform:
+            by_platform[p] = 0.0
+    clean_rows = [{"Platform": k, "Manual_Deposit_ILS": float(v)} for k, v in by_platform.items() if _clean(k)]
+    clean_rows.sort(key=lambda r: _clean(r.get("Platform", "")).lower())
+    return clean_rows
+
+
 def load_local_settings() -> Dict[str, str]:
     if not LOCAL_SETTINGS_FILE.exists():
         return {}
@@ -2765,7 +2783,6 @@ def main() -> None:
                         if row_cols[0].button(ticker, key=f"{widget_prefix}_exp_ticker_btn_{idx}_{ticker}", type="tertiary", use_container_width=True):
                             st.session_state["tv_chart_ticker"] = ticker
                             st.session_state["tv_chart_open"] = True
-                            st.session_state[f"{widget_prefix}_watchlist_expanded"] = False
                             st.rerun()
                         row_cols[1].markdown(_fmt_num(getattr(row, "Current_Price", np.nan), ",.4f"))
                         row_cols[2].markdown(_fmt_num(getattr(row, "Open_Qty", np.nan), ".8f"))
@@ -2794,12 +2811,8 @@ def main() -> None:
 
                 if watch_rows:
                     watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    watchlist_state_key = f"{widget_prefix}_watchlist_expanded"
-                    if watchlist_state_key not in st.session_state:
-                        st.session_state[watchlist_state_key] = False
-                    open_container = st.expander(watchlist_label, expanded=bool(st.session_state.get(watchlist_state_key, False)))
+                    open_container = st.expander(watchlist_label, expanded=False)
                     with open_container:
-                        st.session_state[watchlist_state_key] = True
                         for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
                             part = watch_df[watch_df["Category"] == cat]
                             if part.empty:
@@ -2809,7 +2822,6 @@ def main() -> None:
                                 if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
                                     st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
                                     st.session_state["tv_chart_open"] = True
-                                    st.session_state[watchlist_state_key] = False
                                     st.rerun()
                 else:
                     st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
@@ -2934,30 +2946,93 @@ def main() -> None:
                     st.dataframe(report_styled, use_container_width=True, hide_index=True)
 
         with tab_deposits:
-            deposits_df = trades.groupby("Platform", as_index=False).agg(
-                Cost_ILS=("Cost_ILS", "sum"),
-                Current_Value_ILS=("Current_Value_ILS", "sum"),
-            ) if not trades.empty else pd.DataFrame(columns=["Platform", "Cost_ILS", "Current_Value_ILS"])
-            if deposits_df.empty:
-                st.info(tr("No deposit data", "אין נתוני הפקדות"))
-            else:
-                deposits_view = deposits_df.rename(
-                    columns={
-                        "Platform": tr("Platform", "פלטפורמה"),
-                        "Cost_ILS": tr("Total Cost (ILS)", "עלות כוללת (₪)"),
-                        "Current_Value_ILS": tr("Current Value (ILS)", "שווי נוכחי (₪)"),
-                    }
+            deposit_mode = "demo" if is_demo else "live"
+            default_platforms = sorted({_clean(v) for v in trades.get("Platform", pd.Series(dtype=str)).tolist() if _clean(v)}) if "Platform" in trades.columns else []
+            rows_state_key = f"manual_deposits_rows_{deposit_mode}"
+            loaded_state_key = f"manual_deposits_loaded_{deposit_mode}"
+            source_state_key = f"manual_deposits_source_{deposit_mode}"
+            web_url_for_sync = _clean(web_url_clean)
+            can_sync_remote = is_apps_script_web_app_url(web_url_for_sync) and bool(_clean(api_token))
+
+            if not st.session_state.get(loaded_state_key, False):
+                rows: List[Dict[str, object]] = []
+                source_label = "local"
+                if can_sync_remote:
+                    ok_remote, remote_rows, _ = load_manual_deposits_remote(web_url_for_sync, api_token, deposit_mode)
+                    if ok_remote:
+                        rows = remote_rows
+                        source_label = "cloud"
+                if not rows:
+                    local_store = load_manual_deposits_store()
+                    rows = local_store.get(deposit_mode, []) if isinstance(local_store, dict) else []
+                st.session_state[rows_state_key] = _normalize_manual_deposit_rows(rows, default_platforms)
+                st.session_state[source_state_key] = source_label
+                st.session_state[loaded_state_key] = True
+
+            current_rows = _normalize_manual_deposit_rows(st.session_state.get(rows_state_key, []), default_platforms)
+            st.session_state[rows_state_key] = current_rows
+
+            st.caption(
+                tr(
+                    f"Manual deposits are isolated and synced separately (source: {st.session_state.get(source_state_key, 'local')}).",
+                    f"הפקדות ידניות מבודדות ומסונכרנות בנפרד (מקור: {st.session_state.get(source_state_key, 'local')}).",
                 )
-                st.dataframe(
-                    deposits_view.style.format(
-                        {
-                            tr("Total Cost (ILS)", "עלות כוללת (₪)"): "{:,.0f}",
-                            tr("Current Value (ILS)", "שווי נוכחי (₪)"): "{:,.0f}",
-                        }
-                    ),
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            )
+
+            edit_df = pd.DataFrame(current_rows)
+            if edit_df.empty:
+                edit_df = pd.DataFrame([{"Platform": "", "Manual_Deposit_ILS": 0.0}])
+
+            edited_df = st.data_editor(
+                edit_df,
+                use_container_width=True,
+                hide_index=True,
+                num_rows="dynamic",
+                key=f"manual_deposits_editor_{deposit_mode}",
+                column_config={
+                    "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
+                    "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%.2f"),
+                },
+            )
+
+            edited_rows = edited_df.to_dict(orient="records") if isinstance(edited_df, pd.DataFrame) else []
+            normalized_rows = _normalize_manual_deposit_rows(edited_rows, default_platforms=[])
+            st.session_state[rows_state_key] = normalized_rows
+
+            total_manual = float(sum(_num(r.get("Manual_Deposit_ILS", 0.0)) for r in normalized_rows))
+            st.metric(tr("Total Manual Deposits", "סה\"כ הפקדות ידניות"), f"{total_manual:,.2f} ₪")
+
+            action_cols = st.columns([1, 1, 3])
+            if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}"):
+                store_payload = load_manual_deposits_store()
+                store_payload[deposit_mode] = normalized_rows
+                save_ok = save_manual_deposits_store(store_payload)
+                if can_sync_remote:
+                    remote_ok, remote_msg = save_manual_deposits_remote(web_url_for_sync, api_token, deposit_mode, normalized_rows)
+                    if remote_ok:
+                        st.session_state[source_state_key] = "cloud"
+                        st.success(tr("Saved and synced to cloud", "נשמר וסונכרן לענן"))
+                    else:
+                        msg = remote_msg or tr("Unknown sync error", "שגיאת סנכרון לא ידועה")
+                        st.warning(f"{tr('Saved locally only', 'נשמר מקומית בלבד')}: {msg}")
+                elif save_ok:
+                    st.session_state[source_state_key] = "local"
+                    st.success(tr("Saved locally on this device", "נשמר מקומית במכשיר זה"))
+                else:
+                    st.error(tr("Failed to save deposits", "שמירת ההפקדות נכשלה"))
+
+            if action_cols[1].button(tr("Reload Cloud", "טען מהענן"), key=f"manual_deposits_reload_{deposit_mode}"):
+                if not can_sync_remote:
+                    st.info(tr("Cloud sync is unavailable (missing valid Web App URL or token).", "סנכרון ענן לא זמין (חסר Web App URL תקין או טוקן)."))
+                else:
+                    ok_remote, remote_rows, remote_err = load_manual_deposits_remote(web_url_for_sync, api_token, deposit_mode)
+                    if ok_remote:
+                        st.session_state[rows_state_key] = _normalize_manual_deposit_rows(remote_rows, default_platforms)
+                        st.session_state[source_state_key] = "cloud"
+                        st.success(tr("Loaded latest deposits from cloud", "נטענו ההפקדות האחרונות מהענן"))
+                        st.rerun()
+                    else:
+                        st.error(f"{tr('Cloud load failed', 'טעינה מהענן נכשלה')}: {remote_err}")
 
         with tab_transactions:
             tx_cols = [c for c in ["Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Cost_ILS", "Current_Value_ILS", "Status"] if c in trades.columns]
