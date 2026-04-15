@@ -880,7 +880,7 @@ def _normalize_currency_code(value: object) -> str:
     if raw in {"USD", "$"}:
         return "USD"
     return raw
-
+##
 
 def _infer_display_currency(ticker: str, origin_currency: object) -> str:
     base = _normalize_currency_code(origin_currency)
