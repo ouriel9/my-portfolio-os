@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import re
+import socket
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -23,24 +25,82 @@ except Exception:
     option_menu = None
 
 try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
+except Exception:
+    AgGrid = None
+    GridOptionsBuilder = None
+    JsCode = None
+
+try:
+    from streamlit_extras.metric_cards import style_metric_cards
+except Exception:
+    def style_metric_cards(*args, **kwargs):
+        return None
+
+try:
+    from streamlit_lottie import st_lottie
+except Exception:
+    st_lottie = None
+
+try:
     import gspread
 except Exception:
     gspread = None
 
 RISK_FREE_ANNUAL = 0.02
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
+DEFAULT_TRADINGVIEW_WATCHLIST = [
+    {"category": "crypto", "ticker": "BTCUSD", "label": "Bitcoin / Dollar", "tv_symbol": "BINANCE:BTCUSDT"},
+    {"category": "crypto", "ticker": "ETHUSD", "label": "Ethereum / Dollar", "tv_symbol": "BINANCE:ETHUSDT"},
+    {"category": "crypto", "ticker": "SOLUSD", "label": "Solana / Dollar", "tv_symbol": "BINANCE:SOLUSDT"},
+    {"category": "crypto", "ticker": "XRPUSD", "label": "Ripple / Dollar", "tv_symbol": "BINANCE:XRPUSDT"},
+    {"category": "crypto", "ticker": "BTC.D", "label": "Bitcoin Market Cap Dominance", "tv_symbol": "CRYPTOCAP:BTC.D"},
+    {"category": "crypto", "ticker": "IBIT", "label": "iShares Bitcoin Trust ETF", "tv_symbol": "NASDAQ:IBIT"},
+    {"category": "crypto", "ticker": "ETHA", "label": "iShares Ethereum Trust ETF", "tv_symbol": "NYSE:ETHA"},
+    {"category": "stocks", "ticker": "INTC", "label": "Intel Corporation", "tv_symbol": "NASDAQ:INTC"},
+    {"category": "stocks", "ticker": "VOO", "label": "Vanguard S&P 500 ETF", "tv_symbol": "AMEX:VOO"},
+    {"category": "stocks", "ticker": "QQQ", "label": "Invesco QQQ Trust (Nasdaq 100)", "tv_symbol": "NASDAQ:QQQ"},
+    {"category": "stocks", "ticker": "MAGS", "label": "Roundhill Magnificent Seven ETF", "tv_symbol": "NASDAQ:MAGS"},
+    {"category": "stocks", "ticker": "TA125", "label": "TA-125 Index", "tv_symbol": "TVC:TA125"},
+    {"category": "stocks", "ticker": "NVDA", "label": "NVIDIA Corporation", "tv_symbol": "NASDAQ:NVDA"},
+    {"category": "stocks", "ticker": "AAPL", "label": "Apple Inc.", "tv_symbol": "NASDAQ:AAPL"},
+    {"category": "stocks", "ticker": "MSFT", "label": "Microsoft Corp.", "tv_symbol": "NASDAQ:MSFT"},
+    {"category": "stocks", "ticker": "AMZN", "label": "Amazon.com, Inc.", "tv_symbol": "NASDAQ:AMZN"},
+    {"category": "stocks", "ticker": "GOOG", "label": "Alphabet Inc. (Google) Class C", "tv_symbol": "NASDAQ:GOOG"},
+    {"category": "stocks", "ticker": "META", "label": "Meta Platforms, Inc.", "tv_symbol": "NASDAQ:META"},
+    {"category": "stocks", "ticker": "TSLA", "label": "Tesla, Inc.", "tv_symbol": "NASDAQ:TSLA"},
+    {"category": "stocks", "ticker": "MSTR", "label": "MicroStrategy Inc.", "tv_symbol": "NASDAQ:MSTR"},
+    {"category": "stocks", "ticker": "SOXX", "label": "iShares Semiconductor ETF", "tv_symbol": "NASDAQ:SOXX"},
+    {"category": "macro", "ticker": "GOLD", "label": "Gold CFD", "tv_symbol": "TVC:GOLD"},
+    {"category": "macro", "ticker": "SILVER", "label": "Silver CFD", "tv_symbol": "TVC:SILVER"},
+    {"category": "macro", "ticker": "USOIL", "label": "WTI Crude Oil", "tv_symbol": "TVC:USOIL"},
+    {"category": "macro", "ticker": "VIX", "label": "S&P 500 Volatility Index", "tv_symbol": "TVC:VIX"},
+    {"category": "macro", "ticker": "USDILS", "label": "US Dollar / Israeli Shekel", "tv_symbol": "FX_IDC:USDILS"},
+]
 LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "app_local_config.json"
 DEFAULT_SERVICE_ACCOUNT_FILE = Path(__file__).resolve().parent / "clean-linker-492313-s3-770814e64205.json"
 DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7OQVPLflfN2rufBhAT5-fzmjy8iEVFMmNLZlK_CeI4MFvx1dijZF/exec"
 MANUAL_DEPOSITS_FILE = Path(__file__).resolve().parent / "manual_deposits_store.json"
+LOCAL_SNAPSHOT_CACHE_FILE = Path(__file__).resolve().parent / "snapshot_cache.csv"
+VERIFIED_DATA_FALLBACK_FILE = Path(__file__).resolve().parent / "DATA" / "verified_data.csv"
+APPS_SCRIPT_COOLDOWN_FILE = Path(__file__).resolve().parent / "apps_script_cooldown.json"
+NETWORK_TIMEOUT_SECONDS = 20
+NETWORK_MAX_RETRIES = 3
+NETWORK_RETRY_BACKOFF_SECONDS = 1.4
+APPS_SCRIPT_COOLDOWN_SECONDS = 300
+_APPS_SCRIPT_RETRY_AFTER_TS = 0.0
 
 LANG_EN = "English"
 LANG_HE = "עברית"
 DEFAULT_LANGUAGE = LANG_HE
+THEME_SYSTEM = "system"
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
 
 COLUMN_LABELS = {
     "Ticker": {LANG_EN: "Ticker", LANG_HE: "טיקר"},
+    "Current_Price": {LANG_EN: "Current Price", LANG_HE: "שער נוכחי"},
     "Open_Qty": {LANG_EN: "Active Quantity", LANG_HE: "כמות פעילה"},
     "Cost_ILS": {LANG_EN: "Total Cost (ILS)", LANG_HE: "עלות כוללת (₪)"},
     "Value_ILS": {LANG_EN: "Current Value (ILS)", LANG_HE: "שווי עדכני (₪)"},
@@ -135,6 +195,38 @@ def render_modern_metrics(items: List[Tuple[str, str, str]]) -> None:
     st.markdown(f"<div class='pm-metric-grid'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
 
+def _space(height: int = 16) -> None:
+    if hasattr(st, "space"):
+        try:
+            st.space(height=height)
+            return
+        except Exception:
+            pass
+    st.write("")
+
+
+@st.cache_data(ttl=21600)
+def _load_lottie_json(url: str) -> Optional[Dict[str, object]]:
+    try:
+        with urlrequest.urlopen(url, timeout=8) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _render_premium_sidebar_lottie(language: str) -> None:
+    if st_lottie is None:
+        return
+    # Lightweight loop-free animation for a premium but non-distracting sidebar header.
+    lottie_data = _load_lottie_json("https://assets2.lottiefiles.com/packages/lf20_jcikwtux.json")
+    if not lottie_data:
+        return
+    label = "Quick Portfolio Pulse" if language == LANG_EN else "דופק תיק מהיר"
+    with st.sidebar:
+        st.caption(label)
+        st_lottie(lottie_data, height=76, speed=1, loop=False, key=f"pm_sidebar_lottie_{language}")
+
+
 def _is_mobile_client() -> bool:
     try:
         headers = getattr(st.context, "headers", {}) or {}
@@ -166,13 +258,46 @@ def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = 
     return fig
 
 
-def inject_global_styles(language: str) -> None:
+def _normalize_theme_mode(theme_mode: str) -> str:
+    mode = _clean(theme_mode).lower()
+    if mode in {THEME_LIGHT, THEME_DARK, THEME_SYSTEM}:
+        return mode
+    return THEME_SYSTEM
+
+
+def _resolve_theme_base(theme_mode: str) -> str:
+    mode = _normalize_theme_mode(theme_mode)
+    if mode == THEME_LIGHT:
+        return THEME_LIGHT
+    if mode == THEME_DARK:
+        return THEME_DARK
+    detected = (_clean(st.get_option("theme.base")) or THEME_LIGHT).lower()
+    return THEME_DARK if detected == THEME_DARK else THEME_LIGHT
+
+
+def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     rtl = language == LANG_HE
     direction = "rtl" if rtl else "ltr"
     align = "right" if rtl else "left"
+    theme_base = _resolve_theme_base(theme_mode)
+    is_dark = theme_base == "dark"
+    sidebar_bg = "#1E1E1E" if is_dark else "#f8f9fa"
+    metric_bg = "#2B2B2B" if is_dark else "#ffffff"
+    metric_border = "#3a3a3a" if is_dark else "#e8ecf3"
+    metric_text = "#f8fafc" if is_dark else "#0f172a"
+    metric_label = "#d1d5db" if is_dark else "#475569"
+    df_line = "#343434" if is_dark else "#f0f0f0"
+    df_header_bg = "#262626" if is_dark else "#fafafa"
+    title_color = "#f8fafc" if is_dark else "#0f172a"
+    subtitle_color = "#cbd5e1" if is_dark else "#475569"
     css = f"""
     <style>
-    .block-container {{padding-top: 3.0rem;}}
+    .block-container {{padding-top: 1.2rem;}}
+    .app-header-wrap {{
+        text-align: center !important;
+        direction: inherit !important;
+        margin: 0.05rem 0 0.5rem 0;
+    }}
     footer,
     footer *,
     [data-testid="stFooter"],
@@ -187,21 +312,88 @@ def inject_global_styles(language: str) -> None:
         opacity: 0 !important;
         pointer-events: none !important;
     }}
-    [data-testid="stDecoration"] {{display: none !important;}}
+    [data-testid="stDecoration"] {{display: block !important; visibility: visible !important;}}
     [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stToolbarActions"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stDataFrame"] [role="grid"] {{direction: {direction}; text-align: {align};}}
-    [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align};}}
+    [data-testid="stDataFrame"] table {{direction: {direction}; text-align: {align}; border-collapse: collapse !important;}}
     [data-testid="stDataFrame"] th,
     [data-testid="stDataFrame"] td {{unicode-bidi: plaintext;}}
     [data-testid="stDataFrame"] {{overflow-x: auto;}}
+    /* SaaS-like dataframe grid: remove vertical dividers, keep subtle row separators. */
+    [data-testid="stDataFrame"] [role="columnheader"],
+    [data-testid="stDataFrame"] [role="gridcell"],
+    [data-testid="stDataFrame"] [role="rowheader"] {{
+        border-left: none !important;
+        border-right: none !important;
+        border-top: none !important;
+        border-bottom: 1px solid {df_line} !important;
+    }}
+    [data-testid="stDataFrame"] [role="columnheader"] {{
+        background-color: {df_header_bg} !important;
+        font-weight: 600 !important;
+    }}
+    [data-testid="stDataFrame"] table th,
+    [data-testid="stDataFrame"] table td {{
+        border-left: none !important;
+        border-right: none !important;
+        border-top: none !important;
+        border-bottom: 1px solid {df_line} !important;
+    }}
+    [data-testid="stDataFrame"] table thead th {{
+        background-color: {df_header_bg} !important;
+    }}
     [data-testid="stMetric"] {{direction: {direction};}}
+    [data-testid="stMetric"] {{
+        background: {metric_bg} !important;
+        border: 1px solid {metric_border} !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.10) !important;
+        padding: 0.7rem 0.9rem !important;
+    }}
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] {{
+        color: {metric_label} !important;
+        font-size: 0.82rem !important;
+        line-height: 1.15 !important;
+        white-space: nowrap !important;
+    }}
+    [data-testid="stMetric"] [data-testid="stMetricValue"] {{
+        color: {metric_text} !important;
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
+        line-height: 1.15 !important;
+        white-space: nowrap !important;
+    }}
     .app-main-title {{
-        text-align: center;
+        text-align: center !important;
+        direction: inherit !important;
+        color: {title_color} !important;
         font-size: 2.05rem;
         font-weight: 800;
-        margin: 0.15rem 0 0.7rem 0;
+        margin: 0.02rem 0 0.08rem 0;
         letter-spacing: 0.01em;
+    }}
+    .app-sub-title {{
+        text-align: {align} !important;
+        direction: {direction} !important;
+        color: {subtitle_color} !important;
+        font-size: 1.02rem;
+        font-weight: 600;
+        margin: 0 0 0.35rem 0;
+    }}
+    .dashboard-stats-line {{
+        direction: {direction} !important;
+        text-align: {align} !important;
+        color: {subtitle_color} !important;
+        margin: 0.15rem 0 0.35rem 0;
+        font-size: 0.92rem;
+    }}
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stMarkdownContainer"] p,
+    h1, h2, h3, h4, h5, h6,
+    [data-testid="stDataFrame"] {{
+        direction: {direction} !important;
+        text-align: {align} !important;
     }}
     [data-baseweb="tab-list"] {{
         display: flex !important;
@@ -217,6 +409,13 @@ def inject_global_styles(language: str) -> None:
         scroll-snap-align: start;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
+    /* Keep sidebar option_menu left-aligned in all languages/themes. */
+    [data-testid="stSidebar"] .nav,
+    [data-testid="stSidebar"] .nav-item,
+    [data-testid="stSidebar"] .nav-link {{
+        direction: ltr !important;
+        text-align: left !important;
+    }}
     [data-testid="collapsedControl"] button svg,
     [data-testid="stSidebarCollapsedControl"] button svg,
     button[aria-label*="sidebar"] svg {{display: none !important;}}
@@ -253,13 +452,43 @@ def inject_global_styles(language: str) -> None:
     .pm-title {{font-size: 0.82rem; opacity: 0.8; margin-bottom: 0.35rem; color: #4b5563 !important;}}
     .pm-value {{font-size: 1.35rem; font-weight: 700; line-height: 1.15; color: #111827 !important;}}
     .pm-delta {{font-size: 0.84rem; opacity: 0.75; margin-top: 0.2rem; color: #374151 !important;}}
+    @media (min-width: 769px) {{
+        .block-container,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMarkdownContainer"] {{
+            direction: {direction} !important;
+            text-align: {align} !important;
+        }}
+        h1, h2, h3, h4, h5, h6 {{
+            direction: {direction} !important;
+            text-align: {align} !important;
+        }}
+        [data-baseweb="tab-list"] {{
+            direction: {direction} !important;
+            justify-content: flex-start !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+            text-align: {align} !important;
+        }}
+        .pm-card, [data-testid="stMetric"] {{
+            background: {metric_bg} !important;
+            border: 1px solid {metric_border} !important;
+            border-radius: 8px !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08) !important;
+            transition: transform 0.18s ease, box-shadow 0.18s ease !important;
+        }}
+        .pm-card:hover, [data-testid="stMetric"]:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 10px 18px rgba(0,0,0,0.08) !important;
+        }}
+    }}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
     @media (max-width: 768px) {{
         html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {{
-            direction: rtl !important;
-            text-align: right !important;
+            direction: {direction} !important;
+            text-align: {align} !important;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
         footer {{display: none !important;}}
@@ -281,8 +510,8 @@ def inject_global_styles(language: str) -> None:
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
 
         [data-testid="stSidebar"] {{
-            background: #f8f9fa !important;
-            background-color: #f8f9fa !important;
+            background: {sidebar_bg} !important;
+            background-color: {sidebar_bg} !important;
             z-index: 999999 !important;
             direction: rtl !important;
             transition: none !important;
@@ -309,8 +538,8 @@ def inject_global_styles(language: str) -> None:
         }}
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
-            background: #f8f9fa !important;
-            background-color: #f8f9fa !important;
+            background: {sidebar_bg} !important;
+            background-color: {sidebar_bg} !important;
             opacity: 1 !important;
             border-left: 0 !important;
             z-index: 999999 !important;
@@ -438,8 +667,7 @@ def inject_client_fixes() -> None:
         (function () {
           const hideCss = `
             footer, footer *, [data-testid="stFooter"], [data-testid="stFooter"] *,
-            [data-testid="stAppCreator"], [data-testid="stAppCreator"] *,
-            [data-testid="stDecoration"], [role="contentinfo"] {
+            [data-testid="stAppCreator"], [data-testid="stAppCreator"] * {
               display: none !important;
               visibility: hidden !important;
               opacity: 0 !important;
@@ -486,8 +714,7 @@ def inject_client_fixes() -> None:
               'footer',
               '[data-testid="stFooter"]',
               '[data-testid="stAppCreator"]',
-              '[data-testid="stDecoration"]',
-              '[role="contentinfo"]'
+              '[data-testid="stAppCreator"]'
             ];
 
             brandingHosts.forEach((sel) => {
@@ -789,6 +1016,26 @@ def _num(value: object) -> float:
         return 0.0
 
 
+def _signed_value_color(value: object) -> str:
+    num = _num(value)
+    if num > 0:
+        return "color: #16a34a; font-weight: 600;"
+    if num < 0:
+        return "color: #dc2626; font-weight: 600;"
+    return "color: #334155;"
+
+
+def _apply_signed_color(styler: object, columns: list[str]) -> object:
+    # pandas >= 2.1 favors Styler.map; keep fallback for older environments.
+    if not columns:
+        return styler
+    if hasattr(styler, "map"):
+        return styler.map(_signed_value_color, subset=columns)
+    if hasattr(styler, "applymap"):
+        return styler.applymap(_signed_value_color, subset=columns)
+    return styler
+
+
 def _parse_dates_flexible(series: pd.Series) -> pd.Series:
     parsed = pd.to_datetime(series, errors="coerce", dayfirst=True)
     missing = parsed.isna()
@@ -1002,12 +1249,31 @@ def risk_metrics(value_series: pd.Series) -> Dict[str, float]:
     return {"vol": vol, "sharpe": sharpe, "mdd": mdd, "cagr": cagr}
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=300, show_spinner=False)
 def _safe_quote(symbol: str) -> float:
-    try:
-        return float(yf.Ticker(symbol).info.get("regularMarketPrice", 0) or 0)
-    except Exception:
+    ticker_symbol = _clean(symbol).upper()
+    if not ticker_symbol:
         return 0.0
+    try:
+        ticker = yf.Ticker(ticker_symbol)
+        fast_info = getattr(ticker, "fast_info", None)
+        if fast_info:
+            for field in ["lastPrice", "regularMarketPrice", "previousClose"]:
+                try:
+                    val = float(fast_info.get(field, 0) or 0)
+                    if val > 0:
+                        return val
+                except Exception:
+                    pass
+
+        hist = ticker.history(period="5d", interval="1d", auto_adjust=False)
+        if not hist.empty and "Close" in hist.columns:
+            close_series = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+            if not close_series.empty:
+                return float(close_series.iloc[-1])
+    except Exception:
+        pass
+    return 0.0
 
 
 def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None) -> str:
@@ -1046,7 +1312,12 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     crypto_value = float(work.loc[crypto_mask, "Current_Value_ILS"].sum())
     btc_value = float(work.loc[work["Ticker"].isin(["BTC", "IBIT", "MSTR"]), "Current_Value_ILS"].sum())
 
-    fx = _safe_quote("USDILS=X")
+    usd_ils = _safe_quote("USDILS=X")
+    btc_usd = _safe_quote("BTC-USD")
+    eth_usd = _safe_quote("ETH-USD")
+    sol_usd = _safe_quote("SOL-USD")
+
+    fx = usd_ils
     if fx <= 0:
         fx = 3.6
 
@@ -1083,7 +1354,6 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     if not platform_summary.empty:
         platform_summary["PnL_ILS"] = platform_summary["Current_Value_ILS"] - platform_summary["Net_Investment_ILS"]
 
-    btc_usd = _safe_quote("BTC-USD")
     asset_map = {"BTC": "IBIT", "ETH": "ETHA", "SOL": "BSOL"}
     concentration_rows: List[Dict[str, float]] = []
     for asset, etf in asset_map.items():
@@ -1118,10 +1388,10 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         )
 
     live_rates = {
-        "USD/ILS": _safe_quote("USDILS=X"),
-        "BTC/USD": _safe_quote("BTC-USD"),
-        "ETH/USD": _safe_quote("ETH-USD"),
-        "SOL/USD": _safe_quote("SOL-USD"),
+        "USD/ILS": usd_ils,
+        "BTC/USD": btc_usd,
+        "ETH/USD": eth_usd,
+        "SOL/USD": sol_usd,
     }
 
     return {
@@ -1142,9 +1412,77 @@ def call_apps_script_(web_app_url: str, payload: Dict[str, object]) -> Dict[str,
         headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
-    with urlrequest.urlopen(req, timeout=25) as response:
-        body = response.read().decode("utf-8")
+    body = _read_url_with_retries(req)
     return json.loads(body)
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(exc, urlerror.URLError) and isinstance(getattr(exc, "reason", None), (TimeoutError, socket.timeout)):
+        return True
+    text = str(exc).lower()
+    return "timed out" in text or "timeout" in text
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    if _is_timeout_error(exc):
+        return True
+    if isinstance(exc, urlerror.URLError):
+        return True
+    text = str(exc).lower()
+    return any(token in text for token in ["tempor", "connection reset", "remote end closed", "502", "503", "504"])
+
+
+def _read_url_with_retries(req: urlrequest.Request) -> str:
+    last_exc: Exception | None = None
+    for attempt in range(1, NETWORK_MAX_RETRIES + 1):
+        try:
+            with urlrequest.urlopen(req, timeout=NETWORK_TIMEOUT_SECONDS) as response:
+                return response.read().decode("utf-8")
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt < NETWORK_MAX_RETRIES and _is_transient_network_error(exc)
+            if not should_retry:
+                raise
+            time.sleep(NETWORK_RETRY_BACKOFF_SECONDS * attempt)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Network read failed")
+
+
+def _apps_script_on_cooldown() -> bool:
+    now = time.time()
+    if _APPS_SCRIPT_RETRY_AFTER_TS > now:
+        return True
+    try:
+        if APPS_SCRIPT_COOLDOWN_FILE.exists():
+            payload = json.loads(APPS_SCRIPT_COOLDOWN_FILE.read_text(encoding="utf-8"))
+            retry_after = float(payload.get("retry_after", 0.0)) if isinstance(payload, dict) else 0.0
+            return retry_after > now
+    except Exception:
+        pass
+    return False
+
+
+def _mark_apps_script_timeout() -> None:
+    global _APPS_SCRIPT_RETRY_AFTER_TS
+    retry_after = time.time() + APPS_SCRIPT_COOLDOWN_SECONDS
+    _APPS_SCRIPT_RETRY_AFTER_TS = retry_after
+    try:
+        APPS_SCRIPT_COOLDOWN_FILE.write_text(json.dumps({"retry_after": retry_after}), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _clear_apps_script_cooldown() -> None:
+    global _APPS_SCRIPT_RETRY_AFTER_TS
+    _APPS_SCRIPT_RETRY_AFTER_TS = 0.0
+    try:
+        if APPS_SCRIPT_COOLDOWN_FILE.exists():
+            APPS_SCRIPT_COOLDOWN_FILE.unlink()
+    except Exception:
+        pass
 
 
 def load_manual_deposits_store() -> Dict[str, List[Dict[str, object]]]:
@@ -1253,6 +1591,7 @@ def load_local_settings() -> Dict[str, str]:
             "worksheet_name": _clean(raw.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
             "service_account_file": _clean(raw.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))),
             "language": _clean(raw.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
+            "theme_mode": _normalize_theme_mode(raw.get("theme_mode", THEME_SYSTEM)),
             "demo_mode": str(raw.get("demo_mode", "false")).lower() == "true",
             "followed_symbols": _clean(raw.get("followed_symbols", "")),
         }
@@ -1267,6 +1606,7 @@ def save_local_settings(
     worksheet_name: str,
     service_account_file: str,
     language: str,
+    theme_mode: str,
     demo_mode: bool,
     followed_symbols: str,
 ) -> bool:
@@ -1278,6 +1618,7 @@ def save_local_settings(
             "worksheet_name": _clean(worksheet_name) or DEFAULT_WORKSHEET_NAME,
             "service_account_file": _clean(service_account_file),
             "language": _clean(language) or DEFAULT_LANGUAGE,
+            "theme_mode": _normalize_theme_mode(theme_mode),
             "demo_mode": bool(demo_mode),
             "followed_symbols": _clean(followed_symbols),
         }
@@ -1433,16 +1774,44 @@ def _build_gspread_client(service_account_file: str):
     return gspread.service_account(filename=str(key_path), scopes=scopes)
 
 
-@st.cache_data(ttl=20)
+def _can_use_gspread_fallback(spreadsheet_ref: str, service_account_file: str) -> bool:
+    if gspread is None:
+        return False
+    if not _clean(spreadsheet_ref):
+        return False
+    if _service_account_from_env() is not None:
+        return True
+    if _service_account_from_runtime_secrets() is not None:
+        return True
+    key_path = Path(_clean(service_account_file)) if _clean(service_account_file) else DEFAULT_SERVICE_ACCOUNT_FILE
+    if not key_path.is_absolute():
+        key_path = Path(__file__).resolve().parent / key_path
+    return key_path.exists()
+
+
+@st.cache_data(ttl=300)
 def load_google_snapshot_data_via_gspread(spreadsheet_ref: str, worksheet_name: str, service_account_file: str) -> pd.DataFrame:
     client = _build_gspread_client(service_account_file)
     sheet_id = _extract_sheet_id(spreadsheet_ref)
     if not sheet_id:
         raise RuntimeError("חסר Spreadsheet ID/URL עבור חיבור gspread")
 
-    book = client.open_by_key(sheet_id)
-    ws = book.worksheet(_clean(worksheet_name) or DEFAULT_WORKSHEET_NAME)
-    values = ws.get_all_values()
+    last_exc: Exception | None = None
+    values: list[list[object]] = []
+    for attempt in range(1, NETWORK_MAX_RETRIES + 1):
+        try:
+            book = client.open_by_key(sheet_id)
+            ws = book.worksheet(_clean(worksheet_name) or DEFAULT_WORKSHEET_NAME)
+            values = ws.get_all_values()
+            break
+        except Exception as exc:
+            last_exc = exc
+            should_retry = attempt < NETWORK_MAX_RETRIES and _is_transient_network_error(exc)
+            if not should_retry:
+                raise
+            time.sleep(NETWORK_RETRY_BACKOFF_SECONDS * attempt)
+    if last_exc is not None and not values:
+        raise last_exc
     if not values:
         return pd.DataFrame()
 
@@ -1451,7 +1820,7 @@ def load_google_snapshot_data_via_gspread(spreadsheet_ref: str, worksheet_name: 
     return pd.DataFrame(rows, columns=headers)
 
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=300)
 def load_google_snapshot_data(web_app_url: str, token: str) -> pd.DataFrame:
     parsed = {}
     last_error = ""
@@ -1477,6 +1846,38 @@ def load_google_snapshot_data(web_app_url: str, token: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows, columns=headers)
     return _normalize_snapshot_df(df)
+
+
+def _save_local_snapshot_cache(df: pd.DataFrame) -> None:
+    try:
+        if df.empty:
+            return
+        out = df.copy()
+        if "Purchase_Date" in out.columns:
+            out["Purchase_Date"] = pd.to_datetime(out["Purchase_Date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+        out.to_csv(LOCAL_SNAPSHOT_CACHE_FILE, index=False, encoding="utf-8-sig")
+    except Exception:
+        return
+
+
+def _load_emergency_snapshot_backup() -> Tuple[pd.DataFrame, str]:
+    try:
+        if LOCAL_SNAPSHOT_CACHE_FILE.exists():
+            cached = pd.read_csv(LOCAL_SNAPSHOT_CACHE_FILE)
+            if not cached.empty:
+                return _normalize_snapshot_df(cached), "local_cache"
+    except Exception:
+        pass
+
+    try:
+        if VERIFIED_DATA_FALLBACK_FILE.exists():
+            verified = load_verified_data(str(VERIFIED_DATA_FALLBACK_FILE))
+            if not verified.empty:
+                return verified, "verified_fallback"
+    except Exception:
+        pass
+
+    return pd.DataFrame(), ""
 
 
 def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -1767,23 +2168,56 @@ def load_snapshot_data(
     service_account_file: str,
 ) -> Tuple[pd.DataFrame, str]:
     clean_url = _clean(web_app_url)
+    fallback_ready = _can_use_gspread_fallback(spreadsheet_ref, service_account_file)
+
+    # If Apps Script recently timed out, skip remote read and load backup immediately.
+    if clean_url and _apps_script_on_cooldown():
+        backup_df, backup_mode = _load_emergency_snapshot_backup()
+        if not backup_df.empty:
+            return backup_df, backup_mode
+
     if clean_url:
         if not is_apps_script_web_app_url(clean_url):
             raise RuntimeError("קישור Web App לא תקין")
         try:
-            return load_google_snapshot_data(clean_url, token), "apps_script"
+            df_remote = load_google_snapshot_data(clean_url, token)
+            _clear_apps_script_cooldown()
+            _save_local_snapshot_cache(df_remote)
+            return df_remote, "apps_script"
         except Exception as exc:
             err_text = str(exc).lower()
-            can_fallback = ("unsupported action" in err_text) or ("unauthorized" in err_text)
+            timeout_like = _is_timeout_error(exc)
+            if timeout_like:
+                _mark_apps_script_timeout()
+            can_fallback = (("unsupported action" in err_text) or ("unauthorized" in err_text) or timeout_like) and fallback_ready
             if not can_fallback:
+                backup_df, backup_mode = _load_emergency_snapshot_backup()
+                if not backup_df.empty:
+                    return backup_df, backup_mode
+                if timeout_like:
+                    raise RuntimeError("Apps Script timed out after retries, and no local backup data is available.")
                 raise
-            if not _clean(spreadsheet_ref):
+            try:
+                raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
+                normalized = _normalize_snapshot_df(raw_df)
+                _save_local_snapshot_cache(normalized)
+                return normalized, "gspread"
+            except Exception:
+                backup_df, backup_mode = _load_emergency_snapshot_backup()
+                if not backup_df.empty:
+                    return backup_df, backup_mode
                 raise
-            raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
-            return _normalize_snapshot_df(raw_df), "gspread"
 
-    raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
-    return _normalize_snapshot_df(raw_df), "gspread"
+    try:
+        raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
+        normalized = _normalize_snapshot_df(raw_df)
+        _save_local_snapshot_cache(normalized)
+        return normalized, "gspread"
+    except Exception:
+        backup_df, backup_mode = _load_emergency_snapshot_backup()
+        if not backup_df.empty:
+            return backup_df, backup_mode
+        raise
 
 
 def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Dict[str, object]) -> Tuple[bool, str]:
@@ -1805,7 +2239,6 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
     return False, str(parsed.get("error") or parsed)
 
 
-@st.cache_data(ttl=120)
 def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     trades = df[(df["Record_Source"] == "STATE_SNAPSHOT") & (df["Event_Type"] == "TRADE")].copy() if "Record_Source" in df.columns else df.copy()
     if "Status" not in trades.columns:
@@ -1879,26 +2312,43 @@ def main() -> None:
     template = "plotly_white"
 
     settings = load_local_settings()
-    language_default = DEFAULT_LANGUAGE
+    language_default = _clean(settings.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE
+    if language_default not in {LANG_EN, LANG_HE}:
+        language_default = DEFAULT_LANGUAGE
+    theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_SYSTEM))
 
-    inject_global_styles(language_default)
+    inject_global_styles(language_default, theme_default)
 
     st.sidebar.markdown("### App")
-    language = st.sidebar.selectbox("Language / שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
-    demo_mode = st.sidebar.checkbox("Demo view / מצב הדגמה", value=bool(settings.get("demo_mode", False)))
-    live_updates = st.sidebar.checkbox("Live updates / עדכון חי", value=False)
+    language = st.sidebar.selectbox("Language" if language_default == LANG_EN else "שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
+    tr = (lambda en, he: he if language == LANG_HE else en)
+    theme_label_to_value = {
+        tr("System", "מערכת"): THEME_SYSTEM,
+        tr("Light", "בהיר"): THEME_LIGHT,
+        tr("Dark", "כהה"): THEME_DARK,
+    }
+    theme_value_to_label = {v: k for k, v in theme_label_to_value.items()}
+    default_theme_label = theme_value_to_label.get(theme_default, tr("System", "מערכת"))
+    appearance_label = st.sidebar.selectbox(
+        tr("Appearance", "תצוגה"),
+        list(theme_label_to_value.keys()),
+        index=list(theme_label_to_value.keys()).index(default_theme_label),
+    )
+    theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
+    demo_mode = st.sidebar.checkbox(tr("Demo view", "מצב הדגמה"), value=bool(settings.get("demo_mode", False)))
+    live_updates = st.sidebar.checkbox(tr("Live updates", "עדכון חי"), value=False)
     refresh_seconds = st.sidebar.selectbox(
-        "Refresh every / רענון כל",
+        tr("Refresh every", "רענון כל"),
         [5, 10, 15, 30, 60],
         index=2,
         disabled=not live_updates,
     )
 
-    inject_global_styles(language)
+    inject_global_styles(language, theme_mode)
     inject_client_fixes()
 
-    tr = (lambda en, he: he if language == LANG_HE else en)
-    st.markdown(f"<h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>", unsafe_allow_html=True)
+    _render_premium_sidebar_lottie(language)
+    _space(16)
 
     st.sidebar.title(tr("Navigation", "ניווט"))
     page_dashboard = tr("Dashboard", "דשבורד")
@@ -1907,7 +2357,63 @@ def main() -> None:
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_options = [page_dashboard, page_manage, page_risk, page_quality]
     is_mobile = _is_mobile_client()
-    page = st.sidebar.radio(tr("Page", "עמוד"), page_options)
+    theme_base = _resolve_theme_base(theme_mode)
+    is_dark = theme_base == "dark"
+    template = "plotly_dark" if is_dark else "plotly_white"
+    if option_menu is not None:
+        nav_align = "left"
+        nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
+        nav_container_border = "0px solid transparent"
+        nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
+        nav_text_color = "#e2e8f0" if is_dark else "#0f172a"
+        nav_hover_color = "#334155" if is_dark else "#e5e7eb"
+        nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
+        nav_selected_text = "#ffffff" if is_dark else "#0f172a"
+        with st.sidebar:
+            page = option_menu(
+                menu_title=None,
+                options=page_options,
+                icons=["house", "wallet", "shield-check", "database-check"],
+                default_index=0,
+                orientation="vertical",
+                styles={
+                    "container": {
+                        "padding": "0.32rem 0.2rem",
+                        "background-color": nav_container_bg,
+                        "border-radius": "10px",
+                        "border": nav_container_border,
+                        "direction": "ltr",
+                    },
+                    "icon": {"color": nav_icon_color, "font-size": "16px"},
+                    "nav-link": {
+                        "font-size": "14px",
+                        "text-align": nav_align,
+                        "direction": "ltr",
+                        "margin": "2px 0",
+                        "padding": "10px 12px 10px 12px",
+                        "border-radius": "8px",
+                        "--hover-color": nav_hover_color,
+                        "color": nav_text_color,
+                    },
+                    "nav-link-selected": {
+                        "background-color": nav_selected_bg,
+                        "color": nav_selected_text,
+                        "font-weight": "600",
+                        "text-align": "left",
+                        "direction": "ltr",
+                    },
+                },
+            )
+    else:
+        st.sidebar.caption(tr("Install streamlit-option-menu for enhanced navigation.", "להשלמת תפריט הניווט יש להתקין streamlit-option-menu."))
+        page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options)
+    _space(16)
+
+    st.markdown(
+        f"<div class='app-header-wrap'><h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>"
+        f"<div class='app-sub-title'>{page}</div></div>",
+        unsafe_allow_html=True,
+    )
 
     connection_state_box = None
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
@@ -1924,14 +2430,12 @@ def main() -> None:
             tr("Service Account JSON path", "נתיב קובץ Service Account JSON"),
             value=settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)),
         )
-        followed_symbols_text = st.text_area(
-            tr("TradingView followed symbols", "סימבולים במעקב ב-TradingView"),
-            value=settings.get("followed_symbols", ""),
-            help=tr(
-                "Paste symbols separated by comma/space/new line (supports BTC, IBIT, BINANCE:BTCUSDT).",
-                "הדבק סימבולים מופרדים בפסיק/רווח/שורה חדשה (תומך BTC, IBIT, BINANCE:BTCUSDT).",
-            ),
-            height=90,
+        followed_symbols_text = settings.get("followed_symbols", "")
+        st.caption(
+            tr(
+                "TradingView watchlist is fixed to the dashboard default list.",
+                "רשימת המעקב של TradingView קבועה לפי רשימת ברירת המחדל בדשבורד.",
+            )
         )
 
         if st.button(tr("Save settings on this machine", "שמור חיבור למחשב הזה")):
@@ -1942,6 +2446,7 @@ def main() -> None:
                 worksheet_name,
                 service_account_file,
                 language,
+                theme_mode,
                 demo_mode,
                 followed_symbols_text,
             )
@@ -1961,7 +2466,12 @@ def main() -> None:
         st.error(tr("API Token appears invalid (looks like a private key). Paste your Apps Script API token instead.", "נראה שבשדה API Token הודבק מפתח פרטי. יש להדביק את ה-API Token של Apps Script."))
         st.stop()
 
-    followed_symbols = _parse_followed_symbols(followed_symbols_text)
+    loading_placeholder = st.empty()
+    if st_lottie is not None:
+        loading_anim = _load_lottie_json("https://assets2.lottiefiles.com/packages/lf20_jcikwtux.json")
+        if loading_anim:
+            with loading_placeholder.container():
+                st_lottie(loading_anim, height=90, speed=1, loop=True, key="pm_data_loading")
 
     if demo_mode:
         df, source_mode = build_demo_snapshot_data(), "demo"
@@ -1984,14 +2494,31 @@ def main() -> None:
         try:
             df, source_mode = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
         except Exception as exc:
-            st.error(f"{tr('Google data read failed', 'קריאת נתונים מגוגל נכשלה')}: {exc}")
+            exc_text = str(exc)
+            if _is_timeout_error(exc):
+                st.error(tr("Google data read failed due to timeout.", "קריאת נתונים מגוגל נכשלה בגלל Timeout."))
+                st.info(
+                    tr(
+                        "Apps Script timed out. The app will auto-use local backup data when available; otherwise retry in a minute.",
+                        "Apps Script חרג מזמן התגובה. האפליקציה תעבור אוטומטית לגיבוי מקומי אם קיים; אחרת נסה שוב בעוד דקה.",
+                    )
+                )
+                st.caption(exc_text)
+            else:
+                st.error(f"{tr('Google data read failed', 'קריאת נתונים מגוגל נכשלה')}: {exc_text}")
             st.stop()
+
+    loading_placeholder.empty()
 
     web_url_clean = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) if demo_mode else web_app_url)
 
     if connection_state_box is not None:
         if source_mode == "gspread":
             connection_state_box.warning(tr("gspread read mode active (write actions disabled).", "מצב קריאה דרך gspread פעיל (ללא Web App פעיל, פעולות עריכה/מחיקה מושבתות)."))
+        elif source_mode == "local_cache":
+            connection_state_box.warning(tr("Local backup cache is active (latest remote read was unavailable).", "גיבוי מקומי פעיל (הקריאה האחרונה מהשרת לא היתה זמינה)."))
+        elif source_mode == "verified_fallback":
+            connection_state_box.warning(tr("Verified fallback data is active (read-only emergency mode).", "נתוני גיבוי מאומתים פעילים (מצב חירום לקריאה בלבד)."))
         elif source_mode == "demo":
             connection_state_box.info(tr("Demo mode active - sample data only.", "מצב הדגמה פעיל - נתוני דוגמה בלבד."))
         else:
@@ -2012,7 +2539,6 @@ def main() -> None:
     is_demo = source_mode == "demo"
 
     if page == page_dashboard:
-        st.title(tr("Dashboard", "דשבורד"))
         if is_demo:
             st.markdown(
                 """
@@ -2024,11 +2550,12 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
 
-        st.caption(
+        stats_text = (
             f"{len(trades):,} {tr('rows loaded', 'רשומות נטענו')} | "
             f"{len(trades[trades['Record_Source'] == 'STATE_SNAPSHOT']):,} {tr('snapshot rows', 'שורות תמונת מצב')} | "
             f"{len(trades[trades['Status'] == 'סגור']):,} {tr('closed', 'סגורות')}"
         )
+        st.markdown(f"<div class='dashboard-stats-line'>{stats_text}</div>", unsafe_allow_html=True)
 
         fx = _safe_quote("USDILS=X")
         if fx <= 0:
@@ -2043,6 +2570,7 @@ def main() -> None:
         )
 
         summary = dashboard_df.groupby("Ticker", as_index=False).agg(
+            Current_Price=("מחיר שוק", "max"),
             Open_Qty=("Quantity", "sum"),
             Cost_ILS=("Cost_ILS", "sum"),
             Value_ILS=("Current_Value_ILS", "sum"),
@@ -2053,32 +2581,51 @@ def main() -> None:
         summary["Yield_Origin"] = np.where(summary["Cost_Origin"] > 0, (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"], 0.0)
         summary["Yield_ILS"] = np.where(summary["Cost_ILS"] > 0, summary["Net_PnL_ILS"] / summary["Cost_ILS"], 0.0)
 
+        # Net P/L by asset should include all snapshot assets (open + closed), so newly added/closed tickers stay visible.
+        pnl_source = trades[trades["Record_Source"] == "STATE_SNAPSHOT"].copy() if "Record_Source" in trades.columns else trades.copy()
+        for col in ["Ticker", "Cost_ILS", "Current_Value_ILS"]:
+            if col not in pnl_source.columns:
+                pnl_source[col] = 0.0 if col != "Ticker" else ""
+        pnl_source["Ticker"] = pnl_source["Ticker"].map(_clean)
+        pnl_source = pnl_source[pnl_source["Ticker"] != ""]
+        pnl_source["Cost_ILS"] = pnl_source["Cost_ILS"].map(_num)
+        pnl_source["Current_Value_ILS"] = pnl_source["Current_Value_ILS"].map(_num)
+        pnl_by_asset = pnl_source.groupby("Ticker", as_index=False).agg(
+            Cost_ILS=("Cost_ILS", "sum"),
+            Current_Value_ILS=("Current_Value_ILS", "sum"),
+        ) if not pnl_source.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Current_Value_ILS"])
+        if not pnl_by_asset.empty:
+            pnl_by_asset["Net_PnL_ILS"] = pnl_by_asset["Current_Value_ILS"] - pnl_by_asset["Cost_ILS"]
+
         total_value_txt = f"{total_value:,.0f}"
         total_cost_txt = f"{total_cost:,.0f}"
         total_return_txt = f"{total_return:.2%}"
         realized_closed = closed_trades["Current_Value_ILS"].sum() - closed_trades["Cost_ILS"].sum()
         realized_closed_txt = f"{realized_closed:,.0f}"
-        render_modern_metrics(
-            [
-                (tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪"),
-                (tr("Total Cost (ILS)", "עלות כוללת (₪)"), total_cost_txt, ""),
-                (tr("Total Return", "תשואה כוללת"), total_return_txt, ""),
-                (tr("Realized P/L (Closed)", "רווח ממומש (סגור)"), realized_closed_txt, ""),
-            ]
-        )
+        kpi_cols = st.columns(4)
+        kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
+        kpi_cols[1].metric(tr("Total Cost (ILS)", "עלות כוללת (₪)"), total_cost_txt)
+        kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), total_return_txt)
+        kpi_cols[3].metric(tr("Realized P/L (Closed)", "רווח ממומש (סגור)"), realized_closed_txt)
+        style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
+        _space(16)
+
+        type_mix = pd.DataFrame(columns=["Type", "Current_Value_ILS"])
+        if not open_trades.empty and {"Type", "Current_Value_ILS"}.issubset(open_trades.columns):
+            type_mix = open_trades.groupby("Type", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
 
         if is_demo and not open_trades.empty:
             demo_cols = st.columns(2)
             with demo_cols[0]:
-                type_mix = open_trades.groupby("Type", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
-                fig_type_mix = px.treemap(
-                    type_mix,
-                    path=["Type"],
-                    values="Current_Value_ILS",
-                    title=tr("Asset Class Composition", "הרכב מחלקות נכסים"),
-                    template=template,
-                )
-                st.plotly_chart(_optimize_plotly_for_mobile(fig_type_mix, is_mobile), use_container_width=True)
+                if not type_mix.empty:
+                    fig_type_mix = px.treemap(
+                        type_mix,
+                        path=["Type"],
+                        values="Current_Value_ILS",
+                        title=tr("Asset Class Composition", "הרכב מחלקות נכסים"),
+                        template=template,
+                    )
+                    st.plotly_chart(_optimize_plotly_for_mobile(fig_type_mix, is_mobile), use_container_width=True)
             with demo_cols[1]:
                 perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
@@ -2086,7 +2633,7 @@ def main() -> None:
                 fig_track = go.Figure()
                 fig_track.add_trace(go.Scatter(x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"], mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת")))
                 fig_track.add_trace(go.Scatter(x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"], mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר")))
-                fig_track.update_layout(template=template, title=tr("Portfolio Build-Up", "התפתחות בניית התיק"), xaxis_title=tr("Date", "תאריך"), yaxis_title="ILS")
+                fig_track.update_layout(template=template, title=tr("Portfolio Build-Up", "התפתחות בניית התיק"), xaxis_title=tr("Date", "תאריך"), yaxis_title=tr("Value", "שווי"))
                 st.plotly_chart(_optimize_plotly_for_mobile(fig_track, is_mobile), use_container_width=True)
 
         tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
@@ -2110,21 +2657,28 @@ def main() -> None:
                     hole=0.52,
                     template=template,
                 )
+                fig_pie.update_layout(
+                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
+                    margin=dict(l=10, r=10, t=40, b=40),
+                )
                 st.plotly_chart(_optimize_plotly_for_mobile(fig_pie, is_mobile), use_container_width=True)
             with col_b:
+                bar_df = pnl_by_asset if not pnl_by_asset.empty else summary[["Ticker", "Net_PnL_ILS"]].copy()
                 fig_bar = px.bar(
-                    summary.sort_values("Net_PnL_ILS", ascending=False),
+                    bar_df.sort_values("Net_PnL_ILS", ascending=False),
                     x="Ticker",
                     y="Net_PnL_ILS",
                     color="Net_PnL_ILS",
                     title=tr("Net P/L by Asset", "רווח/הפסד לפי נכס"),
                     template=template,
                 )
+                fig_bar.update_coloraxes(showscale=False)
+                fig_bar.update_layout(coloraxis_showscale=False)
                 st.plotly_chart(_optimize_plotly_for_mobile(fig_bar, is_mobile, is_bar=True), use_container_width=True)
 
             def _build_summary_for_exposure(local_open_trades: pd.DataFrame) -> pd.DataFrame:
                 if local_open_trades.empty:
-                    return pd.DataFrame(columns=["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"])
+                    return pd.DataFrame(columns=["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"])
                 fx_local = _safe_quote("USDILS=X")
                 if fx_local <= 0:
                     fx_local = 3.6
@@ -2136,6 +2690,7 @@ def main() -> None:
                     local_df["Current_Value_ILS"],
                 )
                 out = local_df.groupby("Ticker", as_index=False).agg(
+                    Current_Price=("מחיר שוק", "max"),
                     Open_Qty=("Quantity", "sum"),
                     Cost_ILS=("Cost_ILS", "sum"),
                     Value_ILS=("Current_Value_ILS", "sum"),
@@ -2147,95 +2702,125 @@ def main() -> None:
                 out["Yield_ILS"] = np.where(out["Cost_ILS"] > 0, out["Net_PnL_ILS"] / out["Cost_ILS"], 0.0)
                 return out
 
-            def render_exposure_section(summary_df: pd.DataFrame, watch_open_trades_df: pd.DataFrame) -> None:
+            def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview") -> None:
                 st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
-                exposure_cols = ["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
-                exposure_base = summary_df[exposure_cols].copy() if not summary_df.empty else pd.DataFrame(columns=exposure_cols)
-                exposure_view = localize_dataframe_columns(exposure_base, language)
-                ticker_col = localize_column_name("Ticker", language)
-                selection = st.dataframe(
-                    exposure_view,
-                    column_config={
-                        ticker_col: st.column_config.TextColumn(
-                            ticker_col,
-                            help=tr("Click a ticker cell to open chart below", "לחץ על תא הטיקר כדי לפתוח גרף למטה"),
-                        ),
-                        localize_column_name("Open_Qty", language): st.column_config.NumberColumn(format="%.8f"),
-                        localize_column_name("Cost_ILS", language): st.column_config.NumberColumn(format="%.0f"),
-                        localize_column_name("Value_ILS", language): st.column_config.NumberColumn(format="%.0f"),
-                        localize_column_name("Net_PnL_ILS", language): st.column_config.NumberColumn(format="%.0f"),
-                        localize_column_name("Yield_Origin", language): st.column_config.NumberColumn(format="%.2f%%"),
-                        localize_column_name("Yield_ILS", language): st.column_config.NumberColumn(format="%.2f%%"),
-                    },
-                    use_container_width=True,
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-cell",
-                    key="exposure_table_select",
-                )
+                exposure_cols = ["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
+                if summary_df.empty:
+                    exposure_base = pd.DataFrame(columns=exposure_cols)
+                else:
+                    exposure_base = summary_df.reindex(columns=exposure_cols).copy()
+                    # Keep current-price column resilient when upstream shape changes.
+                    if "Current_Price" not in summary_df.columns and {"Value_ILS", "Open_Qty"}.issubset(summary_df.columns):
+                        qty = pd.to_numeric(summary_df.get("Open_Qty"), errors="coerce")
+                        val = pd.to_numeric(summary_df.get("Value_ILS"), errors="coerce")
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            derived_price = np.where(qty > 0, val / qty, np.nan)
+                        exposure_base["Current_Price"] = derived_price
+                exposure_work = exposure_base.copy()
+                exposure_work["Ticker"] = exposure_work["Ticker"].map(_clean)
+                exposure_view = localize_dataframe_columns(exposure_work, language)
+                current_price_col = localize_column_name("Current_Price", language)
+                pnl_col = localize_column_name("Net_PnL_ILS", language)
+                yield_origin_col = localize_column_name("Yield_Origin", language)
+                yield_ils_col = localize_column_name("Yield_ILS", language)
 
-                selected_row = None
-                selected_col = None
-                selection_data = getattr(selection, "selection", selection if isinstance(selection, dict) else {})
-                if isinstance(selection_data, Mapping):
-                    rows = selection_data.get("rows", []) or []
-                    cols = selection_data.get("columns", []) or []
-                    cells = selection_data.get("cells", []) or []
-                    if rows:
-                        selected_row = int(rows[0])
-                    if cols:
-                        selected_col = cols[0]
-                    if cells and isinstance(cells[0], dict):
-                        selected_row = int(cells[0].get("row", selected_row if selected_row is not None else 0))
-                        selected_col = cells[0].get("column", selected_col)
+                if exposure_view.empty:
+                    st.info(tr("No open positions to show in Exposure Table.", "אין פוזיציות פתוחות להצגה בטבלת החשיפה."))
+                else:
+                    def _fmt_num(val: object, fmt: str) -> str:
+                        parsed = pd.to_numeric(pd.Series([val]), errors="coerce").iloc[0]
+                        if pd.isna(parsed):
+                            return "-"
+                        return format(float(parsed), fmt)
 
-                col_name = selected_col
-                if isinstance(selected_col, int) and 0 <= selected_col < len(exposure_view.columns):
-                    col_name = exposure_view.columns[selected_col]
-                if selected_row is not None and col_name == ticker_col and 0 <= selected_row < len(exposure_base):
-                    st.session_state["tv_chart_ticker"] = _clean(exposure_base.iloc[selected_row]["Ticker"]).upper()
-                    st.session_state["tv_chart_open"] = True
+                    def _signed_html(val: object, fmt: str) -> str:
+                        txt = _fmt_num(val, fmt)
+                        signed = _num(val)
+                        if signed > 0:
+                            return f"<span style='color:#16a34a;font-weight:600;'>{txt}</span>"
+                        if signed < 0:
+                            return f"<span style='color:#dc2626;font-weight:600;'>{txt}</span>"
+                        return txt
+
+                    row_widths = [1.05, 0.9, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95]
+                    header_labels = [
+                        localize_column_name("Ticker", language),
+                        current_price_col,
+                        localize_column_name("Open_Qty", language),
+                        localize_column_name("Cost_ILS", language),
+                        localize_column_name("Value_ILS", language),
+                        pnl_col,
+                        yield_origin_col,
+                        yield_ils_col,
+                    ]
+                    header_cols = st.columns(row_widths)
+                    for i, label in enumerate(header_labels):
+                        header_cols[i].markdown(f"**{label}**")
+
+                    for idx, row in enumerate(exposure_work.itertuples(index=False), 1):
+                        ticker = _clean(getattr(row, "Ticker", "")).upper()
+                        if not ticker:
+                            continue
+                        row_cols = st.columns(row_widths)
+                        if row_cols[0].button(ticker, key=f"{widget_prefix}_exp_ticker_btn_{idx}_{ticker}", type="tertiary", use_container_width=True):
+                            st.session_state["tv_chart_ticker"] = ticker
+                            st.session_state["tv_chart_open"] = True
+                            st.session_state[f"{widget_prefix}_watchlist_expanded"] = False
+                            st.rerun()
+                        row_cols[1].markdown(_fmt_num(getattr(row, "Current_Price", np.nan), ",.4f"))
+                        row_cols[2].markdown(_fmt_num(getattr(row, "Open_Qty", np.nan), ".8f"))
+                        row_cols[3].markdown(_fmt_num(getattr(row, "Cost_ILS", np.nan), ",.0f"))
+                        row_cols[4].markdown(_fmt_num(getattr(row, "Value_ILS", np.nan), ",.0f"))
+                        row_cols[5].markdown(_signed_html(getattr(row, "Net_PnL_ILS", np.nan), ",.0f"), unsafe_allow_html=True)
+                        row_cols[6].markdown(_signed_html(getattr(row, "Yield_Origin", np.nan), ".2%"), unsafe_allow_html=True)
+                        row_cols[7].markdown(_signed_html(getattr(row, "Yield_ILS", np.nan), ".2%"), unsafe_allow_html=True)
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
+                category_labels = {
+                    "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
+                    "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
+                    "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
+                }
                 watch_rows = []
-                for sym in followed_symbols:
-                    tv_symbol = _tradingview_symbol(sym)
-                    if not tv_symbol:
-                        continue
-                    display = sym.split(":", 1)[-1]
-                    if tv_symbol.startswith(("BINANCE:", "BYBIT:", "COINBASE:", "KRAKEN:")) or any(k in display for k in ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE"]):
-                        category = tr("Crypto", "קריפטו")
-                    elif display in CRYPTO_ETFS or display.endswith("ETF"):
-                        category = tr("ETFs", "קרנות סל")
-                    else:
-                        category = tr("Stocks", "מניות")
-                    watch_rows.append({"Ticker": display, "Symbol": tv_symbol, "Category": category})
+                for item in DEFAULT_TRADINGVIEW_WATCHLIST:
+                    watch_rows.append(
+                        {
+                            "Ticker": item["ticker"],
+                            "Title": f"{item['ticker']} - {item['label']}",
+                            "Symbol": item["tv_symbol"],
+                            "Category": category_labels[item["category"]],
+                        }
+                    )
 
                 if watch_rows:
                     watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    open_container = st.popover(watchlist_label, use_container_width=True) if hasattr(st, "popover") else st.expander(watchlist_label, expanded=False)
+                    watchlist_state_key = f"{widget_prefix}_watchlist_expanded"
+                    if watchlist_state_key not in st.session_state:
+                        st.session_state[watchlist_state_key] = False
+                    open_container = st.expander(watchlist_label, expanded=bool(st.session_state.get(watchlist_state_key, False)))
                     with open_container:
-                        for cat in [tr("Crypto", "קריפטו"), tr("ETFs", "קרנות סל"), tr("Stocks", "מניות")]:
+                        st.session_state[watchlist_state_key] = True
+                        for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
                             part = watch_df[watch_df["Category"] == cat]
                             if part.empty:
                                 continue
                             st.markdown(f"**{cat}**")
-                            for row in part.itertuples(index=False):
-                                if st.button(f"{row.Ticker}  |  {row.Symbol}", key=f"watch_{cat}_{row.Symbol}"):
+                            for idx, row in enumerate(part.itertuples(index=False), 1):
+                                if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
                                     st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
                                     st.session_state["tv_chart_open"] = True
+                                    st.session_state[watchlist_state_key] = False
                                     st.rerun()
                 else:
-                    st.caption(tr("Watchlist is empty. Add followed symbols in Connection & Data Settings.", "רשימת המעקב ריקה. הוסף סימבולים בהגדרות חיבור ונתונים."))
+                    st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
                 if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
                     active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
                     st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
                     _, close_col = st.columns([8, 1])
-                    if close_col.button(tr("Close", "סגור"), key="tv_inline_close"):
+                    if close_col.button(tr("Close", "סגור"), key=f"{widget_prefix}_tv_inline_close"):
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
-                        st.rerun()
                     _render_tradingview_widget(active_ticker, height=560)
 
             if live_updates and hasattr(st, "fragment"):
@@ -2245,329 +2830,157 @@ def main() -> None:
                     live_open_for_watchlist = open_trades
                     if not is_demo:
                         try:
-                            load_google_snapshot_data.clear()
-                            load_google_snapshot_data_via_gspread.clear()
                             live_df, _ = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
                             live_core = prepare_core_views(live_df)
                             live_open_for_watchlist = live_core["open_trades"].copy()
                             live_summary = _build_summary_for_exposure(live_open_for_watchlist)
                         except Exception:
                             pass
-                    render_exposure_section(live_summary, live_open_for_watchlist)
+                    render_exposure_section(live_summary, widget_prefix="overview")
 
                 _exposure_fragment()
             else:
-                render_exposure_section(summary, open_trades)
+                render_exposure_section(summary, widget_prefix="overview")
 
-        reports = build_home_inspired_reports(open_trades)
         with tab_allocation:
-            m1, m2, m3 = st.columns(3)
-            m1.metric(tr("Crypto Share of Portfolio", "אחוז קריפטו מהתיק"), f"{reports['crypto_share']:.2%}")
-            m2.metric(tr("BTC Share of Portfolio", "אחוז ביטקוין מהתיק"), f"{reports['btc_share_of_portfolio']:.2%}")
-            m3.metric(tr("BTC Share of Crypto", "אחוז ביטקוין מסך הקריפטו"), f"{reports['btc_share_of_crypto']:.2%}")
-
-            concentration_view = localize_dataframe_columns(reports["concentration_table"], language)
-            st.dataframe(
-                concentration_view.style.format(
-                    {
-                        localize_column_name("Direct_Qty", language): "{:.8f}",
-                        localize_column_name("Direct_ILS", language): "{:,.0f}",
-                        localize_column_name("ETF_Qty", language): "{:.8f}",
-                        localize_column_name("ETF_ILS", language): "{:,.0f}",
-                        localize_column_name("Total_Exposure_ILS", language): "{:,.0f}",
-                        localize_column_name("Estimated_BTC_Qty", language): "{:.8f}",
-                    }
-                ),
-                use_container_width=True,
+            allocation_payload = build_home_inspired_reports(open_trades)
+            alloc_kpi_cols = st.columns(3)
+            alloc_kpi_cols[0].metric(
+                tr("Crypto Share", "משקל קריפטו"),
+                f"{float(allocation_payload.get('crypto_share', 0.0)):.2%}",
             )
+            alloc_kpi_cols[1].metric(
+                tr("BTC Share of Portfolio", "משקל BTC מהתיק"),
+                f"{float(allocation_payload.get('btc_share_of_portfolio', 0.0)):.2%}",
+            )
+            alloc_kpi_cols[2].metric(
+                tr("BTC Share of Crypto", "משקל BTC מתוך הקריפטו"),
+                f"{float(allocation_payload.get('btc_share_of_crypto', 0.0)):.2%}",
+            )
+            style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
+            _space(8)
+
+            alloc_col1, alloc_col2 = st.columns(2)
+            with alloc_col1:
+                if not summary.empty:
+                    alloc_fig = px.pie(
+                        summary,
+                        names="Ticker",
+                        values="Value_ILS",
+                        title=tr("Allocation by Ticker", "חלוקה לפי טיקר"),
+                        hole=0.45,
+                        template=template,
+                    )
+                    st.plotly_chart(_optimize_plotly_for_mobile(alloc_fig, is_mobile), use_container_width=True)
+                else:
+                    st.info(tr("No allocation data", "אין נתוני חלוקה"))
+            with alloc_col2:
+                if not type_mix.empty:
+                    type_fig = px.treemap(
+                        type_mix,
+                        path=["Type"],
+                        values="Current_Value_ILS",
+                        title=tr("Allocation by Asset Class", "חלוקה לפי סוג נכס"),
+                        template=template,
+                    )
+                    st.plotly_chart(_optimize_plotly_for_mobile(type_fig, is_mobile), use_container_width=True)
+                else:
+                    st.info(tr("No asset-class data", "אין נתוני סוגי נכסים"))
 
         with tab_reports:
+            reports_payload = build_home_inspired_reports(open_trades)
             report_options = {
-                tr("Crypto Allocation", "חלוקת קריפטו בתיק"): "crypto",
-                tr("Asset Concentration", "ריכוז נכסים"): "concentration",
-                tr("Winner / Loser", "המנצח והמפסיד"): "winner",
-                tr("Net Investment", "סך השקעה נטו"): "net",
-                tr("Live FX / Crypto Rates", "שערי מטבע חיים"): "rates",
+                tr("Crypto Concentration", "ריכוזיות קריפטו"): "concentration_table",
+                tr("Winner / Loser", "המנצח / המפסיד"): "winner_loser_table",
+                tr("Net Investment by Platform", "השקעה נטו לפי פלטפורמה"): "net_investment_table",
+                tr("Live Market Rates", "שערים חיים מהשוק"): "live_rates",
             }
-            report_label = st.selectbox(tr("Choose report", "בחר דוח"), list(report_options.keys()))
-            report_key = report_options[report_label]
+            selected_report = st.selectbox(tr("Report Type", "סוג דוח"), list(report_options.keys()), key="reports_type_select")
+            selected_key = report_options[selected_report]
 
-            if report_key == "crypto":
-                ratio_df = pd.DataFrame(
-                    [
-                        {"Category": tr("Crypto from Portfolio", "קריפטו מכלל התיק"), "Yield": reports["crypto_share"]},
-                        {"Category": tr("Bitcoin from Portfolio", "ביטקוין מכלל התיק"), "Yield": reports["btc_share_of_portfolio"]},
-                        {"Category": tr("Bitcoin from Crypto", "ביטקוין מסך הקריפטו"), "Yield": reports["btc_share_of_crypto"]},
-                    ]
+            if selected_key == "live_rates":
+                rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
+                if not rates:
+                    st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+                else:
+                    rates_df = pd.DataFrame(
+                        [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
+                    )
+                    st.dataframe(
+                        rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            else:
+                report_df = reports_payload.get(selected_key, pd.DataFrame()) if isinstance(reports_payload, dict) else pd.DataFrame()
+                if not isinstance(report_df, pd.DataFrame) or report_df.empty:
+                    st.info(tr("No data available for this report.", "אין נתונים זמינים לדוח זה."))
+                else:
+                    localized_df = localize_dataframe_columns(report_df, language)
+                    fmt_map: Dict[str, str] = {}
+                    for col in localized_df.columns:
+                        if "Yield" in str(col) or "תשואה" in str(col):
+                            fmt_map[col] = "{:.2%}"
+                        elif "Qty" in str(col) or "כמות" in str(col):
+                            fmt_map[col] = "{:.8f}"
+                        elif any(token in str(col) for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
+                            fmt_map[col] = "{:,.0f}"
+                    report_styled = localized_df.style
+                    if fmt_map:
+                        report_styled = report_styled.format(fmt_map)
+                    signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "pnl", "תשואה", "רווח"])]
+                    if signed_cols:
+                        report_styled = _apply_signed_color(report_styled, signed_cols)
+                    st.dataframe(report_styled, use_container_width=True, hide_index=True)
+
+        with tab_deposits:
+            deposits_df = trades.groupby("Platform", as_index=False).agg(
+                Cost_ILS=("Cost_ILS", "sum"),
+                Current_Value_ILS=("Current_Value_ILS", "sum"),
+            ) if not trades.empty else pd.DataFrame(columns=["Platform", "Cost_ILS", "Current_Value_ILS"])
+            if deposits_df.empty:
+                st.info(tr("No deposit data", "אין נתוני הפקדות"))
+            else:
+                deposits_view = deposits_df.rename(
+                    columns={
+                        "Platform": tr("Platform", "פלטפורמה"),
+                        "Cost_ILS": tr("Total Cost (ILS)", "עלות כוללת (₪)"),
+                        "Current_Value_ILS": tr("Current Value (ILS)", "שווי נוכחי (₪)"),
+                    }
                 )
-                fig_ratio = px.bar(ratio_df, x="Category", y="Yield", title=report_label, template=template)
-                fig_ratio.update_yaxes(tickformat=".0%")
-                st.plotly_chart(_optimize_plotly_for_mobile(fig_ratio, is_mobile, is_bar=True), use_container_width=True)
-                st.dataframe(ratio_df.style.format({"Yield": "{:.2%}"}), use_container_width=True)
-
-            elif report_key == "concentration":
-                concentration_view = localize_dataframe_columns(reports["concentration_table"], language)
-                st.dataframe(concentration_view, use_container_width=True)
-
-            elif report_key == "winner":
-                wl = reports["winner_loser_table"].copy()
-                wl["Category"] = wl["Category"].replace({"Winner": tr("Winner", "המנצח"), "Loser": tr("Loser", "המפסיד")})
-                wl_view = localize_dataframe_columns(wl, language)
-                st.dataframe(wl_view.style.format({localize_column_name("Yield", language): "{:.2%}"}), use_container_width=True)
-
-            elif report_key == "net":
-                net_view = localize_dataframe_columns(reports["net_investment_table"], language)
                 st.dataframe(
-                    net_view.style.format(
+                    deposits_view.style.format(
                         {
-                            localize_column_name("Net_Investment_ILS", language): "{:,.0f}",
-                            localize_column_name("Current_Value_ILS", language): "{:,.0f}",
-                            localize_column_name("PnL_ILS", language): "{:,.0f}",
+                            tr("Total Cost (ILS)", "עלות כוללת (₪)"): "{:,.0f}",
+                            tr("Current Value (ILS)", "שווי נוכחי (₪)"): "{:,.0f}",
                         }
                     ),
                     use_container_width=True,
+                    hide_index=True,
                 )
-
-            else:
-                rates = reports["live_rates"]
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("USD/ILS", f"{rates['USD/ILS']:.4f}")
-                c2.metric("BTC/USD", f"{rates['BTC/USD']:.2f}")
-                c3.metric("ETH/USD", f"{rates['ETH/USD']:.2f}")
-                c4.metric("SOL/USD", f"{rates['SOL/USD']:.2f}")
-
-            st.markdown(f"#### {tr('Unified Report Table', 'טבלת דוח מאוחדת')}")
-            full_report_view = localize_dataframe_columns(summary[["Ticker", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]], language)
-            st.dataframe(
-                full_report_view.style.format(
-                    {
-                        localize_column_name("Open_Qty", language): "{:.8f}",
-                        localize_column_name("Cost_ILS", language): "{:,.0f}",
-                        localize_column_name("Value_ILS", language): "{:,.0f}",
-                        localize_column_name("Net_PnL_ILS", language): "{:,.0f}",
-                        localize_column_name("Yield_Origin", language): "{:.2%}",
-                        localize_column_name("Yield_ILS", language): "{:.2%}",
-                    }
-                ),
-                use_container_width=True,
-            )
-
-        with tab_deposits:
-            st.caption(tr("Manual deposits table by platform. This table is informational only and does not affect other calculations.", "טבלת הפקדות ידנית לפי פלטפורמה. הטבלה אינפורמטיבית בלבד ואינה משפיעה על חישובים אחרים."))
-
-            all_platforms = sorted([p for p in trades.get("Platform", pd.Series(dtype=str)).dropna().astype(str).map(_clean).unique() if p])
-            if not all_platforms:
-                all_platforms = ["Bit2C", "הורייזון", "אקסלנס"]
-
-            deposits_mode = "demo" if is_demo else "live"
-            deposits_key = "manual_deposits_table_demo" if is_demo else "manual_deposits_table_live"
-            remote_sync_enabled = source_mode == "apps_script" and _clean(web_url_clean) != ""
-            if is_demo:
-                demo_vals = [120000.0, 85000.0, 43000.0, 26000.0, 14000.0]
-                seeded = [demo_vals[i % len(demo_vals)] for i in range(len(all_platforms))]
-                base_df = pd.DataFrame({
-                    "Platform": all_platforms,
-                    "Manual_Deposit_ILS": seeded,
-                })
-            else:
-                base_df = pd.DataFrame({
-                    "Platform": all_platforms,
-                    "Manual_Deposit_ILS": [0.0] * len(all_platforms),
-                })
-
-            if deposits_key not in st.session_state:
-                loaded = False
-                if remote_sync_enabled:
-                    ok_remote, remote_rows, _ = load_manual_deposits_remote(web_url_clean, api_token, deposits_mode)
-                    if ok_remote:
-                        st.session_state[deposits_key] = pd.DataFrame(remote_rows) if remote_rows else base_df
-                        loaded = True
-
-                if not loaded:
-                    store = load_manual_deposits_store()
-                    persisted = store.get(deposits_mode, [])
-                    if persisted:
-                        persisted_df = pd.DataFrame(persisted)
-                        st.session_state[deposits_key] = persisted_df
-                    else:
-                        st.session_state[deposits_key] = base_df
-            else:
-                existing = st.session_state[deposits_key].copy()
-                for col, default in {"Platform": "", "Manual_Deposit_ILS": 0.0}.items():
-                    if col not in existing.columns:
-                        existing[col] = default
-                existing["Platform"] = existing["Platform"].map(_clean)
-                existing["Manual_Deposit_ILS"] = existing["Manual_Deposit_ILS"].map(_num)
-                known = set(existing["Platform"].tolist())
-                missing = [p for p in all_platforms if p not in known]
-                if missing:
-                    existing = pd.concat(
-                        [existing, pd.DataFrame({"Platform": missing, "Manual_Deposit_ILS": [0.0] * len(missing)})],
-                        ignore_index=True,
-                    )
-                st.session_state[deposits_key] = existing
-
-            edited_deposits = st.data_editor(
-                st.session_state[deposits_key],
-                use_container_width=True,
-                hide_index=True,
-                num_rows="dynamic",
-                column_config={
-                    "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
-                    "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), format="%0.2f"),
-                },
-                key="manual_deposits_editor_demo" if is_demo else "manual_deposits_editor_live",
-            )
-
-            edited_deposits = edited_deposits.copy()
-            edited_deposits["Platform"] = edited_deposits["Platform"].map(_clean)
-            edited_deposits = edited_deposits[edited_deposits["Platform"] != ""]
-            edited_deposits["Manual_Deposit_ILS"] = edited_deposits["Manual_Deposit_ILS"].map(_num)
-            st.session_state[deposits_key] = edited_deposits
-
-            # Persist deposits across app restarts, separated by live/demo mode.
-            store = load_manual_deposits_store()
-            store[deposits_mode] = edited_deposits.to_dict("records")
-            save_manual_deposits_store(store)
-
-            # Sync across devices when Apps Script mode is available.
-            if remote_sync_enabled:
-                ok_remote_save, remote_err = save_manual_deposits_remote(
-                    web_url_clean,
-                    api_token,
-                    deposits_mode,
-                    edited_deposits.to_dict("records"),
-                )
-                if not ok_remote_save:
-                    st.warning(tr("Could not sync deposits to cloud, kept locally on this device.", "לא ניתן לסנכרן הפקדות לענן, נשמר מקומית במכשיר זה."))
-
-            total_manual_deposits = float(edited_deposits["Manual_Deposit_ILS"].sum()) if not edited_deposits.empty else 0.0
-            st.metric(tr("Total Manual Deposits (ILS)", "סך הפקדות ידני (₪)"), f"{total_manual_deposits:,.0f}")
 
         with tab_transactions:
-            with st.expander(tr("Full snapshot transactions (including closed)", "רשימת העסקאות המלאה בתמונת מצב כולל סגורות"), expanded=True):
-                snapshot_view = trades[trades["Record_Source"] == "STATE_SNAPSHOT"].copy() if "Record_Source" in trades.columns else trades.copy()
-                ticker_options = sorted([t for t in snapshot_view["Ticker"].dropna().astype(str).unique() if _clean(t)]) if "Ticker" in snapshot_view.columns else []
-                if hasattr(st, "pills"):
-                    selected_tickers = st.pills(
-                        tr("Filter by ticker", "סינון לפי טיקר"),
-                        ticker_options,
-                        selection_mode="multi",
-                        default=[],
-                        key="snapshot_ticker_pills",
-                    )
-                    selected_tickers = list(selected_tickers) if selected_tickers else []
-                else:
-                    selected_tickers = st.multiselect(
-                        tr("Filter by ticker", "סינון לפי טיקר"),
-                        ticker_options,
-                        default=[],
-                    )
-                if selected_tickers and "Ticker" in snapshot_view.columns:
-                    snapshot_view = snapshot_view[snapshot_view["Ticker"].isin(selected_tickers)]
-
-                snapshot_view = snapshot_view.copy()
-                fx_local = _safe_quote("USDILS=X")
-                if fx_local <= 0:
-                    fx_local = 3.6
-                snapshot_view["Cost_Origin"] = snapshot_view.get("Cost_Origin", 0).map(_num)
-                snapshot_view["Commission"] = snapshot_view.get("Commission", 0).map(_num)
-                snapshot_view["Cost_ILS"] = snapshot_view.get("Cost_ILS", 0).map(_num)
-                snapshot_view["Current_Value_ILS"] = snapshot_view.get("Current_Value_ILS", 0).map(_num)
-                snapshot_view["Origin_Currency"] = snapshot_view.get("Origin_Currency", "").map(_clean)
-                qty_abs = snapshot_view.get("Quantity", 0).map(_num).abs()
-                origin_currency_series = snapshot_view["Origin_Currency"].map(_normalize_currency_code)
-                value_origin = np.where(
-                    origin_currency_series == "USD",
-                    snapshot_view["Current_Value_ILS"] / fx_local,
-                    snapshot_view["Current_Value_ILS"],
+            tx_cols = [c for c in ["Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Cost_ILS", "Current_Value_ILS", "Status"] if c in trades.columns]
+            tx_raw = trades[tx_cols].copy() if tx_cols else pd.DataFrame()
+            if not tx_raw.empty and "Ticker" in tx_raw.columns:
+                ticker_options = sorted({_clean(v).upper() for v in tx_raw["Ticker"].tolist() if _clean(v)})
+                chosen_tickers = st.multiselect(
+                    tr("Ticker filter", "סינון לפי טיקר"),
+                    ticker_options,
+                    default=[],
+                    key="dashboard_transactions_ticker_filter",
                 )
-                snapshot_view["Current_Asset_Value_Display"] = pd.Series(
-                    np.where(qty_abs > 1e-9, value_origin / qty_abs, 0.0),
-                    index=snapshot_view.index,
-                )
-                snapshot_view["Current_Asset_Value_Display"] = snapshot_view.apply(
-                    lambda r: _format_currency_value(float(r["Current_Asset_Value_Display"]), r.get("Origin_Currency", "")),
-                    axis=1,
-                )
-                snapshot_view["Status"] = snapshot_view.get("Status", "").map(_clean)
-                snapshot_view["Cost_Origin_With_Fee"] = snapshot_view["Cost_Origin"] + snapshot_view["Commission"]
-                snapshot_view["Value_Origin_Est"] = np.where(
-                    snapshot_view["Origin_Currency"].str.upper() == "USD",
-                    snapshot_view["Current_Value_ILS"] / fx_local,
-                    snapshot_view["Current_Value_ILS"],
-                )
-                if "Purchase_Date" in snapshot_view.columns:
-                    parsed_dates = _parse_dates_flexible(snapshot_view["Purchase_Date"])
-                    snapshot_view["Purchase_Date"] = parsed_dates.dt.strftime("%Y-%m-%d").fillna(tr("Missing date", "תאריך חסר"))
-                snapshot_view["Yield_Origin"] = np.where(
-                    (snapshot_view["Status"] != "סגור") & (snapshot_view["Cost_Origin_With_Fee"] > 0),
-                    (snapshot_view["Value_Origin_Est"] - snapshot_view["Cost_Origin_With_Fee"]) / snapshot_view["Cost_Origin_With_Fee"],
-                    0.0,
-                )
-
-                show_cols = [
-                    c
-                    for c in [
-                        "Purchase_Date",
-                        "Ticker",
-                        "Platform",
-                        "Quantity",
-                        "Origin_Buy_Price",
-                        "Current_Asset_Value_Display",
-                        "Cost_ILS",
-                        "Current_Value_ILS",
-                        "Yield_Origin",
-                        "Status",
-                    ]
-                    if c in snapshot_view.columns
-                ]
-                if show_cols:
-                    snapshot_sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in snapshot_view.columns]
-                    if snapshot_sort_cols:
-                        snapshot_asc = [False if c == "Purchase_Date" else True for c in snapshot_sort_cols]
-                        snapshot_view = snapshot_view.sort_values(snapshot_sort_cols, ascending=snapshot_asc)
-                    localized_tx = localize_snapshot_view(snapshot_view[show_cols], language)
-                    date_col = SNAPSHOT_HEADERS["Purchase_Date"][language]
-                    ticker_col = SNAPSHOT_HEADERS["Ticker"][language]
-                    platform_col = SNAPSHOT_HEADERS["Platform"][language]
-                    qty_col = SNAPSHOT_HEADERS["Quantity"][language]
-                    buy_col = SNAPSHOT_HEADERS["Origin_Buy_Price"][language]
-                    asset_value_col = SNAPSHOT_HEADERS["Current_Asset_Value_Display"][language]
-                    cost_col = SNAPSHOT_HEADERS["Cost_ILS"][language]
-                    value_col = SNAPSHOT_HEADERS["Current_Value_ILS"][language]
-                    yield_col = SNAPSHOT_HEADERS["Yield_Origin"][language]
-                    status_col = SNAPSHOT_HEADERS["Status"][language]
-                    st.dataframe(
-                        localized_tx.style.format(
-                            {
-                                qty_col: "{:.8f}",
-                                buy_col: "{:,.2f}",
-                                cost_col: "{:,.0f}",
-                                value_col: "{:,.0f}",
-                                yield_col: "{:.2%}",
-                            }
-                        ),
-                        column_config={
-                            date_col: st.column_config.TextColumn(width="small"),
-                            ticker_col: st.column_config.TextColumn(width="small"),
-                            platform_col: st.column_config.TextColumn(width="medium"),
-                            qty_col: st.column_config.NumberColumn(width="small"),
-                            buy_col: st.column_config.NumberColumn(width="small"),
-                            asset_value_col: st.column_config.TextColumn(width="small"),
-                            cost_col: st.column_config.NumberColumn(width="small"),
-                            value_col: st.column_config.NumberColumn(width="small"),
-                            yield_col: st.column_config.NumberColumn(width="small"),
-                            status_col: st.column_config.TextColumn(width="small"),
-                        },
-                        use_container_width=True,
-                        height=420,
-                        hide_index=True,
-                    )
-
+                if chosen_tickers:
+                    selected_set = {t.upper() for t in chosen_tickers}
+                    tx_raw = tx_raw[tx_raw["Ticker"].map(lambda v: _clean(v).upper()).isin(selected_set)]
+            tx_view = localize_snapshot_view(tx_raw, language) if not tx_raw.empty else pd.DataFrame()
+            if tx_view.empty:
+                st.info(tr("No transactions to display", "אין עסקאות להצגה"))
+            else:
+                st.dataframe(tx_view, use_container_width=True, hide_index=True)
 
     elif page == page_risk:
-        st.title(tr("Risk, Performance and FIFO", "סיכונים, ביצועים ועלות פיפו"))
+        st.markdown(f"### {tr('Risk, Performance and FIFO', 'סיכונים, ביצועים ועלות פיפו')}")
         fifo_df = fifo_metrics(trades)
         st.subheader(tr("FIFO Engine", "מנוע פיפו"))
         if fifo_df.empty:
@@ -2589,14 +3002,17 @@ def main() -> None:
                 axis=1,
             )
             fifo_view = fifo_view.drop(columns=[avg_price_currency_col], errors="ignore")
+            realized_col = tr("Realized P/L (ILS)", "רווח ממומש (₪)")
+            fifo_styled = fifo_view.style.format(
+                {
+                    tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): "{:.8f}",
+                    tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
+                    realized_col: "₪{:,.0f}",
+                }
+            )
+            fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
             st.dataframe(
-                fifo_view.style.format(
-                    {
-                        tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): "{:.8f}",
-                        tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
-                        tr("Realized P/L (ILS)", "רווח ממומש (₪)"): "₪{:,.0f}",
-                    }
-                )
+                fifo_styled
             )
 
         holdings = open_trades.groupby("Ticker", as_index=False)["Quantity"].sum()
@@ -2632,25 +3048,29 @@ def main() -> None:
             )
             scenario_df["Estimated Value (ILS)"] = total_value * (1 + scenario_df["Shock"])
             scenario_df["Estimated P/L (ILS)"] = scenario_df["Estimated Value (ILS)"] - total_cost
+            scenario_styled = scenario_df.style.format(
+                {
+                    "Shock": "{:.1%}",
+                    "Estimated Value (ILS)": "{:,.0f}",
+                    "Estimated P/L (ILS)": "{:,.0f}",
+                }
+            )
+            scenario_styled = _apply_signed_color(scenario_styled, ["Shock", "Estimated P/L (ILS)"])
             st.dataframe(
-                scenario_df.style.format(
-                    {
-                        "Shock": "{:.1%}",
-                        "Estimated Value (ILS)": "{:,.0f}",
-                        "Estimated P/L (ILS)": "{:,.0f}",
-                    }
-                ),
+                scenario_styled,
                 use_container_width=True,
             )
 
     elif page == page_manage:
-        st.title(tr("Trade Management (Add / Edit / Delete)", "ניהול עסקאות (הוספה / עריכה / מחיקה)"))
+        st.markdown(f"### {tr('Trade Management (Add / Edit / Delete)', 'ניהול עסקאות (הוספה / עריכה / מחיקה)')}")
         st.caption(tr("Changes are saved directly to Google Sheets via Apps Script (no CSV write).", "שמירה מתבצעת ישירות ל-Google Sheets דרך Apps Script (ללא כתיבה ל-CSV)."))
         if is_demo:
             st.info(tr("Demo trade-desk mode: you can safely explore flows and forms without touching your personal portfolio.", "מצב דמו לחדר מסחר: אפשר לבדוק זרימות וטפסים בבטחה בלי לגעת בתיק האישי שלך."))
-        write_enabled = source_mode == "apps_script"
+        write_enabled = (not is_demo) and is_apps_script_web_app_url(_clean(web_url_clean))
         if not write_enabled:
             st.warning(tr("This page is read-only in current mode. Connect Apps Script Web App to enable write actions.", "הדף במצב קריאה בלבד כי אין Web App URL תקין. כדי לאפשר הוספה/עריכה/מחיקה, חבר Apps Script Web App."))
+        elif source_mode in {"local_cache", "verified_fallback", "gspread"}:
+            st.info(tr("Data view loaded from fallback, but write actions remain enabled via Apps Script.", "התצוגה נטענה מגיבוי, אך פעולות הוספה/עריכה/מחיקה עדיין זמינות דרך Apps Script."))
 
         st.caption(tr(f"Showing {len(trades):,} snapshot transactions, including closed trades.", f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות."))
         trade_view = trades.copy()
@@ -2823,7 +3243,7 @@ def main() -> None:
                         st.error(f"{tr('Delete failed', 'מחיקה נכשלה')}: {msg}")
 
     else:
-        st.title(tr("Data Quality", "בקרת נתונים ואיכות"))
+        st.markdown(f"### {tr('Data Quality', 'בקרת נתונים ואיכות')}")
         if is_demo:
             non_empty_cells, total_cells, completeness = dataframe_completeness(df)
             dupes = int(df.duplicated(subset=["Trade_ID"]).sum()) if "Trade_ID" in df.columns else 0
