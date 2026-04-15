@@ -486,9 +486,17 @@ function readSnapshotRows_() {
 
   const values = ws.getRange(1, 1, lastRow, lastCol).getValues();
   const headers = values[0].map(cleanText);
-  const rows = values.slice(1).filter(function (r) {
-    return cleanText(r[3]) !== "";
-  });
+  const tz = Session.getScriptTimeZone();
+  const rows = values.slice(1)
+    .filter(function(r) { return cleanText(r[3]) !== ""; })
+    .map(function(row) {
+      return row.map(function(cell) {
+        if (Object.prototype.toString.call(cell) === "[object Date]") {
+          return Utilities.formatDate(cell, tz, "yyyy-MM-dd");
+        }
+        return cell;
+      });
+    });
   return { headers: headers, rows: rows };
 }
 
