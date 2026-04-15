@@ -242,13 +242,20 @@ def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = 
     if not is_mobile:
         return fig
     fig.update_layout(
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
-        margin=dict(l=10, r=10, t=30, b=10),
-        hoverlabel=dict(font=dict(size=14)),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.30, xanchor="center", x=0.5, font=dict(size=11)),
+        margin=dict(l=6, r=6, t=32, b=8),
+        hoverlabel=dict(font=dict(size=13), bgcolor="rgba(30,30,30,0.85)", font_color="#fff"),
+        title_font=dict(size=14),
+        font=dict(size=11),
+        autosize=True,
     )
     if is_bar:
-        fig.update_layout(showlegend=False, coloraxis_showscale=False)
-        fig.update_xaxes(tickangle=45, tickfont=dict(size=10))
+        fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
+        fig.update_xaxes(tickangle=45, tickfont=dict(size=9))
+        fig.update_yaxes(tickfont=dict(size=9))
+    else:
+        fig.update_xaxes(tickfont=dict(size=9))
+        fig.update_yaxes(tickfont=dict(size=9))
     return fig
 
 
@@ -284,6 +291,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     df_header_bg = "#262626" if is_dark else "#fafafa"
     title_color = "#f8fafc" if is_dark else "#0f172a"
     subtitle_color = "#cbd5e1" if is_dark else "#475569"
+    # Mobile bottom nav colors
+    nav_bg = "rgba(22,22,22,0.96)" if is_dark else "rgba(255,255,255,0.96)"
+    nav_border = "rgba(255,255,255,0.09)" if is_dark else "rgba(0,0,0,0.08)"
+    nav_inactive = "#94a3b8" if is_dark else "#64748b"
+    hamburger_bg = "rgba(30,30,30,0.92)" if is_dark else "rgba(255,255,255,0.92)"
+    hamburger_border = "rgba(255,255,255,0.18)" if is_dark else "rgba(203,213,225,0.9)"
     css = f"""
     <style>
     .block-container {{padding-top: 1.2rem;}}
@@ -662,6 +675,100 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
         [data-testid="stDataFrame"] table {{font-size: 12px !important;}}
         [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td {{padding: 0.28rem 0.36rem !important;}}
+        /* ── Hide Plotly toolbar on mobile (saves space, no useful action for touch) ── */
+        .modebar-container, .modebar {{ display: none !important; }}
+        /* ── Dark-mode-aware hamburger button ── */
+        [data-testid="collapsedControl"] button,
+        [data-testid="stSidebarCollapsedControl"] button,
+        button[aria-label*="sidebar"],
+        button[aria-label*="Sidebar"] {{
+            background: {hamburger_bg} !important;
+            border: 1px solid {hamburger_border} !important;
+        }}
+        /* ── Compact page title on mobile ── */
+        .app-main-title {{ font-size: 1.45rem !important; margin-bottom: 0.08rem !important; }}
+        .app-sub-title {{ font-size: 0.86rem !important; margin-bottom: 0.18rem !important; }}
+        /* ── Touch-optimized button height (Apple HIG: 44px min tap target) ── */
+        button[data-testid="baseButton-secondary"],
+        button[data-testid="baseButton-primary"],
+        [data-testid="stFormSubmitButton"] button {{
+            min-height: 44px !important;
+        }}
+        /* ── Push content above the bottom nav bar ── */
+        .block-container {{
+            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
+        }}
+        /* ═══════════════ BOTTOM TAB BAR (injected by JS) ═══════════════ */
+        #pm-bottom-nav {{
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            z-index: 9999999;
+            display: flex;
+            align-items: stretch;
+            height: 56px;
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            background: {nav_bg};
+            border-top: 1px solid {nav_border};
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            box-shadow: 0 -2px 16px rgba(0,0,0,0.10);
+        }}
+        .pm-bn-item {{
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+            padding: 4px 2px;
+            color: {nav_inactive};
+            font-family: inherit;
+            transition: color 0.12s ease, transform 0.08s ease;
+            position: relative;
+        }}
+        .pm-bn-item:active {{ transform: scale(0.88); }}
+        .pm-bn-icon {{ font-size: 20px; line-height: 1; display: block; }}
+        .pm-bn-label {{
+            font-size: 10px;
+            font-weight: 500;
+            line-height: 1.2;
+            display: block;
+            opacity: 0.7;
+            max-width: 60px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .pm-bn-active {{ color: #4f46e5 !important; }}
+        .pm-bn-active .pm-bn-label {{ font-weight: 700 !important; opacity: 1 !important; }}
+        .pm-bn-active::after {{
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 30px;
+            height: 3px;
+            background: #4f46e5;
+            border-radius: 0 0 4px 4px;
+        }}
+        /* ═══════════════ END BOTTOM TAB BAR ═══════════════ */
+        /* Pre-hide the 4-option mobile page-selector radio before JS takes over.
+           :has() is supported in all modern mobile browsers (Chrome 105+, Safari 15.4+). */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
+            position: absolute !important;
+            left: -9999px !important;
+            width: 1px !important;
+            height: 1px !important;
+            overflow: hidden !important;
+        }}
     }}
     </style>
     """
@@ -836,15 +943,128 @@ def inject_client_fixes() -> None:
             rootWin.__pmSwipeBound = true;
           }
 
+          // ═══════════════════════════════════════════════════
+          // MOBILE BOTTOM TAB BAR
+          // Mirrors the Streamlit radio nav as a native-feel
+          // bottom bar with icons + active pip indicator.
+          // ═══════════════════════════════════════════════════
+          const PM_NAV_ICONS = ['📊', '💼', '🛡️', '📋'];
+          let _pmNavTimer = null;
+
+          function _pmIsMobile() {
+            try {
+              if ((rootWin.innerWidth || 769) <= 768) return true;
+              const qp = new URLSearchParams(rootWin.location.search);
+              if (qp.get('mobile') === '1' || qp.get('mobile') === 'true') return true;
+            } catch (_) {}
+            return false;
+          }
+
+          function _pmFindNavGroup() {
+            // The mobile radio nav has exactly 4 items.
+            const groups = Array.from(rootDoc.querySelectorAll('[role="radiogroup"]'));
+            for (const g of groups) {
+              if (g.querySelectorAll('[data-baseweb="radio"]').length === 4) return g;
+            }
+            return null;
+          }
+
+          function _pmLabelText(item) {
+            // Extract visible text from a BaseWeb radio label.
+            const candidates = Array.from(item.querySelectorAll('span, p, div'))
+              .filter(function (el) { return el.children.length === 0; });
+            for (const c of candidates) {
+              const t = (c.textContent || '').trim();
+              if (t && t.length <= 20) return t;
+            }
+            return (item.textContent || '').trim().slice(0, 20);
+          }
+
+          function buildMobileNav() {
+            if (!_pmIsMobile()) return;
+            const group = _pmFindNavGroup();
+            if (!group) return;
+            const items = Array.from(group.querySelectorAll('[data-baseweb="radio"]'));
+            if (items.length !== 4) return;
+
+            const activeIdx = items.findIndex(function (el) {
+              const inp = el.querySelector('input[type="radio"]');
+              return inp && inp.checked;
+            });
+
+            // Create nav element once
+            let nav = rootDoc.getElementById('pm-bottom-nav');
+            const alreadyBuilt = nav && nav.children.length === 4;
+            const currentActive = nav ? Array.from(nav.children).findIndex(function (b) {
+              return b.classList.contains('pm-bn-active');
+            }) : -1;
+
+            if (alreadyBuilt && currentActive === activeIdx) return; // nothing to update
+
+            if (!nav) {
+              nav = rootDoc.createElement('nav');
+              nav.id = 'pm-bottom-nav';
+              nav.setAttribute('aria-label', 'Navigation');
+              rootDoc.body.appendChild(nav);
+            }
+
+            nav.innerHTML = '';
+            items.forEach(function (item, idx) {
+              const label = _pmLabelText(item);
+              const inp = item.querySelector('input[type="radio"]');
+              const isActive = inp && inp.checked;
+
+              const btn = rootDoc.createElement('button');
+              btn.type = 'button';
+              btn.className = 'pm-bn-item' + (isActive ? ' pm-bn-active' : '');
+              btn.setAttribute('aria-pressed', String(isActive));
+              btn.innerHTML =
+                '<span class="pm-bn-icon">' + PM_NAV_ICONS[idx] + '</span>' +
+                '<span class="pm-bn-label">' + label + '</span>';
+
+              btn.addEventListener('click', function () {
+                // Click the underlying radio input to trigger Streamlit rerun
+                if (inp) inp.click();
+                // Instant visual feedback before Streamlit rerun
+                Array.from(nav.children).forEach(function (b, i) {
+                  b.classList.toggle('pm-bn-active', i === idx);
+                  b.setAttribute('aria-pressed', String(i === idx));
+                });
+              }, { passive: false });
+
+              nav.appendChild(btn);
+            });
+
+            // Visually hide the original Streamlit radio widget (keep it DOM-accessible for state)
+            const radioWrapper = group.closest('[data-testid="stRadio"]');
+            if (radioWrapper && !radioWrapper.__pmHidden) {
+              radioWrapper.__pmHidden = true;
+              radioWrapper.setAttribute('style',
+                (radioWrapper.getAttribute('style') || '') +
+                '; position:absolute !important; left:-9999px !important;' +
+                ' width:1px !important; height:1px !important; overflow:hidden !important;'
+              );
+            }
+          }
+
+          function scheduleBuildNav() {
+            clearTimeout(_pmNavTimer);
+            _pmNavTimer = setTimeout(buildMobileNav, 90);
+          }
+          // ═══════════════════════════════════════════════════
+
           function run() {
             removeBranding();
             setupTabSwipe();
+            scheduleBuildNav();
           }
 
           run();
           const obs = new MutationObserver(run);
           obs.observe(rootDoc.body, { childList: true, subtree: true });
           rootWin.setInterval(removeBranding, 1200);
+          // Poll nav active state at 500ms so it stays in sync after Streamlit reruns
+          rootWin.setInterval(scheduleBuildNav, 500);
           window.setInterval(function () {
             injectHideStyle(document);
             if (rootDoc !== document) injectHideStyle(rootDoc);
