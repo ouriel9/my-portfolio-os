@@ -571,10 +571,31 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             box-shadow: none !important;
             z-index: 100001 !important;
         }}
-        /* Hide Deploy button and Streamlit branding on mobile */
-        [data-testid="stToolbar"] button:has(span),
+        /* Hide Deploy button and branding on mobile, but keep sidebar expand */
+        [data-testid="stAppDeployButton"],
+        [data-testid="stBaseButton-header"],
         [data-testid="stStatusWidget"] {{
             display: none !important;
+        }}
+        /* Sidebar expand button — force visible as fixed hamburger */
+        [data-testid="stExpandSidebarButton"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            position: fixed !important;
+            top: calc(0.55rem + env(safe-area-inset-top, 0px)) !important;
+            left: 0.65rem !important;
+            z-index: 100002 !important;
+            width: 40px !important;
+            height: 40px !important;
+            border-radius: 10px !important;
+            border: 1px solid rgba(203, 213, 225, 0.9) !important;
+            background: rgba(255, 255, 255, 0.95) !important;
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12) !important;
+            align-items: center !important;
+            justify-content: center !important;
+            cursor: pointer !important;
+            -webkit-tap-highlight-color: transparent !important;
         }}
         .block-container {{
             padding-top: 0.45rem !important;
@@ -781,12 +802,18 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
            PAGE SELECTOR RADIO → INLINE TOP SEGMENTED CONTROL
            Renders above the title. :has() Chrome 105+, Safari 15.4+.
         ══════════════════════════════════════════════════════════════════ */
+        /* Force the element container holding the page nav to full width */
+        [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
+            width: 100% !important;
+        }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
             background: {nav_bg} !important;
             border: 1px solid {nav_border} !important;
             border-radius: 12px !important;
             padding: 3px !important;
             margin: 0 0 6px 0 !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-testid="stWidgetLabel"] {{
