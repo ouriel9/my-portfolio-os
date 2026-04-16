@@ -548,74 +548,6 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
             background: {sidebar_bg} !important;
         }}
-        /* ── Desktop: page-selector radio as horizontal tab bar ── */
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
-            position: static !important;
-            background: {sidebar_bg} !important;
-            border-bottom: 1px solid {metric_border} !important;
-            border-top: none !important;
-            box-shadow: none !important;
-            backdrop-filter: none !important;
-            -webkit-backdrop-filter: none !important;
-            margin: -1.4rem -3rem 1.2rem -3rem !important;
-            padding: 0 1.5rem !important;
-            z-index: 10 !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-testid="stWidgetLabel"] {{ display: none !important; }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [role="radiogroup"] {{
-            display: flex !important;
-            flex-direction: row !important;
-            height: 46px !important;
-            width: auto !important;
-            align-items: stretch !important;
-            gap: 0 !important;
-            padding: 0 !important;
-            margin: 0 !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] {{
-            flex: 0 0 auto !important;
-            display: flex !important;
-            flex-direction: row !important;
-            align-items: center !important;
-            justify-content: center !important;
-            padding: 0 1.3rem !important;
-            margin: 0 !important;
-            border: none !important;
-            border-radius: 0 !important;
-            border-bottom: 2px solid transparent !important;
-            margin-bottom: -1px !important;
-            background: transparent !important;
-            cursor: pointer !important;
-            position: relative !important;
-            gap: 0.4rem !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"]::before {{ display: none !important; }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] svg,
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] input[type="radio"] {{ display: none !important; }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] p {{
-            white-space: nowrap !important;
-            font-size: 14px !important;
-            font-weight: 500 !important;
-            color: {metric_label} !important;
-            line-height: 1 !important;
-            margin: 0 !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"]:has(input:checked) {{
-            border-bottom-color: #4f46e5 !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"]:has(input:checked) p {{
-            color: #4f46e5 !important;
-            font-weight: 700 !important;
-        }}
     }}
     @media (max-width: 980px) {{
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
@@ -989,23 +921,45 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         background-color: {dark_bg2} !important;
         color: {dark_text} !important;
     }}
-    /* Selectbox / Dropdown */
+    /* Selectbox / Dropdown — the input box itself */
     [data-baseweb="select"] > div,
     [data-baseweb="select"] > div > div {{
         background-color: {dark_bg2} !important;
         border-color: {dark_border} !important;
         color: {dark_text} !important;
     }}
+    [data-baseweb="select"] svg {{
+        fill: {dark_muted} !important;
+    }}
+    /* Dropdown popover / portal (rendered at body level) */
+    [data-baseweb="popover"],
     [data-baseweb="popover"] > div,
+    [data-baseweb="popover"] [data-baseweb="menu"],
     [data-baseweb="menu"],
     [data-baseweb="menu"] ul,
-    [data-baseweb="menu"] li {{
+    [data-baseweb="menu"] li,
+    [role="listbox"],
+    [role="listbox"] li,
+    [role="listbox"] [role="option"],
+    [data-baseweb="layer"] [data-baseweb="popover"],
+    [data-baseweb="layer"] [data-baseweb="menu"],
+    [data-baseweb="layer"] ul {{
         background-color: {dark_bg2} !important;
         color: {dark_text} !important;
     }}
     [data-baseweb="menu"] li:hover,
-    [data-baseweb="menu"] [aria-selected="true"] {{
+    [data-baseweb="menu"] [aria-selected="true"],
+    [role="option"]:hover,
+    [role="option"][aria-selected="true"],
+    [role="listbox"] li:hover {{
         background-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    /* Highlighted / focused option */
+    [data-baseweb="menu"] li[aria-selected="true"],
+    [role="option"][aria-selected="true"] {{
+        background-color: rgba(99,102,241,0.25) !important;
+        color: {dark_text} !important;
     }}
     /* Tabs */
     [data-baseweb="tab-list"] {{
@@ -1126,14 +1080,34 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     [data-testid="stPlotlyChart"] .main-svg .bg {{
         fill: transparent !important;
     }}
-    /* ── DataFrames: force all cell layers dark ── */
-    [data-testid="stDataFrame"],
-    [data-testid="stDataFrame"] > div,
-    [data-testid="stDataFrame"] [data-testid="stDataFrameResizable"],
-    [data-testid="stDataFrameContainer"] {{
-        background-color: {dark_bg2} !important;
+    /* ── DataFrames: force dark via canvas inversion + DOM overrides ── */
+    /* The Glide-Data-Grid renders on <canvas> using Streamlit's compiled
+       theme (from config.toml). CSS cannot style canvas pixels, so we
+       invert the entire dataframe container and then hue-rotate to
+       preserve the original hue intent (green=profit, red=loss). */
+    [data-testid="stDataFrame"] {{
+        background-color: transparent !important;
         border-radius: 8px !important;
         overflow: hidden !important;
+        filter: invert(0.88) hue-rotate(180deg) !important;
+    }}
+    /* Undo the inversion for any images/icons inside the dataframe */
+    [data-testid="stDataFrame"] img {{
+        filter: invert(1) hue-rotate(180deg) !important;
+    }}
+    /* DOM-rendered fallback (HTML tables used by data_editor) */
+    [data-testid="stDataFrame"] table {{
+        background-color: {dark_bg2} !important;
+    }}
+    [data-testid="stDataFrame"] table th {{
+        background-color: {dark_bg} !important;
+        color: {dark_text} !important;
+        border-color: {dark_border} !important;
+    }}
+    [data-testid="stDataFrame"] table td {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+        border-color: {dark_border} !important;
     }}
     [data-testid="stDataFrame"] [role="gridcell"],
     [data-testid="stDataFrame"] [role="rowheader"] {{
@@ -1141,26 +1115,199 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         color: {dark_text} !important;
         border-color: {dark_border} !important;
     }}
-    [data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"],
-    [data-testid="stDataFrame"] [role="row"]:hover [role="rowheader"] {{
-        background-color: {dark_border} !important;
+    [data-testid="stDataFrame"] [role="columnheader"] {{
+        background-color: {dark_bg} !important;
+        color: {dark_text} !important;
+        border-color: {dark_border} !important;
     }}
-    /* ── Desktop tab nav in dark mode ── */
-    @media (min-width: 769px) {{
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
-            background: {dark_bg} !important;
-            border-bottom-color: {dark_border} !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] p {{
-            color: {dark_muted} !important;
-        }}
+    /* ── Sidebar dark mode ── */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] > div:first-child,
+    [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+        background-color: {dark_bg2} !important;
+        color: {dark_text} !important;
+    }}
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] label {{
+        color: {dark_text} !important;
+    }}
+    [data-testid="stSidebar"] [data-baseweb="select"] > div,
+    [data-testid="stSidebar"] [data-baseweb="select"] > div > div {{
+        background-color: {dark_bg} !important;
+        border-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    /* option_menu in dark sidebar */
+    [data-testid="stSidebar"] .nav {{
+        background-color: {dark_bg} !important;
+        border-radius: 10px !important;
+    }}
+    [data-testid="stSidebar"] .nav-link {{
+        color: {dark_muted} !important;
+    }}
+    [data-testid="stSidebar"] .nav-link:hover {{
+        background-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    [data-testid="stSidebar"] .nav-link.active,
+    [data-testid="stSidebar"] .nav-link-selected {{
+        background-color: {dark_border} !important;
+        color: {dark_text} !important;
+    }}
+    /* ── Metrics/KPI cards dark mode ── */
+    [data-testid="stMetric"] {{
+        background-color: {dark_bg2} !important;
+        border-color: {dark_border} !important;
+    }}
+    [data-testid="stMetricValue"] {{
+        color: {dark_text} !important;
+    }}
+    [data-testid="stMetricLabel"] {{
+        color: {dark_muted} !important;
+    }}
+    [data-testid="stMetricDelta"] svg {{
+        fill: currentColor !important;
+    }}
+    /* ── Form containers ── */
+    [data-testid="stForm"] {{
+        background-color: {dark_bg2} !important;
+        border-color: {dark_border} !important;
+    }}
+    /* ── Selectbox label text ── */
+    [data-testid="stSelectbox"] label,
+    [data-testid="stMultiSelect"] label,
+    [data-testid="stTextInput"] label,
+    [data-testid="stNumberInput"] label,
+    [data-testid="stDateInput"] label {{
+        color: {dark_text} !important;
+    }}
+    /* ── Fullscreen button ── */
+    button[title="View fullscreen"] {{
+        color: {dark_muted} !important;
+    }}
+    /* ── Scrollbar dark ── */
+    ::-webkit-scrollbar {{
+        width: 8px;
+        height: 8px;
+    }}
+    ::-webkit-scrollbar-track {{
+        background: {dark_bg} !important;
+    }}
+    ::-webkit-scrollbar-thumb {{
+        background: {dark_border} !important;
+        border-radius: 4px;
+    }}
+    ::-webkit-scrollbar-thumb:hover {{
+        background: {dark_muted} !important;
     }}
     /* ══════════════ END DARK MODE ══════════════ */
     </style>
     """
 
     st.markdown(css, unsafe_allow_html=True)
+
+
+def inject_dark_dropdown_fix(is_dark: bool) -> None:
+    """Inject dark-mode styles for dropdown popovers into the parent document.
+
+    Streamlit's BaseWeb selectbox dropdown is rendered as a portal at the
+    document root level.  CSS injected via st.markdown lives inside the
+    Streamlit container and cannot override Styletron's inline styles on
+    the portal.  This function uses a tiny JS snippet to plant a <style>
+    tag directly in the parent document <head> with high-specificity rules.
+    """
+    if not is_dark:
+        # In light mode, remove any leftover dark-dropdown style tag.
+        components.html(
+            """<script>(function(){
+              try {
+                var d = window.parent ? window.parent.document : document;
+                var s = d.getElementById('pm-dark-dropdown');
+                if (s) s.remove();
+              } catch(e){}
+            })();</script>""",
+            height=0, width=0,
+        )
+        return
+
+    dark_bg2 = "#1e293b"
+    dark_text = "#f1f5f9"
+    dark_border = "#334155"
+    dark_accent = "rgba(99,102,241,0.25)"
+    dark_muted = "#94a3b8"
+
+    dropdown_css = f"""
+[data-baseweb="popover"] {{
+  background-color: {dark_bg2} !important;
+}}
+[data-baseweb="popover"] > div {{
+  background-color: {dark_bg2} !important;
+  border-color: {dark_border} !important;
+}}
+[data-baseweb="menu"],
+[data-baseweb="menu"] ul {{
+  background-color: {dark_bg2} !important;
+}}
+[data-baseweb="menu"] li,
+[role="option"],
+[role="listbox"] li {{
+  background-color: {dark_bg2} !important;
+  color: {dark_text} !important;
+}}
+[data-baseweb="menu"] li:hover,
+[role="option"]:hover,
+[role="listbox"] li:hover {{
+  background-color: {dark_border} !important;
+  color: {dark_text} !important;
+}}
+[data-baseweb="menu"] li[aria-selected="true"],
+[role="option"][aria-selected="true"] {{
+  background-color: {dark_accent} !important;
+  color: {dark_text} !important;
+}}
+[data-baseweb="select"] svg {{
+  fill: {dark_muted} !important;
+}}
+/* Force all portal-level popover layers */
+body > div[data-baseweb="layer"] {{
+  z-index: 999999 !important;
+}}
+body > div[data-baseweb="layer"] [data-baseweb="popover"],
+body > div[data-baseweb="layer"] [data-baseweb="popover"] > div,
+body > div[data-baseweb="layer"] ul,
+body > div[data-baseweb="layer"] li {{
+  background-color: {dark_bg2} !important;
+  color: {dark_text} !important;
+}}
+body > div[data-baseweb="layer"] li:hover {{
+  background-color: {dark_border} !important;
+}}
+body > div[data-baseweb="layer"] li[aria-selected="true"] {{
+  background-color: {dark_accent} !important;
+}}
+"""
+    # Escape for JS string
+    escaped = dropdown_css.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+
+    components.html(
+        f"""<script>(function(){{
+          try {{
+            var d = window.parent ? window.parent.document : document;
+            var s = d.getElementById('pm-dark-dropdown');
+            if (!s) {{
+              s = d.createElement('style');
+              s.id = 'pm-dark-dropdown';
+              d.head.appendChild(s);
+            }}
+            s.textContent = `{escaped}`;
+          }} catch(e){{}}
+        }})();</script>""",
+        height=0, width=0,
+    )
 
 
 def inject_client_fixes() -> None:
@@ -1600,7 +1747,7 @@ def _signed_value_color(value: object) -> str:
         return "color: #16a34a; font-weight: 600;"
     if num < 0:
         return "color: #dc2626; font-weight: 600;"
-    return "color: #334155;"
+    return ""
 
 
 def _apply_signed_color(styler: object, columns: list[str]) -> object:
@@ -3023,6 +3170,7 @@ def main() -> None:
 
     inject_global_styles(language, theme_mode)
     inject_client_fixes()
+    inject_dark_dropdown_fix(_resolve_theme_base(theme_mode) == "dark")
 
     _render_premium_sidebar_lottie(language)
     _space(16)
@@ -3036,26 +3184,73 @@ def main() -> None:
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
     template = "plotly_dark" if is_dark else "plotly_white"
-    # ── Page navigation: always rendered, no server-side mobile detection. ──
-    # CSS transforms this radio into:
-    #   • a fixed bottom tab bar on mobile  (via @media max-width:768px + :has())
-    #   • a horizontal tab bar under the header on desktop (via @media min-width:769px)
-    # This eliminates the unreliable user-agent mobile detection for navigation.
-    page_labels = {
-        tr("📊\nOverview", "📊\nסקירה"): page_dashboard,
-        tr("💼\nTrades", "💼\nעסקאות"): page_manage,
-        tr("🛡\nRisk", "🛡\nסיכון"): page_risk,
-        tr("📋\nData", "📋\nנתונים"): page_quality,
-    }
-    page_choice = st.radio(
-        tr("Page", "עמוד"),
-        list(page_labels.keys()),
-        horizontal=True,
-        key="page_selector",
-        label_visibility="collapsed",
-    )
-    page = page_labels.get(page_choice, page_dashboard)
-    _space(8)
+
+    if is_mobile:
+        # ── Mobile: bottom tab bar via CSS-transformed st.radio ──
+        page_labels = {
+            tr("📊\nOverview", "📊\nסקירה"): page_dashboard,
+            tr("💼\nTrades", "💼\nעסקאות"): page_manage,
+            tr("🛡\nRisk", "🛡\nסיכון"): page_risk,
+            tr("📋\nData", "📋\nנתונים"): page_quality,
+        }
+        page_choice = st.radio(
+            tr("Page", "עמוד"),
+            list(page_labels.keys()),
+            horizontal=True,
+            key="page_selector",
+            label_visibility="collapsed",
+        )
+        page = page_labels.get(page_choice, page_dashboard)
+        _space(8)
+    else:
+        # ── Desktop: sidebar option-menu navigation ──
+        st.sidebar.title(tr("Navigation", "ניווט"))
+        if option_menu is not None:
+            nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
+            nav_container_border = "0px solid transparent"
+            nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
+            nav_text_color = "#e2e8f0" if is_dark else "#0f172a"
+            nav_hover_color = "#334155" if is_dark else "#e5e7eb"
+            nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
+            nav_selected_text = "#ffffff" if is_dark else "#0f172a"
+            with st.sidebar:
+                page = option_menu(
+                    menu_title=None,
+                    options=page_options,
+                    icons=["house", "wallet", "shield-check", "database-check"],
+                    default_index=0,
+                    orientation="vertical",
+                    styles={
+                        "container": {
+                            "padding": "0.32rem 0.2rem",
+                            "background-color": nav_container_bg,
+                            "border-radius": "10px",
+                            "border": nav_container_border,
+                            "direction": "ltr",
+                        },
+                        "icon": {"color": nav_icon_color, "font-size": "16px"},
+                        "nav-link": {
+                            "font-size": "14px",
+                            "text-align": "left",
+                            "direction": "ltr",
+                            "margin": "2px 0",
+                            "padding": "10px 12px 10px 12px",
+                            "border-radius": "8px",
+                            "--hover-color": nav_hover_color,
+                            "color": nav_text_color,
+                        },
+                        "nav-link-selected": {
+                            "background-color": nav_selected_bg,
+                            "color": nav_selected_text,
+                            "font-weight": "600",
+                            "text-align": "left",
+                            "direction": "ltr",
+                        },
+                    },
+                )
+        else:
+            st.sidebar.caption(tr("Install streamlit-option-menu for enhanced navigation.", "להשלמת תפריט הניווט יש להתקין streamlit-option-menu."))
+            page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options)
 
     st.markdown(
         f"<div class='app-header-wrap'><h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>"
