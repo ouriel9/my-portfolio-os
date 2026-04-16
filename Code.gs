@@ -43,16 +43,23 @@ function normalizeDateOnly_(val) {
   }
   const s = cleanText(val);
   if (!s) return "";
+
+  // Try DD/MM/YYYY or DD/MM/YY first (Israeli format) before anything else
+  const slashParts = s.split("/");
+  if (slashParts.length === 3) {
+    const dd = ("0" + slashParts[0]).slice(-2);
+    const mm = ("0" + slashParts[1]).slice(-2);
+    const yyyy = slashParts[2].length === 2 ? "20" + slashParts[2] : slashParts[2].slice(0, 4);
+    return yyyy + "-" + mm + "-" + dd;
+  }
+
+  // Already in YYYY-MM-DD or similar ISO format
   const d = new Date(s);
   if (String(d) !== "Invalid Date") {
     return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
   }
-  const parts = s.split("/");
-  if (parts.length < 3) return s;
-  const dd = ("0" + parts[0]).slice(-2);
-  const mm = ("0" + parts[1]).slice(-2);
-  const yyyy = parts[2].length === 2 ? "20" + parts[2] : parts[2].slice(0, 4);
-  return yyyy + "-" + mm + "-" + dd;
+
+  return s;
 }
 
 function inferCryptoLocationByFields_(platform, type, ticker, purchaseDate, currentLocation) {
