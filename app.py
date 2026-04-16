@@ -129,6 +129,7 @@ COLUMN_LABELS = {
 
 SNAPSHOT_HEADERS = {
     "Purchase_Date": {LANG_EN: "Purchase Date", LANG_HE: "תאריך רכישה"},
+    "Current_Location": {LANG_EN: "Current Location", LANG_HE: "מיקום נוכחי"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
     "Type": {LANG_EN: "Asset Type", LANG_HE: "סוג נכס"},
     "Ticker": {LANG_EN: "Ticker", LANG_HE: "טיקר"},
@@ -2806,7 +2807,7 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
     }
     df = df.rename(columns=rename)
 
-    for col in ["Platform", "Type", "Ticker", "Status", "Origin_Currency"]:
+    for col in ["Current_Location", "Platform", "Type", "Ticker", "Status", "Origin_Currency"]:
         if col not in df.columns:
             df[col] = ""
         df[col] = df[col].map(_clean)
@@ -4065,11 +4066,54 @@ def main() -> None:
                     # Default ordering: newest purchase date first.
                     tx_view["__sort_date__"] = pd.to_datetime(tx_view["Purchase_Date"], errors="coerce")
                     tx_view = tx_view.sort_values("__sort_date__", ascending=False, na_position="last").drop(columns=["__sort_date__"])
-            tx_view, tx_date_cfg = _with_calendar_purchase_date(tx_view, language)
+                yield_ils_cols = [
+                    c for c in tx_view.columns
+                    if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())
+                    and ("שקל" in str(c) or "ils" in str(c).lower())
+                ]
+                yield_origin_cols = [
+                    c for c in tx_view.columns
+                    if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())
+                    and ("מקור" in str(c) or "origin" in str(c).lower())
+                ]
+                yield_cols = []
+                for col in yield_ils_cols + yield_origin_cols:
+                    if col not in yield_cols:
+                        yield_cols.append(col)
+                if not yield_cols:
+                    yield_cols = [c for c in tx_view.columns if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())]
+                if yield_cols:
+                    non_yield_cols = [c for c in tx_view.columns if c not in yield_cols]
+                    tx_view = tx_view[non_yield_cols + yield_cols]
+
+            tx_view, _ = _with_calendar_purchase_date(tx_view, language)
             if tx_view.empty:
                 st.info(tr("No transactions to display", "אין עסקאות להצגה"))
             else:
-                st.dataframe(tx_view, use_container_width=True, hide_index=True, column_config=tx_date_cfg)
+                display_view = tx_view.copy()
+
+                def _to_ratio_for_display(v: object) -> float:
+                    s = _clean(v)
+                    if not s:
+                        return np.nan
+                    n = _num(v)
+                    return n / 100.0 if "%" in s else n
+
+                yield_cols = [c for c in display_view.columns if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())]
+                for col in yield_cols:
+                    display_view[col] = display_view[col].map(_to_ratio_for_display)
+
+                style_format: Dict[str, object] = {col: "{:.2%}" for col in yield_cols}
+                for date_col in ["Purchase_Date", "תאריך רכישה"]:
+                    if date_col in display_view.columns:
+                        style_format[date_col] = lambda d: d.strftime("%d/%m/%Y") if pd.notna(d) else ""
+
+                tx_styled = display_view.style
+                if style_format:
+                    tx_styled = tx_styled.format(style_format, na_rep="")
+                if yield_cols:
+                    tx_styled = _apply_signed_color(tx_styled, yield_cols)
+                st.dataframe(tx_styled, use_container_width=True, hide_index=True)
 
     elif page == page_risk:
         # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
@@ -4215,7 +4259,7 @@ def main() -> None:
         status_filter = st.multiselect(tr("Status filter", "סינון סטטוס"), sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[])
         if status_filter:
             trade_view = trade_view[trade_view["Status"].isin(status_filter)]
-        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_Display", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
+        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Current_Location", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_Display", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
         if preview_cols:
             sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in trade_view.columns]
             if sort_cols:
@@ -4253,15 +4297,17 @@ def main() -> None:
         }
         mode_label = st.radio(tr("Action", "פעולה"), list(mode_label_map.keys()), horizontal=True)
         mode = mode_label_map[mode_label]
-        editable_cols = ["Platform", "Type", "Ticker", "Purchase_Date", "Quantity", "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID"]
+        editable_cols = ["Current_Location", "Platform", "Type", "Ticker", "Purchase_Date", "Quantity", "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID"]
         platforms = trades["Platform"].dropna().astype(str).tolist() if "Platform" in trades.columns else []
         types = trades["Type"].dropna().astype(str).tolist() if "Type" in trades.columns else []
         tickers = trades["Ticker"].dropna().astype(str).tolist() if "Ticker" in trades.columns else []
         currencies = trades["Origin_Currency"].dropna().astype(str).tolist() if "Origin_Currency" in trades.columns else []
+        locations = trades["Current_Location"].dropna().astype(str).tolist() if "Current_Location" in trades.columns else []
 
         if mode == "add":
             with st.form("add_form"):
                 new_row = {
+                    "Current_Location": _select_or_type(tr("Current location", "מיקום נוכחי"), locations, "", "add_location", tr),
                     "Platform": _select_or_type(tr("Platform", "פלטפורמה"), platforms, "Bit2C", "add_platform", tr),
                     "Type": _select_or_type(tr("Asset type", "סוג נכס"), types, "קריפטו", "add_type", tr),
                     "Ticker": _select_or_type(tr("Ticker", "טיקר"), tickers, "BTC", "add_ticker", tr).upper(),
@@ -4316,6 +4362,8 @@ def main() -> None:
                             edited[col] = st.date_input(col, value=(d.date() if pd.notna(d) else datetime.now().date()), key=f"e_{col}").strftime("%Y-%m-%d")
                         elif col == "Platform":
                             edited[col] = _select_or_type(tr("Platform", "פלטפורמה"), platforms, _clean(val), f"edit_{selected}_platform", tr)
+                        elif col == "Current_Location":
+                            edited[col] = _select_or_type(tr("Current location", "מיקום נוכחי"), locations, _clean(val), f"edit_{selected}_location", tr)
                         elif col == "Type":
                             edited[col] = _select_or_type(tr("Asset type", "סוג נכס"), types, _clean(val), f"edit_{selected}_type", tr)
                         elif col == "Ticker":
