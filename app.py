@@ -1852,7 +1852,14 @@ def _parse_dates_flexible(series: pd.Series) -> pd.Series:
 
 
 def _to_trade_id(row: pd.Series) -> str:
-    raw = f"{row.get('Platform','')}|{row.get('Ticker','')}|{row.get('Purchase_Date','')}|{row.get('Quantity',0)}|{row.get('Cost_ILS',0)}"
+    platform = _clean(row.get("Platform", ""))
+    ticker = _clean(row.get("Ticker", "")).upper()
+    purchase_raw = row.get("Purchase_Date", "")
+    purchase_dt = pd.to_datetime(purchase_raw, errors="coerce", dayfirst=True)
+    purchase_date = purchase_dt.strftime("%Y-%m-%d") if pd.notna(purchase_dt) else _clean(purchase_raw)
+    qty = _num(row.get("Quantity", 0))
+    cost_origin = _num(row.get("Cost_Origin", 0))
+    raw = f"{platform}|{ticker}|{purchase_date}|{qty}|{cost_origin}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -4323,7 +4330,7 @@ def main() -> None:
                     "Action": st.selectbox(tr("Accounting action", "פעולה חשבונאית"), ["BUY", "SELL"]),
                     "Event_Type": "TRADE",
                 }
-                new_row["Trade_ID"] = hashlib.sha1(json.dumps(new_row, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+                new_row["Trade_ID"] = _to_trade_id(pd.Series(new_row))
                 submitted = st.form_submit_button(tr("Save", "שמור"))
 
             if submitted:
