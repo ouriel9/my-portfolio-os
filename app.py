@@ -1568,7 +1568,7 @@ def inject_client_fixes() -> None:
                 '  transform: translateX(0) !important;',
                 '  opacity: 1 !important;',
                 '}',
-              ].join('\n');
+              ].join('\\n');
               if (pmStyle.textContent !== css) pmStyle.textContent = css;
             } catch (e) { /* cross-origin iframe – skip */ }
           }
@@ -4002,7 +4002,7 @@ def main() -> None:
                 except Exception:
                     pass
                 st.session_state["risk_page_last_refresh_ts"] = now_ts
-
+##
         st.markdown(f"### {tr('Risk, Performance and FIFO', 'סיכונים, ביצועים ועלות פיפו')}")
         fifo_df = fifo_metrics(trades)
         st.subheader(tr("FIFO Engine", "מנוע פיפו"))
