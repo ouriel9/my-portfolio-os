@@ -714,17 +714,23 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             direction: ltr !important;
             unicode-bidi: plaintext !important;
         }}
-        .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.35rem !important;}}
-        .pm-card, [data-testid="stMetric"] {{
-            border-radius: 10px !important;
-            padding: 0.4rem 0.5rem !important;
-            box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08) !important;
+        /* ── KPI cards: compact 2x2 grid on mobile ── */
+        .pm-metric-grid {{
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+            gap: 0.3rem !important;
+            margin: 0.2rem 0 0.5rem 0 !important;
         }}
-        .pm-card .pm-title {{font-size: 0.68rem !important;}}
-        .pm-card .pm-value {{font-size: 0.88rem !important;}}
-        .pm-card .pm-delta {{font-size: 0.62rem !important;}}
-        [data-testid="stMetricValue"] {{font-size: 0.88rem !important; white-space: nowrap !important;}}
-        [data-testid="stMetricLabel"] {{font-size: 0.68rem !important;}}
+        .pm-card, [data-testid="stMetric"] {{
+            border-radius: 8px !important;
+            padding: 0.32rem 0.42rem !important;
+            box-shadow: 0 2px 6px rgba(15, 23, 42, 0.07) !important;
+        }}
+        .pm-card .pm-title {{font-size: 0.62rem !important; margin-bottom: 0.15rem !important;}}
+        .pm-card .pm-value {{font-size: 0.82rem !important; line-height: 1.1 !important;}}
+        .pm-card .pm-delta {{font-size: 0.58rem !important; margin-top: 0.1rem !important;}}
+        [data-testid="stMetricValue"] {{font-size: 0.82rem !important; white-space: nowrap !important;}}
+        [data-testid="stMetricLabel"] {{font-size: 0.62rem !important;}}
+        [data-testid="stMetricDelta"] {{font-size: 0.58rem !important;}}
         [data-testid="stDataFrame"] {{overflow-x: auto !important; -ms-overflow-style: none; scrollbar-width: none;}}
         [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
         [data-testid="stDataFrame"] table {{font-size: 12px !important;}}
@@ -1108,12 +1114,17 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     /* ── DataFrames: force dark via canvas inversion + DOM overrides ── */
     /* The Glide-Data-Grid renders on <canvas> using Streamlit's compiled
        theme (from config.toml). CSS cannot style canvas pixels, so we
-       invert the entire dataframe container and then hue-rotate to
-       preserve the original hue intent (green=profit, red=loss). */
+       invert the entire dataframe container and then hue-rotate(180deg)
+       to restore original hue (green stays green, red stays red). */
     [data-testid="stDataFrame"] {{
         background-color: transparent !important;
         border-radius: 8px !important;
         overflow: hidden !important;
+        filter: invert(0.9) hue-rotate(180deg) !important;
+    }}
+    /* Undo the inversion for images/icons inside the dataframe */
+    [data-testid="stDataFrame"] img {{
+        filter: invert(1) hue-rotate(180deg) !important;
     }}
     /* DOM-rendered fallback (HTML tables used by data_editor) */
     [data-testid="stDataFrame"] table {{
