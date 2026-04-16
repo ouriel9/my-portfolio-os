@@ -193,13 +193,20 @@ def _with_calendar_purchase_date(df: pd.DataFrame, language: str) -> Tuple[pd.Da
     date_cols = [c for c in [localized_col, "Purchase_Date", "תאריך רכישה"] if c in out.columns]
     if not date_cols:
         return out, {}
+    mobile_client = _is_mobile_client()
     column_config: Dict[str, object] = {}
     for purchase_col in date_cols:
-        out[purchase_col] = pd.to_datetime(out[purchase_col], errors="coerce").dt.date
-        column_config[purchase_col] = st.column_config.DateColumn(
-            purchase_col,
-            format="DD/MM/YYYY",
-        )
+        parsed = pd.to_datetime(out[purchase_col], errors="coerce")
+        if mobile_client:
+            # Mobile browsers can shift DateColumn by timezone; render as plain date text.
+            out[purchase_col] = parsed.dt.strftime("%d/%m/%Y").fillna("")
+            column_config[purchase_col] = st.column_config.TextColumn(purchase_col)
+        else:
+            out[purchase_col] = parsed.dt.date
+            column_config[purchase_col] = st.column_config.DateColumn(
+                purchase_col,
+                format="DD/MM/YYYY",
+            )
     return out, column_config
 
 
@@ -4409,6 +4416,19 @@ def main() -> None:
                     st.error(tr("Cannot delete in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן למחוק במצב gspread. הגדר Web App URL תקין בצד שמאל."))
                 else:
                     delete_payload = {"Trade_ID": _clean(selected)}
+                    selected_rows = trades[trades["Trade_ID"].astype(str) == selected] if "Trade_ID" in trades.columns else pd.DataFrame()
+                    if not selected_rows.empty:
+                        src = selected_rows.iloc[0]
+                        src_date = pd.to_datetime(src.get("Purchase_Date", ""), errors="coerce")
+                        delete_payload.update(
+                            {
+                                "Platform": _clean(src.get("Platform", "")),
+                                "Ticker": _clean(src.get("Ticker", "")).upper(),
+                                "Purchase_Date": src_date.strftime("%Y-%m-%d") if pd.notna(src_date) else _clean(src.get("Purchase_Date", "")),
+                                "Quantity": float(_num(src.get("Quantity", 0))),
+                                "Cost_Origin": float(_num(src.get("Cost_Origin", 0))),
+                            }
+                        )
                     ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "delete", delete_payload)
                     if ok:
                         st.success(tr("Trade deleted directly from Google Sheets", "הרשומה נמחקה ישירות מ-Google Sheets"))
