@@ -564,26 +564,17 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
         footer {{display: none !important;}}
-        /* ── Collapse Streamlit header on mobile but keep hamburger visible ── */
+        #MainMenu {{display: block !important; visibility: visible !important;}}
         header, [data-testid="stHeader"] {{
-            height: 0 !important;
-            min-height: 0 !important;
-            max-height: 0 !important;
-            padding: 0 !important;
-            margin: 0 !important;
+            display: block !important;
             background: transparent !important;
-            border: none !important;
             box-shadow: none !important;
-            overflow: visible !important;
+            z-index: 100001 !important;
         }}
-        /* Hide toolbar/branding elements inside header */
-        #MainMenu, [data-testid="stToolbar"],
-        [data-testid="stToolbarActions"],
-        [data-testid="stStatusWidget"], [data-testid="stDeployButton"] {{
+        /* Hide Deploy button and Streamlit branding on mobile */
+        [data-testid="stToolbar"] button:has(span),
+        [data-testid="stStatusWidget"] {{
             display: none !important;
-            visibility: hidden !important;
-            height: 0 !important;
-            pointer-events: none !important;
         }}
         .block-container {{
             padding-top: 0.45rem !important;
@@ -786,104 +777,82 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stFormSubmitButton"] button {{
             min-height: 44px !important;
         }}
-        /* ── Push content above the fixed bottom nav ── */
-        .block-container {{
-            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
-        }}
         /* ══════════════════════════════════════════════════════════════════
-           PAGE SELECTOR RADIO → NATIVE CSS BOTTOM TAB BAR
-           Pure CSS — no JS required. Emoji icons come from Python labels.
-           :has() is supported in Chrome 105+, Safari 15.4+, Firefox 121+.
+           PAGE SELECTOR RADIO → INLINE TOP SEGMENTED CONTROL
+           Renders above the title. :has() Chrome 105+, Safari 15.4+.
         ══════════════════════════════════════════════════════════════════ */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
-            position: fixed !important;
-            bottom: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            z-index: 2147483647 !important;
             background: {nav_bg} !important;
-            border-top: 1px solid {nav_border} !important;
-            padding: 0 !important;
-            padding-bottom: env(safe-area-inset-bottom, 0px) !important;
-            backdrop-filter: blur(24px) !important;
-            -webkit-backdrop-filter: blur(24px) !important;
-            box-shadow: 0 -2px 16px rgba(0,0,0,0.10) !important;
-            margin: 0 !important;
+            border: 1px solid {nav_border} !important;
+            border-radius: 12px !important;
+            padding: 3px !important;
+            margin: 0 0 6px 0 !important;
         }}
-        /* Hide the widget label ("Page" / "עמוד") */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-testid="stWidgetLabel"] {{
             display: none !important;
         }}
-        /* Radiogroup: full-width horizontal flex, 56px tall */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [role="radiogroup"] {{
             display: flex !important;
             flex-direction: row !important;
             width: 100% !important;
-            height: 56px !important;
             margin: 0 !important;
             padding: 0 !important;
-            gap: 0 !important;
-            align-items: stretch !important;
+            gap: 2px !important;
         }}
-        /* Each radio item: column, centered */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] {{
             flex: 1 !important;
             display: flex !important;
-            flex-direction: column !important;
             align-items: center !important;
             justify-content: center !important;
-            padding: 4px 2px !important;
+            padding: 7px 2px !important;
             margin: 0 !important;
             border: none !important;
-            border-radius: 0 !important;
+            border-radius: 9px !important;
             background: transparent !important;
             cursor: pointer !important;
-            position: relative !important;
-            gap: 1px !important;
             -webkit-tap-highlight-color: transparent !important;
-            transition: opacity 0.12s ease !important;
+            transition: background 0.15s ease !important;
         }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"]:active {{ opacity: 0.65 !important; }}
-        /* Hide the radio circle SVG and the input */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] svg,
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] input[type="radio"] {{
+        [data-baseweb="radio"] input[type="radio"],
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] > div:first-child {{
             display: none !important;
         }}
-        /* Label text — preserve newlines so emoji and text are on separate lines */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] p {{
-            white-space: pre-line !important;
-            font-size: 9.5px !important;
+            white-space: nowrap !important;
+            font-size: 12px !important;
             font-weight: 500 !important;
             color: {nav_inactive} !important;
-            line-height: 1.25 !important;
+            line-height: 1.2 !important;
             text-align: center !important;
             margin: 0 !important;
         }}
-        /* Selected item: colored text */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) {{
+            background: #4f46e5 !important;
+        }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked) p {{
-            color: #4f46e5 !important;
+            color: #ffffff !important;
             font-weight: 700 !important;
         }}
-        /* Selected item: pip indicator at top */
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"]:has(input:checked)::before {{
-            content: '' !important;
-            position: absolute !important;
-            top: 0 !important;
-            left: 50% !important;
-            transform: translateX(-50%) !important;
-            width: 30px !important;
-            height: 3px !important;
-            background: #4f46e5 !important;
-            border-radius: 0 0 4px 4px !important;
+        /* ── KPI metrics: force 2 columns side-by-side, prevent stacking ── */
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {{
+            flex-wrap: nowrap !important;
+            gap: 0.35rem !important;
+        }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > [data-testid="stColumn"] {{
+            flex: 1 1 0% !important;
+            min-width: 0 !important;
+            max-width: 50% !important;
+            width: 50% !important;
         }}
         /* ══════════════════════════════════════════════════════════════════ */
     }}
@@ -1372,23 +1341,6 @@ def inject_client_fixes() -> None:
               overflow: hidden !important;
               pointer-events: none !important;
             }
-            @media (max-width: 768px) {
-              header, [data-testid="stHeader"] {
-                height: 0 !important;
-                min-height: 0 !important;
-                max-height: 0 !important;
-                padding: 0 !important;
-                background: transparent !important;
-                border: none !important;
-                overflow: visible !important;
-              }
-              #MainMenu, [data-testid="stToolbar"],
-              [data-testid="stToolbarActions"] {
-                display: none !important;
-                visibility: hidden !important;
-                height: 0 !important;
-              }
-            }
           `;
 
           function injectHideStyle(targetDoc) {
@@ -1471,17 +1423,22 @@ def inject_client_fixes() -> None:
 
 
           function findDashboardTabList() {
-            const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
+            // Try both BaseWeb and modern Streamlit selectors
+            const lists = Array.from(rootDoc.querySelectorAll(
+              '[data-baseweb="tab-list"], [role="tablist"], [data-testid="stTabs"] > div:first-child'
+            ));
             const he = ['סקירה', 'חלוקה', 'דוחות', 'סך הפקדות', 'עסקאות'];
             const en = ['overview', 'allocation', 'reports', 'total deposits', 'transactions'];
 
             for (const list of lists) {
-              const labels = Array.from(list.querySelectorAll('[data-baseweb="tab"]')).map((tab) =>
-                (tab.innerText || '').trim().toLowerCase()
-              );
-              const hasHebrew = he.every((name) => labels.some((lbl) => lbl.indexOf(name) >= 0));
-              const hasEnglish = en.every((name) => labels.some((lbl) => lbl.indexOf(name) >= 0));
-              if (hasHebrew || hasEnglish) return list;
+              const tabs = Array.from(list.querySelectorAll(
+                '[data-baseweb="tab"], [role="tab"], button[data-testid="stTab"]'
+              ));
+              if (tabs.length < 3) continue;
+              const labels = tabs.map((tab) => (tab.innerText || '').trim().toLowerCase());
+              const heCount = he.filter((name) => labels.some((lbl) => lbl.indexOf(name) >= 0)).length;
+              const enCount = en.filter((name) => labels.some((lbl) => lbl.indexOf(name) >= 0)).length;
+              if (heCount >= 3 || enCount >= 3) return list;
             }
             return null;
           }
@@ -1525,7 +1482,9 @@ def inject_client_fixes() -> None:
               const tabList = findDashboardTabList();
               if (!tabList) return;
 
-              const currentTabs = Array.from(tabList.querySelectorAll('[data-baseweb="tab"]'));
+              const currentTabs = Array.from(tabList.querySelectorAll(
+                '[data-baseweb="tab"], [role="tab"], button[data-testid="stTab"]'
+              ));
               const active = currentTabs.findIndex((t) => t.getAttribute('aria-selected') === 'true');
               if (active < 0) return;
 
@@ -2804,6 +2763,24 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = 0.0
         df[col] = df[col].map(_num)
 
+    # ── Validate Cost_Origin against Quantity * Origin_Buy_Price ──
+    # If they diverge significantly, recalculate (fixes stale cost data from spreadsheet).
+    qty = df["Quantity"]
+    price = df["Origin_Buy_Price"]
+    expected_cost = qty * price
+    has_both = (qty.abs() > 1e-9) & (price.abs() > 1e-9)
+    cost_orig = df["Cost_Origin"]
+    diverged = has_both & ((cost_orig < 1e-9) | ((cost_orig - expected_cost).abs() / expected_cost.clip(lower=1e-9) > 0.05))
+    if diverged.any():
+        df.loc[diverged, "Cost_Origin"] = expected_cost[diverged]
+        # Proportionally fix Cost_ILS where it was based on the bad Cost_Origin
+        for idx in df.index[diverged]:
+            old_cost = cost_orig.at[idx]
+            new_cost = df.at[idx, "Cost_Origin"]
+            if old_cost > 1e-9 and df.at[idx, "Cost_ILS"] > 1e-9:
+                ratio = new_cost / old_cost
+                df.at[idx, "Cost_ILS"] = df.at[idx, "Cost_ILS"] * ratio
+
     if "Purchase_Date" not in df.columns:
         df["Purchase_Date"] = pd.NaT
     df["Purchase_Date"] = _parse_dates_flexible(df["Purchase_Date"])
@@ -3203,7 +3180,7 @@ def dataframe_completeness(df: pd.DataFrame) -> Tuple[int, int, float]:
 
 
 def main() -> None:
-    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="auto")
 
     settings = load_local_settings()
     language_default = _clean(settings.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE
@@ -3254,12 +3231,12 @@ def main() -> None:
     template = "plotly_dark" if is_dark else "plotly_white"
 
     if is_mobile:
-        # ── Mobile: bottom tab bar via CSS-transformed st.radio ──
+        # ── Mobile: top segmented control for page nav ──
         page_labels = {
-            tr("📊\nOverview", "📊\nסקירה"): page_dashboard,
-            tr("💼\nTrades", "💼\nעסקאות"): page_manage,
-            tr("🛡\nRisk", "🛡\nסיכון"): page_risk,
-            tr("📋\nData", "📋\nנתונים"): page_quality,
+            tr("📊 Overview", "📊 סקירה"): page_dashboard,
+            tr("💼 Trades", "💼 עסקאות"): page_manage,
+            tr("🛡 Risk", "🛡 סיכון"): page_risk,
+            tr("📋 Data", "📋 נתונים"): page_quality,
         }
         page_choice = st.radio(
             tr("Page", "עמוד"),
@@ -3269,7 +3246,6 @@ def main() -> None:
             label_visibility="collapsed",
         )
         page = page_labels.get(page_choice, page_dashboard)
-        _space(8)
     else:
         # ── Desktop: sidebar option-menu navigation ──
         st.sidebar.title(tr("Navigation", "ניווט"))
