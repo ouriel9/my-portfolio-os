@@ -564,12 +564,26 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
         footer {{display: none !important;}}
-        #MainMenu {{display: block !important; visibility: visible !important;}}
+        /* ── Collapse Streamlit header on mobile but keep hamburger visible ── */
         header, [data-testid="stHeader"] {{
-            display: block !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            max-height: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
             background: transparent !important;
+            border: none !important;
             box-shadow: none !important;
-            z-index: 100001 !important;
+            overflow: visible !important;
+        }}
+        /* Hide toolbar/branding elements inside header */
+        #MainMenu, [data-testid="stToolbar"],
+        [data-testid="stToolbarActions"],
+        [data-testid="stStatusWidget"], [data-testid="stDeployButton"] {{
+            display: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            pointer-events: none !important;
         }}
         .block-container {{
             padding-top: 0.45rem !important;
@@ -774,7 +788,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         }}
         /* ── Push content above the fixed bottom nav ── */
         .block-container {{
-            padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+            padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)) !important;
         }}
         /* ══════════════════════════════════════════════════════════════════
            PAGE SELECTOR RADIO → NATIVE CSS BOTTOM TAB BAR
@@ -786,7 +800,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             bottom: 0 !important;
             left: 0 !important;
             right: 0 !important;
-            z-index: 9999998 !important;
+            z-index: 2147483647 !important;
             background: {nav_bg} !important;
             border-top: 1px solid {nav_border} !important;
             padding: 0 !important;
@@ -1349,13 +1363,31 @@ def inject_client_fixes() -> None:
         (function () {
           const hideCss = `
             footer, footer *, [data-testid="stFooter"], [data-testid="stFooter"] *,
-            [data-testid="stAppCreator"], [data-testid="stAppCreator"] * {
+            [data-testid="stAppCreator"], [data-testid="stAppCreator"] *,
+            [data-testid="stDeployButton"], [data-testid="stStatusWidget"] {
               display: none !important;
               visibility: hidden !important;
               opacity: 0 !important;
               max-height: 0 !important;
               overflow: hidden !important;
               pointer-events: none !important;
+            }
+            @media (max-width: 768px) {
+              header, [data-testid="stHeader"] {
+                height: 0 !important;
+                min-height: 0 !important;
+                max-height: 0 !important;
+                padding: 0 !important;
+                background: transparent !important;
+                border: none !important;
+                overflow: visible !important;
+              }
+              #MainMenu, [data-testid="stToolbar"],
+              [data-testid="stToolbarActions"] {
+                display: none !important;
+                visibility: hidden !important;
+                height: 0 !important;
+              }
             }
           `;
 
@@ -1396,7 +1428,8 @@ def inject_client_fixes() -> None:
               'footer',
               '[data-testid="stFooter"]',
               '[data-testid="stAppCreator"]',
-              '[data-testid="stAppCreator"]'
+              '[data-testid="stDeployButton"]',
+              '[data-testid="stStatusWidget"]'
             ];
 
             brandingHosts.forEach((sel) => {
@@ -3479,17 +3512,30 @@ def main() -> None:
         total_value_txt = f"{total_value:,.0f}"
         total_cost_txt = f"{total_cost:,.0f}"
         total_return_txt = f"{total_return:.2%}"
-        kpi_cols = st.columns(4)
-        kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
-        kpi_cols[1].metric(tr("Total Cost (ILS)", "עלות כוללת (₪)"), total_cost_txt)
-        kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), total_return_txt)
-        kpi_cols[3].metric(
-            tr("Closed Positions", "פוזיציות סגורות"),
-            str(len(closed_trades)),
-            f"{len(open_trades)} {tr('open', 'פתוחות')}",
-        )
+        if is_mobile:
+            # ── Mobile: 2x2 compact grid ──
+            kpi_r1 = st.columns(2)
+            kpi_r1[0].metric(tr("Total Value", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
+            kpi_r1[1].metric(tr("Total Cost", "עלות כוללת (₪)"), total_cost_txt)
+            kpi_r2 = st.columns(2)
+            kpi_r2[0].metric(tr("Return", "תשואה כוללת"), total_return_txt)
+            kpi_r2[1].metric(
+                tr("Closed", "סגורות"),
+                str(len(closed_trades)),
+                f"{len(open_trades)} {tr('open', 'פתוחות')}",
+            )
+        else:
+            # ── Desktop: 4 columns in a row ──
+            kpi_cols = st.columns(4)
+            kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
+            kpi_cols[1].metric(tr("Total Cost (ILS)", "עלות כוללת (₪)"), total_cost_txt)
+            kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), total_return_txt)
+            kpi_cols[3].metric(
+                tr("Closed Positions", "פוזיציות סגורות"),
+                str(len(closed_trades)),
+                f"{len(open_trades)} {tr('open', 'פתוחות')}",
+            )
         style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
-        _space(16)
 
         type_mix = pd.DataFrame(columns=["Type", "Current_Value_ILS"])
         if not open_trades.empty and {"Type", "Current_Value_ILS"}.issubset(open_trades.columns):
