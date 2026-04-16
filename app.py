@@ -190,13 +190,16 @@ def localize_snapshot_view(df: pd.DataFrame, language: str) -> pd.DataFrame:
 def _with_calendar_purchase_date(df: pd.DataFrame, language: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
     out = df.copy()
     localized_col = SNAPSHOT_HEADERS.get("Purchase_Date", {}).get(language, "Purchase_Date")
-    date_cols = [c for c in [localized_col, "Purchase_Date", "תאריך רכישה"] if c in out.columns]
+    date_cols: List[str] = []
+    for c in [localized_col, "Purchase_Date", "תאריך רכישה"]:
+        if c in out.columns and c not in date_cols:
+            date_cols.append(c)
     if not date_cols:
         return out, {}
     mobile_client = _is_mobile_client()
     column_config: Dict[str, object] = {}
     for purchase_col in date_cols:
-        parsed = pd.to_datetime(out[purchase_col], errors="coerce")
+        parsed = _parse_dates_flexible(out[purchase_col])
         if mobile_client:
             # Mobile browsers can shift DateColumn by timezone; render as plain date text.
             out[purchase_col] = parsed.dt.strftime("%d/%m/%Y").fillna("")
