@@ -49,6 +49,11 @@ except Exception:
 
 RISK_FREE_ANNUAL = 0.02
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
+_BRAND_PALETTE = [
+    "#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
+    "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
+    "#84cc16", "#0ea5e9", "#a855f7", "#fb923c", "#22d3ee",
+]
 DEFAULT_TRADINGVIEW_WATCHLIST = [
     {"category": "crypto", "ticker": "BTCUSD", "label": "Bitcoin / Dollar", "tv_symbol": "BINANCE:BTCUSDT"},
     {"category": "crypto", "ticker": "ETHUSD", "label": "Ethereum / Dollar", "tv_symbol": "BINANCE:ETHUSDT"},
@@ -581,10 +586,9 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             background-color: {sidebar_bg} !important;
             z-index: 999999 !important;
             direction: ltr !important;
-            transition: none !important;
+            transition: opacity 160ms ease-out !important;
             animation: none !important;
             opacity: 1 !important;
-            transition: opacity 160ms ease-out !important;
             left: 0 !important;
             right: auto !important;
         }}
@@ -710,20 +714,41 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             direction: ltr !important;
             unicode-bidi: plaintext !important;
         }}
-        .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.48rem !important;}}
+        .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr)) !important; gap: 0.35rem !important;}}
         .pm-card, [data-testid="stMetric"] {{
-            border-radius: 12px !important;
-            padding: 0.58rem 0.62rem !important;
-            box-shadow: 0 6px 14px rgba(15, 23, 42, 0.09) !important;
+            border-radius: 10px !important;
+            padding: 0.4rem 0.5rem !important;
+            box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08) !important;
         }}
-        [data-testid="stMetricValue"] {{font-size: 0.94rem !important; white-space: nowrap !important;}}
-        [data-testid="stMetricLabel"] {{font-size: 0.75rem !important;}}
+        .pm-card .pm-title {{font-size: 0.68rem !important;}}
+        .pm-card .pm-value {{font-size: 0.88rem !important;}}
+        .pm-card .pm-delta {{font-size: 0.62rem !important;}}
+        [data-testid="stMetricValue"] {{font-size: 0.88rem !important; white-space: nowrap !important;}}
+        [data-testid="stMetricLabel"] {{font-size: 0.68rem !important;}}
         [data-testid="stDataFrame"] {{overflow-x: auto !important; -ms-overflow-style: none; scrollbar-width: none;}}
         [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
         [data-testid="stDataFrame"] table {{font-size: 12px !important;}}
         [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td {{padding: 0.28rem 0.36rem !important;}}
         /* ── Hide Plotly toolbar on mobile (saves space, no useful action for touch) ── */
         .modebar-container, .modebar {{ display: none !important; }}
+        /* ── Fix scroll locking when touching charts/tables on mobile ── */
+        [data-testid="stPlotlyChart"] {{
+            touch-action: pan-y !important;
+            -webkit-overflow-scrolling: touch !important;
+        }}
+        [data-testid="stPlotlyChart"] .plotly .drag {{
+            touch-action: pan-y !important;
+        }}
+        [data-testid="stDataFrame"] {{
+            touch-action: pan-x pan-y !important;
+            -webkit-overflow-scrolling: touch !important;
+            max-height: 60vh !important;
+        }}
+        /* ── Prevent iframe charts from capturing scroll ── */
+        iframe {{
+            pointer-events: auto !important;
+            touch-action: pan-y !important;
+        }}
         /* ── Dark-mode-aware hamburger button ── */
         [data-testid="collapsedControl"] button,
         [data-testid="stSidebarCollapsedControl"] button,
@@ -1089,11 +1114,6 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         background-color: transparent !important;
         border-radius: 8px !important;
         overflow: hidden !important;
-        filter: invert(0.88) hue-rotate(180deg) !important;
-    }}
-    /* Undo the inversion for any images/icons inside the dataframe */
-    [data-testid="stDataFrame"] img {{
-        filter: invert(1) hue-rotate(180deg) !important;
     }}
     /* DOM-rendered fallback (HTML tables used by data_editor) */
     [data-testid="stDataFrame"] table {{
@@ -1557,14 +1577,17 @@ def inject_client_fixes() -> None:
           }
 
           run();
-          const obs = new MutationObserver(run);
-          obs.observe(rootDoc.body, { childList: true, subtree: true });
-          rootWin.setInterval(removeBranding, 1200);
-          rootWin.setInterval(fixSidebarLeft, 800);
-          window.setInterval(function () {
-            injectHideStyle(document);
-            if (rootDoc !== document) injectHideStyle(rootDoc);
-          }, 2000);
+          if (!rootWin._pmObserverAttached) {
+            const obs = new MutationObserver(run);
+            obs.observe(rootDoc.body, { childList: true, subtree: true });
+            rootWin._pmTimerBranding = rootWin.setInterval(removeBranding, 1200);
+            rootWin._pmTimerSidebar = rootWin.setInterval(fixSidebarLeft, 800);
+            rootWin._pmTimerHide = window.setInterval(function () {
+              injectHideStyle(document);
+              if (rootDoc !== document) injectHideStyle(rootDoc);
+            }, 2000);
+            rootWin._pmObserverAttached = true;
+          }
         })();
         </script>
         """,
@@ -1693,11 +1716,12 @@ def _clear_query_param(name: str) -> None:
         return
 
 
-def _render_tradingview_widget(ticker: object, height: int = 560) -> None:
+def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "dark") -> None:
     symbol = _tradingview_symbol(ticker)
     if not symbol:
         st.info("No chart symbol")
         return
+    tv_theme = "dark" if theme == "dark" else "light"
     widget_html = f"""
     <div class="tradingview-widget-container" style="height:{height - 24}px;width:100%">
       <div id="tradingview_chart" style="height:100%;width:100%"></div>
@@ -1708,7 +1732,7 @@ def _render_tradingview_widget(ticker: object, height: int = 560) -> None:
           "symbol": "{symbol}",
           "interval": "240",
           "timezone": "Etc/UTC",
-          "theme": "dark",
+          "theme": "{tv_theme}",
           "style": "1",
           "locale": "en",
           "allow_symbol_change": true,
@@ -1980,7 +2004,7 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
         realized = 0.0
         for _, row in tdf.iterrows():
             qty = float(row["Quantity"])
-            cost_ils = float(row["Cost_ILS"] if row["Cost_ILS"] else row["Cost_Origin"])
+            cost_ils = float(row["Cost_ILS"]) if _num(row["Cost_ILS"]) != 0 else float(_num(row["Cost_Origin"]))
             unit_cost = abs(cost_ils / qty) if qty else 0.0
             origin_currency = _normalize_currency_code(row.get("Origin_Currency", ""))
             display_currency = _infer_display_currency(ticker, origin_currency)
@@ -2010,7 +2034,7 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 )
             elif row["Action"] == "SELL" and qty != 0:
                 sell_qty = abs(qty)
-                sell_price = abs(row["Current_Value_ILS"]) / sell_qty if sell_qty and row["Current_Value_ILS"] else unit_cost
+                sell_price = abs(float(_num(row["Current_Value_ILS"]))) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else unit_cost
                 while sell_qty > 1e-9 and lots:
                     lot = lots[0]
                     used = min(lot.qty, sell_qty)
@@ -2069,7 +2093,7 @@ def _safe_quote(symbol: str) -> float:
         if fast_info:
             for field in ["lastPrice", "regularMarketPrice", "previousClose"]:
                 try:
-                    val = float(fast_info.get(field, 0) or 0)
+                    val = float(getattr(fast_info, field, 0) or 0)
                     if val > 0:
                         return val
                 except Exception:
@@ -3460,12 +3484,6 @@ def main() -> None:
         if not open_trades.empty and {"Type", "Current_Value_ILS"}.issubset(open_trades.columns):
             type_mix = open_trades.groupby("Type", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
 
-        _BRAND_PALETTE = [
-            "#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
-            "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
-            "#84cc16", "#0ea5e9", "#a855f7", "#fb923c", "#22d3ee",
-        ]
-
         if is_demo and not open_trades.empty:
             demo_cols = st.columns(2)
             with demo_cols[0]:
@@ -3681,7 +3699,7 @@ def main() -> None:
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
                         st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
-                    _render_tradingview_widget(active_ticker, height=560)
+                    _render_tradingview_widget(active_ticker, height=380 if is_mobile else 560)
                     if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
                         components.html(
                             f"""
@@ -3936,7 +3954,7 @@ def main() -> None:
         if (not is_mobile) and (not is_demo):
             last_risk_refresh = float(st.session_state.get("risk_page_last_refresh_ts", 0.0) or 0.0)
             now_ts = time.time()
-            if (now_ts - last_risk_refresh) > 20:
+            if (now_ts - last_risk_refresh) > 300:
                 try:
                     load_google_snapshot_data.clear()
                     load_google_snapshot_data_via_gspread.clear()
@@ -4155,7 +4173,7 @@ def main() -> None:
             selected = _clean(st.session_state.get("selected_trade_id", ""))
             if not selected:
                 st.info(tr("Select a row in the table above to edit", "סמן שורה בטבלה למעלה כדי לערוך"))
-                return
+                st.stop()
             row_idx = trades.index[trades["Trade_ID"].astype(str) == selected]
             if len(row_idx) == 0:
                 st.warning(tr("Row not found", "לא נמצאה רשומה"))
@@ -4206,7 +4224,7 @@ def main() -> None:
             selected = _clean(st.session_state.get("selected_trade_id", ""))
             if not selected:
                 st.info(tr("Select a row in the table above to delete", "סמן שורה בטבלה למעלה כדי למחוק"))
-                return
+                st.stop()
             if st.button(tr("Delete trade", "מחק רשומה")):
                 if not write_enabled:
                     st.error(tr("Cannot delete in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן למחוק במצב gspread. הגדר Web App URL תקין בצד שמאל."))
