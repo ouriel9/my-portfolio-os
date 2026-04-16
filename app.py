@@ -751,12 +751,22 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             padding: 0.32rem 0.42rem !important;
             box-shadow: 0 2px 6px rgba(15, 23, 42, 0.07) !important;
         }}
+        [data-testid="stMetric"] {{
+            min-height: 92px !important;
+            height: 100% !important;
+        }}
+        [data-testid="stMetric"] > div {{
+            min-height: 100% !important;
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: space-between !important;
+        }}
         .pm-card .pm-title {{font-size: 0.62rem !important; margin-bottom: 0.15rem !important;}}
         .pm-card .pm-value {{font-size: 0.82rem !important; line-height: 1.1 !important;}}
         .pm-card .pm-delta {{font-size: 0.58rem !important; margin-top: 0.1rem !important;}}
         [data-testid="stMetricValue"] {{font-size: 0.82rem !important; white-space: nowrap !important;}}
-        [data-testid="stMetricLabel"] {{font-size: 0.62rem !important;}}
-        [data-testid="stMetricDelta"] {{font-size: 0.58rem !important;}}
+        [data-testid="stMetricLabel"] {{font-size: 0.62rem !important; line-height: 1.1 !important; min-height: 1.25rem !important;}}
+        [data-testid="stMetricDelta"] {{font-size: 0.58rem !important; min-height: 0.9rem !important;}}
         [data-testid="stDataFrame"] {{overflow-x: auto !important; -ms-overflow-style: none; scrollbar-width: none;}}
         [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
         [data-testid="stDataFrame"] table {{font-size: 12px !important;}}
@@ -3515,17 +3525,27 @@ def main() -> None:
         total_value_txt = f"{total_value:,.0f}"
         total_cost_txt = f"{total_cost:,.0f}"
         total_return_txt = f"{total_return:.2%}"
+        top_holding_value_txt = "--"
+        top_holding_delta_txt = tr("No open assets", "אין נכסים פתוחים")
+        if not summary.empty:
+            total_summary_value = float(summary["Value_ILS"].sum())
+            if total_summary_value > 0:
+                top_row = summary.loc[summary["Value_ILS"].idxmax()]
+                top_weight = float(top_row["Value_ILS"]) / total_summary_value
+                top_ticker = _clean(top_row.get("Ticker", "")) or "-"
+                top_holding_value_txt = f"{top_weight:.1%}"
+                top_holding_delta_txt = f"{top_ticker} | ₪{float(top_row['Value_ILS']):,.0f}"
         if is_mobile:
             # ── Mobile: 2x2 compact grid ──
             kpi_r1 = st.columns(2)
-            kpi_r1[0].metric(tr("Total Value", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
-            kpi_r1[1].metric(tr("Total Cost", "עלות כוללת (₪)"), total_cost_txt)
+            kpi_r1[0].metric(tr("Total Value", "שווי כולל"), total_value_txt, f"{total_profit:,.0f} ₪")
+            kpi_r1[1].metric(tr("Total Cost", "עלות כוללת"), total_cost_txt)
             kpi_r2 = st.columns(2)
-            kpi_r2[0].metric(tr("Return", "תשואה כוללת"), total_return_txt)
+            kpi_r2[0].metric(tr("Return", "תשואה כוללת"), total_return_txt, f"{total_profit:,.0f} ₪")
             kpi_r2[1].metric(
-                tr("Closed", "סגורות"),
-                str(len(closed_trades)),
-                f"{len(open_trades)} {tr('open', 'פתוחות')}",
+                tr("Top Holding", "אחזקה מובילה"),
+                top_holding_value_txt,
+                top_holding_delta_txt,
             )
         else:
             # ── Desktop: 4 columns in a row ──
