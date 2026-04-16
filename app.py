@@ -3560,57 +3560,27 @@ def main() -> None:
             )
         style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
 
-        type_mix = pd.DataFrame(columns=["Type", "Current_Value_ILS"])
-        if not open_trades.empty and {"Type", "Current_Value_ILS"}.issubset(open_trades.columns):
-            type_mix = open_trades.groupby("Type", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
+        class_mix = pd.DataFrame(columns=["Asset_Class", "Current_Value_ILS"])
+        if not open_trades.empty and {"Ticker", "Type", "Current_Value_ILS"}.issubset(open_trades.columns):
+            class_work = open_trades[["Ticker", "Type", "Current_Value_ILS"]].copy()
+            class_work["Ticker"] = class_work["Ticker"].map(lambda v: _clean(v).upper())
+            class_work["Type"] = class_work["Type"].map(_clean)
+
+            def _class_bucket(row: pd.Series) -> str:
+                ticker = _clean(row.get("Ticker", "")).upper()
+                type_text = _clean(row.get("Type", ""))
+                type_upper = type_text.upper()
+                if "ETF" in type_upper or ticker in CRYPTO_ETFS:
+                    return tr("ETF", "ETF")
+                if (type_text == "קריפטו") or (type_upper == "CRYPTO") or (ticker in {"BTC", "ETH", "SOL", "XRP"}):
+                    return tr("Crypto", "קריפטו")
+                return tr("Stocks", "מניות")
+
+            class_work["Asset_Class"] = class_work.apply(_class_bucket, axis=1)
+            class_mix = class_work.groupby("Asset_Class", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
 
         perf_cols = {"Purchase_Date", "Cost_ILS", "Current_Value_ILS"}
         can_show_build_up = (not open_trades.empty) and perf_cols.issubset(open_trades.columns)
-        if not type_mix.empty or can_show_build_up:
-            insight_cols = st.columns(2)
-            with insight_cols[0]:
-                if not type_mix.empty:
-                    fig_type_mix = px.treemap(
-                        type_mix,
-                        path=["Type"],
-                        values="Current_Value_ILS",
-                        title=tr("Asset Class Composition", "הרכב מחלקות נכסים"),
-                        template=template,
-                        color_discrete_sequence=_BRAND_PALETTE,
-                    )
-                    fig_type_mix.update_traces(
-                        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
-                    )
-                    st.plotly_chart(_apply_plotly_theme(fig_type_mix, is_dark, is_mobile), use_container_width=True)
-            with insight_cols[1]:
-                if can_show_build_up:
-                    perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
-                    perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
-                    perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
-                    fig_track = go.Figure()
-                    fig_track.add_trace(go.Scatter(
-                        x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
-                        mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת"),
-                        line=dict(color="#94a3b8", width=2),
-                        hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
-                    ))
-                    fig_track.add_trace(go.Scatter(
-                        x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
-                        mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר"),
-                        line=dict(color="#4f46e5", width=2),
-                        fill="tonexty", fillcolor="rgba(79,70,229,0.08)",
-                        hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
-                    ))
-                    fig_track.update_layout(
-                        template=template,
-                        title=tr("Portfolio Build-Up", "התפתחות בניית התיק"),
-                        xaxis_title=tr("Date", "תאריך"),
-                        yaxis_title=tr("Value (ILS)", "שווי (₪)"),
-                        yaxis_tickformat=",.0f",
-                        hovermode="x unified",
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    )
-                    st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
 
         tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
             [
@@ -3825,17 +3795,25 @@ def main() -> None:
 
         with tab_allocation:
             allocation_payload = _shared_reports_payload
+            if is_mobile:
+                crypto_share_label = tr("Crypto Share", "קריפטו בתיק")
+                btc_portfolio_label = tr("BTC in Portfolio", "ביטקוין בתיק")
+                btc_crypto_label = tr("BTC in Crypto", "ביטקוין בקריפטו")
+            else:
+                crypto_share_label = tr("Crypto Share", "משקל קריפטו")
+                btc_portfolio_label = tr("BTC Share of Portfolio", "משקל ביטקוין בתיק")
+                btc_crypto_label = tr("BTC Share of Crypto", "משקל ביטקוין מתוך הקריפטו")
             alloc_kpi_cols = st.columns(3)
             alloc_kpi_cols[0].metric(
-                tr("Crypto Share", "משקל קריפטו"),
+                crypto_share_label,
                 f"{float(allocation_payload.get('crypto_share', 0.0)):.2%}",
             )
             alloc_kpi_cols[1].metric(
-                tr("BTC Share of Portfolio", "משקל BTC מהתיק"),
+                btc_portfolio_label,
                 f"{float(allocation_payload.get('btc_share_of_portfolio', 0.0)):.2%}",
             )
             alloc_kpi_cols[2].metric(
-                tr("BTC Share of Crypto", "משקל BTC מתוך הקריפטו"),
+                btc_crypto_label,
                 f"{float(allocation_payload.get('btc_share_of_crypto', 0.0)):.2%}",
             )
             style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
@@ -3861,10 +3839,10 @@ def main() -> None:
                 else:
                     st.info(tr("No allocation data", "אין נתוני חלוקה"))
             with alloc_col2:
-                if not type_mix.empty:
+                if not class_mix.empty:
                     type_fig = px.treemap(
-                        type_mix,
-                        path=["Type"],
+                        class_mix,
+                        path=["Asset_Class"],
                         values="Current_Value_ILS",
                         title=tr("Allocation by Asset Class", "חלוקה לפי סוג נכס"),
                         template=template,
@@ -3924,6 +3902,35 @@ def main() -> None:
                     st.dataframe(report_styled, use_container_width=True, hide_index=True)
 
         with tab_deposits:
+            if can_show_build_up:
+                st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
+                perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
+                perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
+                perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
+                fig_track = go.Figure()
+                fig_track.add_trace(go.Scatter(
+                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
+                    mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת"),
+                    line=dict(color="#94a3b8", width=2),
+                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
+                ))
+                fig_track.add_trace(go.Scatter(
+                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
+                    mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר"),
+                    line=dict(color="#4f46e5", width=2),
+                    fill="tonexty", fillcolor="rgba(79,70,229,0.08)",
+                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
+                ))
+                fig_track.update_layout(
+                    template=template,
+                    xaxis_title=tr("Date", "תאריך"),
+                    yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                    yaxis_tickformat=",.0f",
+                    hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
+
             deposit_mode = "demo" if is_demo else "live"
             default_platforms = sorted({_clean(v) for v in trades.get("Platform", pd.Series(dtype=str)).tolist() if _clean(v)}) if "Platform" in trades.columns else []
             rows_state_key = f"manual_deposits_rows_{deposit_mode}"
