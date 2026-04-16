@@ -186,6 +186,22 @@ def localize_snapshot_view(df: pd.DataFrame, language: str) -> pd.DataFrame:
     return out
 
 
+def _with_calendar_purchase_date(df: pd.DataFrame, language: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    out = df.copy()
+    localized_col = SNAPSHOT_HEADERS.get("Purchase_Date", {}).get(language, "Purchase_Date")
+    date_cols = [c for c in [localized_col, "Purchase_Date", "תאריך רכישה"] if c in out.columns]
+    if not date_cols:
+        return out, {}
+    column_config: Dict[str, object] = {}
+    for purchase_col in date_cols:
+        out[purchase_col] = pd.to_datetime(out[purchase_col], errors="coerce").dt.date
+        column_config[purchase_col] = st.column_config.DateColumn(
+            purchase_col,
+            format="DD/MM/YYYY",
+        )
+    return out, column_config
+
+
 def render_modern_metrics(items: List[Tuple[str, str, str]]) -> None:
     cards = []
     for title, value, delta in items:
@@ -4020,24 +4036,40 @@ def main() -> None:
                         st.error(f"{tr('Cloud load failed', 'טעינה מהענן נכשלה')}: {remote_err}")
 
         with tab_transactions:
-            tx_cols = [c for c in ["Purchase_Date", "Platform", "Type", "Ticker", "Quantity", "Cost_ILS", "Current_Value_ILS", "Status"] if c in trades.columns]
-            tx_raw = trades[tx_cols].copy() if tx_cols else pd.DataFrame()
-            if not tx_raw.empty and "Ticker" in tx_raw.columns:
-                ticker_options = sorted({_clean(v).upper() for v in tx_raw["Ticker"].tolist() if _clean(v)})
-                chosen_tickers = st.multiselect(
-                    tr("Ticker filter", "סינון לפי טיקר"),
-                    ticker_options,
-                    default=[],
-                    key="dashboard_transactions_ticker_filter",
-                )
-                if chosen_tickers:
-                    selected_set = {t.upper() for t in chosen_tickers}
-                    tx_raw = tx_raw[tx_raw["Ticker"].map(lambda v: _clean(v).upper()).isin(selected_set)]
-            tx_view = localize_snapshot_view(tx_raw, language) if not tx_raw.empty else pd.DataFrame()
+            tx_view = trades.copy() if isinstance(trades, pd.DataFrame) else pd.DataFrame()
+            if not tx_view.empty:
+                fx_cols = []
+                for col in tx_view.columns:
+                    col_text = _clean(col)
+                    col_lower = col_text.lower()
+                    if ("שקל" in col_text and "דולר" in col_text) or ("usd" in col_lower and "ils" in col_lower):
+                        fx_cols.append(col)
+                if fx_cols:
+                    tx_view = tx_view.drop(columns=fx_cols, errors="ignore")
+                prioritized_cols = [c for c in ["Ticker", "Purchase_Date"] if c in tx_view.columns]
+                remaining_cols = [c for c in tx_view.columns if c not in prioritized_cols]
+                tx_view = tx_view[prioritized_cols + remaining_cols]
+                tx_view = tx_view.replace({"#VALUE!": "נמכר", "VALUE": "נמכר", "#VALUE": "נמכר"})
+                if "Ticker" in tx_view.columns:
+                    ticker_options = sorted({_clean(v).upper() for v in tx_view["Ticker"].tolist() if _clean(v)})
+                    chosen_tickers = st.multiselect(
+                        tr("Ticker filter", "סינון לפי טיקר"),
+                        ticker_options,
+                        default=[],
+                        key="dashboard_transactions_ticker_filter",
+                    )
+                    if chosen_tickers:
+                        selected_set = {t.upper() for t in chosen_tickers}
+                        tx_view = tx_view[tx_view["Ticker"].map(lambda v: _clean(v).upper()).isin(selected_set)]
+                if "Purchase_Date" in tx_view.columns:
+                    # Default ordering: newest purchase date first.
+                    tx_view["__sort_date__"] = pd.to_datetime(tx_view["Purchase_Date"], errors="coerce")
+                    tx_view = tx_view.sort_values("__sort_date__", ascending=False, na_position="last").drop(columns=["__sort_date__"])
+            tx_view, tx_date_cfg = _with_calendar_purchase_date(tx_view, language)
             if tx_view.empty:
                 st.info(tr("No transactions to display", "אין עסקאות להצגה"))
             else:
-                st.dataframe(tx_view, use_container_width=True, hide_index=True)
+                st.dataframe(tx_view, use_container_width=True, hide_index=True, column_config=tx_date_cfg)
 
     elif page == page_risk:
         # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
@@ -4195,10 +4227,12 @@ def main() -> None:
             manage_select_df.insert(0, "__select__", manage_select_df["Trade_ID"].astype(str) == str(selected_trade_id))
             manage_select_df = manage_select_df.rename(columns={"__select__": tr("Select", "בחר")})
 
+            manage_select_view, manage_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(manage_select_df, language), language)
             edited_manage_df = st.data_editor(
-                localize_snapshot_view(manage_select_df, language),
+                manage_select_view,
                 use_container_width=True,
                 hide_index=True,
+                column_config=manage_date_cfg,
                 key="manage_table_selector",
             )
 
@@ -4343,7 +4377,8 @@ def main() -> None:
         if status_counts.empty:
             st.info(tr("No status distribution available.", "אין נתוני סטטוס להצגה."))
             st.subheader(tr("Recent Data", "נתונים אחרונים"))
-            st.dataframe(localize_snapshot_view(df.tail(30), language))
+            recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df.tail(30), language), language)
+            st.dataframe(recent_view, column_config=recent_date_cfg)
             return
 
         status_counts_view = status_counts.copy()
@@ -4354,7 +4389,8 @@ def main() -> None:
         st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
-        st.dataframe(localize_snapshot_view(df.tail(30), language))
+        recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df.tail(30), language), language)
+        st.dataframe(recent_view, column_config=recent_date_cfg)
 
     if live_updates:
         if page == page_manage:
