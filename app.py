@@ -3564,9 +3564,11 @@ def main() -> None:
         if not open_trades.empty and {"Type", "Current_Value_ILS"}.issubset(open_trades.columns):
             type_mix = open_trades.groupby("Type", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
 
-        if is_demo and not open_trades.empty:
-            demo_cols = st.columns(2)
-            with demo_cols[0]:
+        perf_cols = {"Purchase_Date", "Cost_ILS", "Current_Value_ILS"}
+        can_show_build_up = (not open_trades.empty) and perf_cols.issubset(open_trades.columns)
+        if not type_mix.empty or can_show_build_up:
+            insight_cols = st.columns(2)
+            with insight_cols[0]:
                 if not type_mix.empty:
                     fig_type_mix = px.treemap(
                         type_mix,
@@ -3580,34 +3582,35 @@ def main() -> None:
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
                     st.plotly_chart(_apply_plotly_theme(fig_type_mix, is_dark, is_mobile), use_container_width=True)
-            with demo_cols[1]:
-                perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
-                perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
-                perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
-                fig_track = go.Figure()
-                fig_track.add_trace(go.Scatter(
-                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
-                    mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת"),
-                    line=dict(color="#94a3b8", width=2),
-                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
-                ))
-                fig_track.add_trace(go.Scatter(
-                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
-                    mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר"),
-                    line=dict(color="#4f46e5", width=2),
-                    fill="tonexty", fillcolor="rgba(79,70,229,0.08)",
-                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
-                ))
-                fig_track.update_layout(
-                    template=template,
-                    title=tr("Portfolio Build-Up", "התפתחות בניית התיק"),
-                    xaxis_title=tr("Date", "תאריך"),
-                    yaxis_title=tr("Value (ILS)", "שווי (₪)"),
-                    yaxis_tickformat=",.0f",
-                    hovermode="x unified",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                )
-                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
+            with insight_cols[1]:
+                if can_show_build_up:
+                    perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
+                    perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
+                    perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
+                    fig_track = go.Figure()
+                    fig_track.add_trace(go.Scatter(
+                        x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
+                        mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת"),
+                        line=dict(color="#94a3b8", width=2),
+                        hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
+                    ))
+                    fig_track.add_trace(go.Scatter(
+                        x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
+                        mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר"),
+                        line=dict(color="#4f46e5", width=2),
+                        fill="tonexty", fillcolor="rgba(79,70,229,0.08)",
+                        hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
+                    ))
+                    fig_track.update_layout(
+                        template=template,
+                        title=tr("Portfolio Build-Up", "התפתחות בניית התיק"),
+                        xaxis_title=tr("Date", "תאריך"),
+                        yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                        yaxis_tickformat=",.0f",
+                        hovermode="x unified",
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    )
+                    st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
 
         tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
             [
@@ -4116,8 +4119,8 @@ def main() -> None:
             )
             st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
 
-        if is_demo and total_value > 0:
-            st.markdown(f"#### {tr('Scenario Lab (Demo)', 'מעבדת תרחישים (דמו)')}")
+        if total_value > 0:
+            st.markdown(f"#### {tr('Scenario Lab', 'מעבדת תרחישים')}")
             scenario_df = pd.DataFrame(
                 [
                     {"Scenario": tr("Calm market", "שוק רגוע"), "Shock": -0.03},
