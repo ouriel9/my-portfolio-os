@@ -1860,8 +1860,17 @@ def _apply_signed_color(styler: object, columns: list[str]) -> object:
     return styler
 
 
-def _render_dataframe_adaptive(data: object, is_mobile: bool, mobile_fallback: Optional[object] = None, **kwargs) -> None:
+def _render_dataframe_adaptive(
+    data: object,
+    is_mobile: bool,
+    mobile_fallback: Optional[object] = None,
+    force_same_render_path: bool = False,
+    **kwargs,
+) -> None:
     """Render Styler on desktop, plain DataFrame on mobile for stability."""
+    if force_same_render_path:
+        st.dataframe(data, **kwargs)
+        return
     if is_mobile:
         if mobile_fallback is not None:
             try:
@@ -4484,14 +4493,10 @@ def main() -> None:
                 if yield_cols:
                     tx_styled = _apply_signed_color(tx_styled, yield_cols)
 
-                mobile_tx_render: Optional[object] = None
-                if is_mobile:
-                    mobile_tx_render = tx_styled
-
                 _render_dataframe_adaptive(
                     tx_styled,
                     is_mobile,
-                    mobile_fallback=mobile_tx_render,
+                    force_same_render_path=True,
                     use_container_width=True,
                     hide_index=True,
                 )
