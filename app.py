@@ -4947,7 +4947,7 @@ def main() -> None:
         if status_counts.empty:
             st.info(tr("No status distribution available.", "אין נתוני סטטוס להצגה."))
             st.subheader(tr("Recent Data", "נתונים אחרונים"))
-            recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df.tail(30), language), language)
+            recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df, language), language)
             st.dataframe(recent_view, column_config=recent_date_cfg)
             return
 
@@ -4959,7 +4959,7 @@ def main() -> None:
         st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
-        recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df.tail(30), language), language)
+        recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df, language), language)
         st.dataframe(recent_view, column_config=recent_date_cfg)
 
     if live_updates:
