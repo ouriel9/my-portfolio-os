@@ -119,6 +119,8 @@ COLUMN_LABELS = {
     "ETF_ILS": {LANG_EN: "ETF Holding (ILS)", LANG_HE: "דרך קרן סל (₪)"},
     "Total_Exposure_ILS": {LANG_EN: "Total Exposure (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
     "Estimated_BTC_Qty": {LANG_EN: "Estimated BTC Qty (incl. IBIT/MSTR)", LANG_HE: "כמות BTC מוערכת (כולל IBIT/MSTR)"},
+    "Estimated_ETH_Qty": {LANG_EN: "Estimated ETH Qty (incl. ETHA)", LANG_HE: "כמות ETH מוערכת (כולל ETHA)"},
+    "Estimated_SOL_Qty": {LANG_EN: "Estimated SOL Qty (incl. BSOL)", LANG_HE: "כמות SOL מוערכת (כולל BSOL)"},
     "Category": {LANG_EN: "Category", LANG_HE: "סוג"},
     "Yield": {LANG_EN: "Return", LANG_HE: "תשואה"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
@@ -2373,6 +2375,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         platform_summary["PnL_ILS"] = platform_summary["Current_Value_ILS"] - platform_summary["Net_Investment_ILS"]
 
     asset_map = {"BTC": "IBIT", "ETH": "ETHA", "SOL": "BSOL"}
+    spot_by_asset = {"BTC": btc_usd, "ETH": eth_usd, "SOL": sol_usd}
     concentration_rows: List[Dict[str, float]] = []
     for asset, etf in asset_map.items():
         direct = work[(work["Ticker"] == asset) & (work["Type"] == "קריפטו")]
@@ -2381,18 +2384,19 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         direct_val = float(direct["Current_Value_ILS"].sum())
         etf_qty = float(etf_df["Quantity"].sum())
         etf_val = float(etf_df["Current_Value_ILS"].sum())
-        estimated_btc_qty = 0.0
+        indirect_ils = etf_val
         if asset == "BTC":
-            mstr_val = float(work.loc[work["Ticker"] == "MSTR", "Current_Value_ILS"].sum())
-            indirect_btc_ils = etf_val + mstr_val
-            btc_ils_basis = (direct_val / direct_qty) if direct_qty > 1e-9 else 0.0
-            if btc_ils_basis > 0:
-                estimated_btc_qty = direct_qty + (indirect_btc_ils / btc_ils_basis)
-            elif fx > 0 and btc_usd > 0:
-                # Fallback when there is no direct BTC position to infer a portfolio-based BTC ILS price.
-                estimated_btc_qty = direct_qty + (indirect_btc_ils / fx / btc_usd)
-            else:
-                estimated_btc_qty = direct_qty
+            # BTC exposure includes MSTR as an additional indirect BTC vehicle.
+            indirect_ils += float(work.loc[work["Ticker"] == "MSTR", "Current_Value_ILS"].sum())
+
+        estimated_asset_qty = direct_qty
+        asset_ils_basis = (direct_val / direct_qty) if direct_qty > 1e-9 else 0.0
+        spot_usd = float(spot_by_asset.get(asset, 0.0) or 0.0)
+        if asset_ils_basis > 0:
+            estimated_asset_qty = direct_qty + (indirect_ils / asset_ils_basis)
+        elif fx > 0 and spot_usd > 0:
+            estimated_asset_qty = direct_qty + (indirect_ils / fx / spot_usd)
+
         concentration_rows.append(
             {
                 "Asset": asset,
@@ -2401,7 +2405,9 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
                 "ETF_Qty": etf_qty,
                 "ETF_ILS": etf_val,
                 "Total_Exposure_ILS": direct_val + etf_val,
-                "Estimated_BTC_Qty": estimated_btc_qty,
+                "Estimated_BTC_Qty": estimated_asset_qty if asset == "BTC" else np.nan,
+                "Estimated_ETH_Qty": estimated_asset_qty if asset == "ETH" else np.nan,
+                "Estimated_SOL_Qty": estimated_asset_qty if asset == "SOL" else np.nan,
             }
         )
 
@@ -3295,7 +3301,47 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
     if not web_app_url:
         return False, "חסר קישור Web App של Apps Script"
 
-    payload = {"token": token or "", "action": action, "trade": trade_row}
+    def _norm_date_text(v: object) -> str:
+        parsed = _parse_dates_flexible(pd.Series([v])).iloc[0]
+        return parsed.strftime("%Y-%m-%d") if pd.notna(parsed) else _clean(v)
+
+    def _prepare_trade_payload(src: Dict[str, object]) -> Dict[str, object]:
+        out = {
+            "Current_Location": _clean(src.get("Current_Location", "")),
+            "Platform": _clean(src.get("Platform", "")),
+            "Type": _clean(src.get("Type", "")),
+            "Ticker": _clean(src.get("Ticker", "")).upper(),
+            "Purchase_Date": _norm_date_text(src.get("Purchase_Date", "")),
+            "Quantity": float(_num(src.get("Quantity", 0.0))),
+            "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0.0))),
+            "Cost_Origin": float(_num(src.get("Cost_Origin", 0.0))),
+            "Origin_Currency": _normalize_currency_code(src.get("Origin_Currency", "")),
+            "Commission": float(_num(src.get("Commission", 0.0))),
+            "Status": _clean(src.get("Status", "")),
+            "Cost_ILS": float(_num(src.get("Cost_ILS", 0.0))),
+            "Current_Value_ILS": float(_num(src.get("Current_Value_ILS", 0.0))),
+            "Action": _clean(src.get("Action", "")).upper(),
+            "Event_Type": _clean(src.get("Event_Type", "TRADE")) or "TRADE",
+            "Trade_ID": _clean(src.get("Trade_ID", "")),
+            "Sell_Date": _norm_date_text(src.get("Sell_Date", "")),
+            "Sell_Price_Origin": float(_num(src.get("Sell_Price_Origin", 0.0))),
+        }
+
+        is_closed = _is_closed_status(out.get("Status", "")) or out.get("Action", "") == "SELL"
+        out["Status"] = "סגור" if is_closed else "פתוח"
+        out["Action"] = "SELL" if is_closed else "BUY"
+
+        if is_closed and not _clean(out.get("Sell_Date", "")):
+            out["Sell_Date"] = datetime.now().strftime("%Y-%m-%d")
+        if not is_closed:
+            out["Sell_Date"] = ""
+
+        if not out["Trade_ID"]:
+            out["Trade_ID"] = _to_trade_id(pd.Series(out))
+        return out
+
+    normalized_trade = _prepare_trade_payload(trade_row)
+    payload = {"token": token or "", "action": action, "trade": normalized_trade}
 
     try:
         parsed = call_apps_script_(web_app_url, payload)
@@ -3722,7 +3768,7 @@ def main() -> None:
             )
         style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
 
-        class_mix = pd.DataFrame(columns=["Asset_Class", "Current_Value_ILS"])
+        class_mix = pd.DataFrame(columns=["Asset_Class", "Current_Value_ILS", "Assets"])
         if not open_trades.empty and {"Ticker", "Type", "Current_Value_ILS"}.issubset(open_trades.columns):
             class_work = open_trades[["Ticker", "Type", "Current_Value_ILS"]].copy()
             class_work["Ticker"] = class_work["Ticker"].map(lambda v: _clean(v).upper())
@@ -3740,6 +3786,12 @@ def main() -> None:
 
             class_work["Asset_Class"] = class_work.apply(_class_bucket, axis=1)
             class_mix = class_work.groupby("Asset_Class", as_index=False)["Current_Value_ILS"].sum().sort_values("Current_Value_ILS", ascending=False)
+            class_assets = (
+                class_work.groupby("Asset_Class")["Ticker"]
+                .apply(lambda s: ", ".join(sorted({_clean(v).upper() for v in s.tolist() if _clean(v)})))
+                .reset_index(name="Assets")
+            )
+            class_mix = class_mix.merge(class_assets, on="Asset_Class", how="left")
 
         perf_cols = {"Purchase_Date", "Cost_ILS", "Current_Value_ILS"}
         can_show_build_up = (not open_trades.empty) and perf_cols.issubset(open_trades.columns)
@@ -3862,7 +3914,13 @@ def main() -> None:
                         }
                     )
                     exposure_styled = _apply_signed_color(exposure_styled, [pnl_col, yield_origin_col, yield_ils_col])
-                    _render_dataframe_adaptive(exposure_styled, is_mobile, use_container_width=True, hide_index=True)
+                    _render_dataframe_adaptive(
+                        exposure_styled,
+                        is_mobile,
+                        force_same_render_path=True,
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
                 category_labels = {
@@ -3984,6 +4042,10 @@ def main() -> None:
             alloc_col1, alloc_col2 = st.columns(2)
             with alloc_col1:
                 if not summary.empty:
+                    st.caption(
+                        f"{tr('Crypto share of portfolio', 'משקל קריפטו בתיק')}: "
+                        f"{float(allocation_payload.get('crypto_share', 0.0)):.2%}"
+                    )
                     alloc_fig = px.pie(
                         summary,
                         names="Ticker",
@@ -4002,18 +4064,35 @@ def main() -> None:
                     st.info(tr("No allocation data", "אין נתוני חלוקה"))
             with alloc_col2:
                 if not class_mix.empty:
+                    class_order = class_mix["Asset_Class"].tolist()
+                    class_color_map = {
+                        cls: _BRAND_PALETTE[idx % len(_BRAND_PALETTE)]
+                        for idx, cls in enumerate(class_order)
+                    }
                     type_fig = px.treemap(
                         class_mix,
                         path=["Asset_Class"],
                         values="Current_Value_ILS",
                         title=tr("Allocation by Asset Class", "חלוקה לפי סוג נכס"),
                         template=template,
+                        color="Asset_Class",
+                        color_discrete_map=class_color_map,
                         color_discrete_sequence=_BRAND_PALETTE,
                     )
                     type_fig.update_traces(
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
                     st.plotly_chart(_apply_plotly_theme(type_fig, is_dark, is_mobile), use_container_width=True)
+
+                    st.markdown(f"**{tr('Included assets by class', 'נכסים כלולים לפי סוג')}**")
+                    for row in class_mix.itertuples(index=False):
+                        cls = _clean(getattr(row, "Asset_Class", ""))
+                        assets = _clean(getattr(row, "Assets", "")) or "-"
+                        color = class_color_map.get(cls, "#64748b")
+                        st.markdown(
+                            f"<span style='color:{color};font-weight:700'>■</span> <strong>{cls}</strong>: {assets}",
+                            unsafe_allow_html=True,
+                        )
                 else:
                     st.info(tr("No asset-class data", "אין נתוני סוגי נכסים"))
 
@@ -4683,7 +4762,11 @@ def main() -> None:
         }
         mode_label = st.radio(tr("Action", "פעולה"), list(mode_label_map.keys()), horizontal=True)
         mode = mode_label_map[mode_label]
-        editable_cols = ["Current_Location", "Platform", "Type", "Ticker", "Purchase_Date", "Quantity", "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID"]
+        editable_cols = [
+            "Current_Location", "Platform", "Type", "Ticker", "Purchase_Date", "Quantity",
+            "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Sell_Date",
+            "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID",
+        ]
         platforms = trades["Platform"].dropna().astype(str).tolist() if "Platform" in trades.columns else []
         types = trades["Type"].dropna().astype(str).tolist() if "Type" in trades.columns else []
         tickers = trades["Ticker"].dropna().astype(str).tolist() if "Ticker" in trades.columns else []
@@ -4709,6 +4792,14 @@ def main() -> None:
                     "Action": st.selectbox(tr("Accounting action", "פעולה חשבונאית"), ["BUY", "SELL"]),
                     "Event_Type": "TRADE",
                 }
+                if _is_closed_status(new_row.get("Status", "")) or _clean(new_row.get("Action", "")).upper() == "SELL":
+                    new_row["Sell_Date"] = st.date_input(
+                        tr("Sell date", "תאריך מכירה"),
+                        value=datetime.now(),
+                        key="add_sell_date",
+                    ).strftime("%Y-%m-%d")
+                else:
+                    new_row["Sell_Date"] = ""
                 new_row["Trade_ID"] = _to_trade_id(pd.Series(new_row))
                 submitted = st.form_submit_button(tr("Save", "שמור"))
 
@@ -4746,6 +4837,17 @@ def main() -> None:
                         elif col == "Purchase_Date":
                             d = _parse_dates_flexible(pd.Series([val])).iloc[0]
                             edited[col] = st.date_input(col, value=(d.date() if pd.notna(d) else datetime.now().date()), key=f"e_{col}").strftime("%Y-%m-%d")
+                        elif col == "Sell_Date":
+                            current_status = _clean(edited.get("Status", trades.at[idx, "Status"]))
+                            if _is_closed_status(current_status):
+                                d_sell = _parse_dates_flexible(pd.Series([val])).iloc[0]
+                                edited[col] = st.date_input(
+                                    col,
+                                    value=(d_sell.date() if pd.notna(d_sell) else datetime.now().date()),
+                                    key=f"e_{col}",
+                                ).strftime("%Y-%m-%d")
+                            else:
+                                edited[col] = ""
                         elif col == "Platform":
                             edited[col] = _select_or_type(tr("Platform", "פלטפורמה"), platforms, _clean(val), f"edit_{selected}_platform", tr)
                         elif col == "Current_Location":
