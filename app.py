@@ -4432,7 +4432,17 @@ def main() -> None:
                     mobile_tx_view = display_view.copy()
                     for col in yield_cols:
                         if col in mobile_tx_view.columns:
-                            mobile_tx_view[col] = mobile_tx_view[col].map(lambda v: "" if pd.isna(v) else f"{float(v):.2%}")
+                            mobile_tx_view[col] = mobile_tx_view[col].map(
+                                lambda v: "" if (pd.isna(v) or _clean(v) == "") else f"{_num(v):.2%}"
+                            )
+                    sell_price_like_cols = [
+                        c for c in mobile_tx_view.columns
+                        if _clean(c).lower() in {"sell_price_origin", "sell price", "sale price", "מחיר מכירה", "שער מכירה"}
+                    ]
+                    for col in sell_price_like_cols:
+                        mobile_tx_view[col] = mobile_tx_view[col].map(
+                            lambda v: "" if (pd.isna(v) or _clean(v) == "") else f"{_num(v):,.4f}"
+                        )
                     for date_col in ["Purchase_Date", "תאריך רכישה", "Sell_Date", "תאריך מכירה"]:
                         if date_col in mobile_tx_view.columns:
                             mobile_tx_view[date_col] = mobile_tx_view[date_col].map(_safe_date_display)
