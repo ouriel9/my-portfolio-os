@@ -129,6 +129,7 @@ COLUMN_LABELS = {
 
 SNAPSHOT_HEADERS = {
     "Purchase_Date": {LANG_EN: "Purchase Date", LANG_HE: "תאריך רכישה"},
+    "Sell_Date": {LANG_EN: "Sell Date", LANG_HE: "תאריך מכירה"},
     "Current_Location": {LANG_EN: "Current Location", LANG_HE: "מיקום נוכחי"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
     "Type": {LANG_EN: "Asset Type", LANG_HE: "סוג נכס"},
@@ -136,14 +137,20 @@ SNAPSHOT_HEADERS = {
     "Quantity": {LANG_EN: "Quantity", LANG_HE: "כמות"},
     "Origin_Buy_Price": {LANG_EN: "Buy Price", LANG_HE: "שער קנייה"},
     "Cost_Origin": {LANG_EN: "Cost (Origin)", LANG_HE: "עלות מקור"},
-    "Cost_ILS": {LANG_EN: "Cost (ILS)", LANG_HE: "עלות שקלית"},
-    "Current_Value_ILS": {LANG_EN: "Current Value (ILS)", LANG_HE: "שווי שקלי"},
+    "Cost_ILS": {LANG_EN: "Cost ILS", LANG_HE: "עלותILS"},
+    "Current_Value_ILS": {LANG_EN: "Value ILS", LANG_HE: "שווי ILS"},
+    "Origin_Currency": {LANG_EN: "Purchase Currency", LANG_HE: "מטבע קנייה"},
+    "Market_Price_Origin": {LANG_EN: "Current Price", LANG_HE: "שער נוכחי"},
+    "Sell_Price_Origin": {LANG_EN: "Sell Price", LANG_HE: "מחיר מכירה"},
+    "Yield_Current": {LANG_EN: "Return vs Current", LANG_HE: "תשואה מול שער נוכחי"},
+    "Yield_At_Sale": {LANG_EN: "Return at Sale", LANG_HE: "תשואה במכירה"},
     "Current_Asset_Value_Display": {LANG_EN: "Current Asset Value", LANG_HE: "שווי נוכחי לנכס"},
     "Commission": {LANG_EN: "Commission", LANG_HE: "עמלה"},
     "Status": {LANG_EN: "Status", LANG_HE: "סטטוס"},
     "validation_status": {LANG_EN: "Validation", LANG_HE: "אימות"},
     "Trade_ID": {LANG_EN: "Trade ID", LANG_HE: "מזהה עסקה"},
-    "Yield_Origin": {LANG_EN: "Return (Origin)", LANG_HE: "תשואה (מקור)"},
+    "Yield_Origin": {LANG_EN: "Return (Origin)", LANG_HE: "תשואה בשער מקור"},
+    "Yield_ILS": {LANG_EN: "Return ILS", LANG_HE: "תשואה ILS"},
 }
 
 VALUE_LABELS = {
@@ -189,9 +196,10 @@ def localize_snapshot_view(df: pd.DataFrame, language: str) -> pd.DataFrame:
 
 def _with_calendar_purchase_date(df: pd.DataFrame, language: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
     out = df.copy()
-    localized_col = SNAPSHOT_HEADERS.get("Purchase_Date", {}).get(language, "Purchase_Date")
+    localized_purchase = SNAPSHOT_HEADERS.get("Purchase_Date", {}).get(language, "Purchase_Date")
+    localized_sell = SNAPSHOT_HEADERS.get("Sell_Date", {}).get(language, "Sell_Date")
     date_cols: List[str] = []
-    for c in [localized_col, "Purchase_Date", "תאריך רכישה"]:
+    for c in [localized_purchase, "Purchase_Date", "תאריך רכישה", localized_sell, "Sell_Date", "תאריך מכירה"]:
         if c in out.columns and c not in date_cols:
             date_cols.append(c)
     if not date_cols:
@@ -1911,6 +1919,14 @@ def _is_excellence_platform(value: object) -> bool:
     return ("אקסלנס" in p) or ("excellence" in p)
 
 
+def _strip_market_suffix(value: object) -> str:
+    s = _clean(value)
+    low = s.lower()
+    if ("bit2c" in low or "horizon" in low or "הורייזון" in s) and "זירת מסחר" in s:
+        s = s.replace(" (זירת מסחר)", "").replace("(זירת מסחר)", "").strip()
+    return s
+
+
 def _fill_current_location_defaults(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -1922,7 +1938,8 @@ def _fill_current_location_defaults(df: pd.DataFrame) -> pd.DataFrame:
     if "Platform" not in out.columns:
         out["Platform"] = ""
 
-    out["Current_Location"] = out["Current_Location"].map(_clean)
+    out["Current_Location"] = out["Current_Location"].map(_strip_market_suffix)
+    out["Platform"] = out["Platform"].map(_strip_market_suffix)
     closed_mask = out["Status"].map(_is_closed_status)
     out.loc[closed_mask, "Current_Location"] = "נמכר"
 
@@ -1945,6 +1962,7 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
         "סוג נכס": "Type",
         "טיקר": "Ticker",
         "תאריך רכישה": "Purchase_Date",
+        "תאריך מכירה": "Sell_Date",
         "כמות": "Quantity",
         "שער קנייה": "Origin_Buy_Price",
         "עלות כוללת": "Cost_Origin",
@@ -1991,6 +2009,9 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
     if "Purchase_Date" not in df.columns:
         df["Purchase_Date"] = pd.NaT
     df["Purchase_Date"] = _parse_dates_flexible(df["Purchase_Date"])
+
+    if "Sell_Date" in df.columns:
+        df["Sell_Date"] = _parse_dates_flexible(df["Sell_Date"])
 
     if "Trade_ID" not in df.columns:
         df["Trade_ID"] = df.apply(_to_trade_id, axis=1)
@@ -2872,6 +2893,7 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
         "סוג נכס": "Type",
         "טיקר": "Ticker",
         "תאריך רכישה": "Purchase_Date",
+        "תאריך מכירה": "Sell_Date",
         "כמות": "Quantity",
         "שער קנייה": "Origin_Buy_Price",
         "עלות כוללת": "Cost_Origin",
@@ -2880,6 +2902,10 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
         "סטטוס": "Status",
         "עלות ILS": "Cost_ILS",
         "שווי ILS": "Current_Value_ILS",
+        "שער מכירה": "Sell_Price_Origin",
+        "תשואה במכירה": "Yield_At_Sale",
+        "תשואה מקור": "Yield_Origin",
+        "תשואה שקלית": "Yield_ILS",
         "Trade_ID": "Trade_ID",
     }
     df = df.rename(columns=rename)
@@ -2893,6 +2919,13 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = 0.0
         df[col] = df[col].map(_num)
+
+    if "Sell_Price_Origin" in df.columns:
+        df["Sell_Price_Origin"] = df["Sell_Price_Origin"].map(_num)
+
+    for col in ["Yield_At_Sale", "Yield_Origin", "Yield_ILS"]:
+        if col in df.columns:
+            df[col] = df[col].map(_num)
 
     # ── Validate Cost_Origin against Quantity * Origin_Buy_Price ──
     # If they diverge significantly, recalculate (fixes stale cost data from spreadsheet).
@@ -2915,6 +2948,9 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
     if "Purchase_Date" not in df.columns:
         df["Purchase_Date"] = pd.NaT
     df["Purchase_Date"] = _parse_dates_flexible(df["Purchase_Date"])
+
+    if "Sell_Date" in df.columns:
+        df["Sell_Date"] = _parse_dates_flexible(df["Sell_Date"])
 
     if "Trade_ID" not in df.columns:
         df["Trade_ID"] = df.apply(_to_trade_id, axis=1)
@@ -4118,6 +4154,7 @@ def main() -> None:
         with tab_transactions:
             tx_view = trades.copy() if isinstance(trades, pd.DataFrame) else pd.DataFrame()
             if not tx_view.empty:
+                tx_view = tx_view.drop(columns=["Event_Type", "Trade_ID", "Record_Source"], errors="ignore")
                 fx_cols = []
                 for col in tx_view.columns:
                     col_text = _clean(col)
@@ -4129,7 +4166,58 @@ def main() -> None:
                 prioritized_cols = [c for c in ["Ticker", "Purchase_Date"] if c in tx_view.columns]
                 remaining_cols = [c for c in tx_view.columns if c not in prioritized_cols]
                 tx_view = tx_view[prioritized_cols + remaining_cols]
+
+                # Keep one canonical current-price column (computed later as Market_Price_Origin).
+                def _is_legacy_current_price_col(col_name: object) -> bool:
+                    col_text = _clean(col_name)
+                    if not col_text or col_text == "Market_Price_Origin":
+                        return False
+                    low = col_text.lower().replace("_", " ").replace("-", " ")
+                    low = re.sub(r"\s+", " ", low).strip()
+                    if any(token in low for token in ["yield", "return", "תשואה"]):
+                        return False
+                    if low in {"current price", "market price", "שער נוכחי"}:
+                        return True
+                    return ("current" in low and "price" in low) or ("שער" in col_text and "נוכחי" in col_text)
+
+                legacy_current_price_cols = [c for c in tx_view.columns if _is_legacy_current_price_col(c)]
+                if legacy_current_price_cols:
+                    tx_view = tx_view.drop(columns=legacy_current_price_cols, errors="ignore")
+
                 tx_view = tx_view.replace({"#VALUE!": "נמכר", "VALUE": "נמכר", "#VALUE": "נמכר"})
+
+                is_open_only = False
+                if "Status" in tx_view.columns:
+                    both_label = tr("Both", "הכל")
+                    open_label = tr("Open only", "פתוחות בלבד")
+                    closed_label = tr("Closed only", "סגורות בלבד")
+                    scope_options = [both_label, open_label, closed_label]
+                    scope_key = "dashboard_transactions_status_scope"
+                    if st.session_state.get(scope_key) not in scope_options:
+                        st.session_state[scope_key] = open_label
+                    status_scope = st.radio(
+                        tr("Position scope", "הצגת פוזיציות"),
+                        scope_options,
+                        horizontal=True,
+                        key=scope_key,
+                    )
+                    is_open_only = status_scope == open_label
+                    if is_open_only:
+                        tx_view = tx_view[~tx_view["Status"].map(_is_closed_status)]
+                    elif status_scope == closed_label:
+                        tx_view = tx_view[tx_view["Status"].map(_is_closed_status)]
+
+                if is_open_only:
+                    sale_related_cols = [
+                        c for c in [
+                            "Status", "Action", "Sell_Date", "Sell_Price_Origin", "Yield_At_Sale",
+                            "סטטוס", "פעולה", "תאריך מכירה", "שער מכירה", "מחיר מכירה", "תשואה במכירה",
+                        ]
+                        if c in tx_view.columns
+                    ]
+                    if sale_related_cols:
+                        tx_view = tx_view.drop(columns=sale_related_cols, errors="ignore")
+
                 if "Ticker" in tx_view.columns:
                     ticker_options = sorted({_clean(v).upper() for v in tx_view["Ticker"].tolist() if _clean(v)})
                     chosen_tickers = st.multiselect(
@@ -4145,6 +4233,59 @@ def main() -> None:
                     # Default ordering: newest purchase date first.
                     tx_view["__sort_date__"] = _parse_dates_flexible(tx_view["Purchase_Date"])
                     tx_view = tx_view.sort_values("__sort_date__", ascending=False, na_position="last").drop(columns=["__sort_date__"])
+
+                # Show current market price/returns for both open and closed rows.
+                if "Ticker" in tx_view.columns and "Origin_Buy_Price" in tx_view.columns:
+                    fx_now = _safe_quote("USDILS=X")
+                    if fx_now <= 0:
+                        fx_now = 3.6
+                    tickers_for_price = tuple(sorted({_clean(v).upper() for v in tx_view["Ticker"].tolist() if _clean(v)}))
+                    live_price_map = fetch_prices(tickers_for_price) if tickers_for_price else {}
+
+                    def _market_price_origin(row: pd.Series) -> float:
+                        t = _clean(row.get("Ticker", "")).upper()
+                        if not t:
+                            return np.nan
+                        p_usd = float(_num(live_price_map.get(t, 0.0)))
+                        if p_usd <= 0:
+                            return np.nan
+                        cur = _normalize_currency_code(row.get("Origin_Currency", ""))
+                        return p_usd if cur == "USD" else (p_usd * fx_now if cur == "ILS" else p_usd)
+
+                    def _sell_price_origin(row: pd.Series) -> float:
+                        if not _is_closed_status(row.get("Status", "")):
+                            return np.nan
+                        qty = float(_num(row.get("Quantity", 0.0)))
+                        val_ils = float(_num(row.get("Current_Value_ILS", 0.0)))
+                        if qty > 1e-9 and val_ils > 0:
+                            cur = _normalize_currency_code(row.get("Origin_Currency", ""))
+                            unit_ils = val_ils / qty
+                            return unit_ils / fx_now if cur == "USD" else unit_ils
+                        return np.nan
+
+                    tx_view["Market_Price_Origin"] = tx_view.apply(_market_price_origin, axis=1)
+
+                    sell_from_market = tx_view.apply(_sell_price_origin, axis=1)
+                    if "Sell_Price_Origin" in tx_view.columns:
+                        existing_sell = tx_view["Sell_Price_Origin"].map(_num)
+                        tx_view["Sell_Price_Origin"] = np.where(existing_sell > 0, existing_sell, sell_from_market)
+                    else:
+                        tx_view["Sell_Price_Origin"] = sell_from_market
+
+                    buy_price = tx_view["Origin_Buy_Price"].map(_num)
+                    tx_view["Yield_Current"] = np.where(buy_price > 0, (tx_view["Market_Price_Origin"] - buy_price) / buy_price, np.nan)
+
+                    sale_yield_calc = np.where(buy_price > 0, (tx_view["Sell_Price_Origin"] - buy_price) / buy_price, np.nan)
+                    if "Yield_At_Sale" in tx_view.columns:
+                        existing_yield_sale = tx_view["Yield_At_Sale"]
+                        has_existing_yield = ~existing_yield_sale.map(lambda v: pd.isna(v) or _clean(v) == "")
+                        tx_view["Yield_At_Sale"] = np.where(has_existing_yield, existing_yield_sale, sale_yield_calc)
+                    else:
+                        tx_view["Yield_At_Sale"] = sale_yield_calc
+
+
+                    # Hide dedicated helper column (user requested).
+                    tx_view = tx_view.drop(columns=["Yield_Current"], errors="ignore")
                 yield_ils_cols = [
                     c for c in tx_view.columns
                     if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())
@@ -4166,6 +4307,41 @@ def main() -> None:
                     tx_view = tx_view[non_yield_cols + yield_cols]
 
             tx_view = localize_snapshot_view(tx_view, language)
+
+            def _normalize_header_text(col: str) -> str:
+                c = _clean(col)
+                fixed = {
+                    "USD שווי": "שווי USD",
+                    "USD עלות": "עלות USD",
+                    "ILS שווי": "שווי ILS",
+                    "ILS עלות": "עלות ILS",
+                    "עלות שקלית": "עלותILS",
+                    "Value USD": "Value USD",
+                    "Cost USD": "Cost USD",
+                    "Value ILS": "Value ILS",
+                    "Cost ILS": "Cost ILS",
+                }
+                if c in fixed:
+                    return fixed[c]
+                m = re.match(r"^(USD|ILS)\s*[-_:]?\s*(.+)$", c, flags=re.IGNORECASE)
+                if m:
+                    return f"{m.group(2)} {m.group(1).upper()}"
+                c = re.sub(r"\((USD|ILS)\)", lambda mm: mm.group(1).upper(), c, flags=re.IGNORECASE)
+                return c
+
+            tx_view = tx_view.rename(columns=lambda c: _normalize_header_text(str(c)))
+
+            if is_open_only and not tx_view.empty:
+                # Final guard: remove sale-only fields that may be reintroduced by computed/localized columns.
+                def _open_only_hide_col(col_name: object) -> bool:
+                    c = _clean(col_name)
+                    low = c.lower()
+                    if c in {"Status", "Action", "Sell_Date", "Sell_Price_Origin", "Yield_At_Sale", "סטטוס", "פעולה", "תאריך מכירה", "שער מכירה", "מחיר מכירה", "תשואה במכירה"}:
+                        return True
+                    return low in {"sell price", "sale price", "sell date", "return at sale"}
+
+                tx_view = tx_view.drop(columns=[c for c in tx_view.columns if _open_only_hide_col(c)], errors="ignore")
+
             tx_view, _ = _with_calendar_purchase_date(tx_view, language)
             if tx_view.empty:
                 st.info(tr("No transactions to display", "אין עסקאות להצגה"))
@@ -4188,6 +4364,7 @@ def main() -> None:
                     return s in {"", "nan", "nat", "none"}
 
                 drop_cols: List[str] = []
+                keep_even_if_blank = {"Market_Price_Origin", "Sell_Price_Origin", "שער נוכחי", "מחיר מכירה"}
                 for col in display_view.columns:
                     col_text = _clean(col)
                     col_lower = col_text.lower()
@@ -4196,6 +4373,8 @@ def main() -> None:
                         continue
                     if (("usd" in col_lower and "ils" in col_lower) or ("שער" in col_text and "דולר" in col_text and "שקל" in col_text)):
                         drop_cols.append(col)
+                        continue
+                    if col_text in keep_even_if_blank:
                         continue
                     if display_view[col].map(_is_blank_like).all():
                         drop_cols.append(col)
@@ -4231,7 +4410,7 @@ def main() -> None:
                         return parsed_one.strftime("%d/%m/%Y")
                     return s
 
-                for date_col in ["Purchase_Date", "תאריך רכישה"]:
+                for date_col in ["Purchase_Date", "תאריך רכישה", "Sell_Date", "תאריך מכירה"]:
                     if date_col in display_view.columns:
                         style_format[date_col] = _safe_date_display
 
