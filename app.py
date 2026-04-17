@@ -1853,11 +1853,40 @@ def _apply_signed_color(styler: object, columns: list[str]) -> object:
 
 
 def _parse_dates_flexible(series: pd.Series) -> pd.Series:
-    parsed = pd.to_datetime(series, errors="coerce", dayfirst=True)
-    missing = parsed.isna()
-    if missing.any():
-        parsed_alt = pd.to_datetime(series[missing], errors="coerce", dayfirst=False)
-        parsed.loc[missing] = parsed_alt
+    raw = series.copy()
+    clean_vals = raw.map(_clean)
+    parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
+
+    # Year-first ISO stays year-first.
+    iso_mask = clean_vals.str.match(r"^\d{4}-\d{2}-\d{2}$")
+    if iso_mask.any():
+        parsed.loc[iso_mask] = pd.to_datetime(clean_vals[iso_mask], format="%Y-%m-%d", errors="coerce")
+
+    # Handles values like "2026-02-04 00:00:00" without DD/MM inversion.
+    yearfirst_mask = clean_vals.str.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T].*)?$") & (~iso_mask)
+    if yearfirst_mask.any():
+        parsed.loc[yearfirst_mask] = pd.to_datetime(clean_vals[yearfirst_mask], errors="coerce", yearfirst=True, dayfirst=False)
+
+    # Sheet-style slashed dates are interpreted strictly as DD/MM.
+    slash_mask = clean_vals.str.contains("/", regex=False)
+    if slash_mask.any():
+        slash_vals = clean_vals[slash_mask]
+        slash_parsed = pd.to_datetime(slash_vals, format="%d/%m/%Y", errors="coerce")
+        missing_slash = slash_parsed.isna()
+        if missing_slash.any():
+            slash_parsed_alt = pd.to_datetime(slash_vals[missing_slash], format="%d/%m/%y", errors="coerce")
+            slash_parsed.loc[missing_slash] = slash_parsed_alt
+        parsed.loc[slash_mask] = slash_parsed
+
+    # Dashed non-ISO dates (e.g. 4-2-2026) are DD-MM-YYYY.
+    dash_dmy_mask = clean_vals.str.match(r"^\d{1,2}-\d{1,2}-\d{4}$")
+    if dash_dmy_mask.any():
+        parsed.loc[dash_dmy_mask] = pd.to_datetime(clean_vals[dash_dmy_mask], format="%d-%m-%Y", errors="coerce")
+
+    # Final fallback: day-first only.
+    remaining = parsed.isna() & clean_vals.ne("")
+    if remaining.any():
+        parsed.loc[remaining] = pd.to_datetime(clean_vals[remaining], errors="coerce", dayfirst=True)
     return parsed
 
 
@@ -1865,12 +1894,41 @@ def _to_trade_id(row: pd.Series) -> str:
     platform = _clean(row.get("Platform", ""))
     ticker = _clean(row.get("Ticker", "")).upper()
     purchase_raw = row.get("Purchase_Date", "")
-    purchase_dt = pd.to_datetime(purchase_raw, errors="coerce", dayfirst=True)
+    purchase_dt = _parse_dates_flexible(pd.Series([purchase_raw])).iloc[0]
     purchase_date = purchase_dt.strftime("%Y-%m-%d") if pd.notna(purchase_dt) else _clean(purchase_raw)
     qty = _num(row.get("Quantity", 0))
     cost_origin = _num(row.get("Cost_Origin", 0))
     raw = f"{platform}|{ticker}|{purchase_date}|{qty}|{cost_origin}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_closed_status(value: object) -> bool:
+    return _clean(value).lower() in {"סגור", "closed", "close", "sold", "נמכר"}
+
+
+def _is_excellence_platform(value: object) -> bool:
+    p = _clean(value).lower()
+    return ("אקסלנס" in p) or ("excellence" in p)
+
+
+def _fill_current_location_defaults(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    if "Current_Location" not in out.columns:
+        out["Current_Location"] = ""
+    if "Status" not in out.columns:
+        out["Status"] = ""
+    if "Platform" not in out.columns:
+        out["Platform"] = ""
+
+    out["Current_Location"] = out["Current_Location"].map(_clean)
+    closed_mask = out["Status"].map(_is_closed_status)
+    out.loc[closed_mask, "Current_Location"] = "נמכר"
+
+    open_excellence_blank_mask = (~closed_mask) & out["Platform"].map(_is_excellence_platform) & out["Current_Location"].eq("")
+    out.loc[open_excellence_blank_mask, "Current_Location"] = "אקסלנס"
+    return out
 
 
 @st.cache_data(ttl=300)
@@ -1936,6 +1994,8 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
 
     if "Trade_ID" not in df.columns:
         df["Trade_ID"] = df.apply(_to_trade_id, axis=1)
+
+    df = _fill_current_location_defaults(df)
 
     df["Event_Type"] = df["Event_Type"].replace("", "TRADE")
     df["Action"] = df.apply(
@@ -2779,7 +2839,7 @@ def _save_local_snapshot_cache(df: pd.DataFrame) -> None:
             return
         out = df.copy()
         if "Purchase_Date" in out.columns:
-            out["Purchase_Date"] = pd.to_datetime(out["Purchase_Date"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+            out["Purchase_Date"] = _parse_dates_flexible(out["Purchase_Date"]).dt.strftime("%Y-%m-%d").fillna("")
         out.to_csv(LOCAL_SNAPSHOT_CACHE_FILE, index=False, encoding="utf-8-sig")
     except Exception:
         return
@@ -2863,6 +2923,8 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
         missing = df["Trade_ID"] == ""
         if missing.any():
             df.loc[missing, "Trade_ID"] = df.loc[missing].apply(_to_trade_id, axis=1)
+
+    df = _fill_current_location_defaults(df)
 
     df["Record_Source"] = "STATE_SNAPSHOT"
     df["Event_Type"] = "TRADE"
@@ -4081,7 +4143,7 @@ def main() -> None:
                         tx_view = tx_view[tx_view["Ticker"].map(lambda v: _clean(v).upper()).isin(selected_set)]
                 if "Purchase_Date" in tx_view.columns:
                     # Default ordering: newest purchase date first.
-                    tx_view["__sort_date__"] = pd.to_datetime(tx_view["Purchase_Date"], errors="coerce")
+                    tx_view["__sort_date__"] = _parse_dates_flexible(tx_view["Purchase_Date"])
                     tx_view = tx_view.sort_values("__sort_date__", ascending=False, na_position="last").drop(columns=["__sort_date__"])
                 yield_ils_cols = [
                     c for c in tx_view.columns
@@ -4103,11 +4165,42 @@ def main() -> None:
                     non_yield_cols = [c for c in tx_view.columns if c not in yield_cols]
                     tx_view = tx_view[non_yield_cols + yield_cols]
 
+            tx_view = localize_snapshot_view(tx_view, language)
             tx_view, _ = _with_calendar_purchase_date(tx_view, language)
             if tx_view.empty:
                 st.info(tr("No transactions to display", "אין עסקאות להצגה"))
             else:
                 display_view = tx_view.copy()
+                display_view = display_view.reset_index(drop=True)
+                if not display_view.columns.is_unique:
+                    seen_cols: Dict[str, int] = {}
+                    unique_cols: List[str] = []
+                    for col in display_view.columns:
+                        base = str(col)
+                        seen_cols[base] = seen_cols.get(base, 0) + 1
+                        unique_cols.append(base if seen_cols[base] == 1 else f"{base} ({seen_cols[base]})")
+                    display_view.columns = unique_cols
+
+                def _is_blank_like(v: object) -> bool:
+                    if pd.isna(v):
+                        return True
+                    s = _clean(v).lower()
+                    return s in {"", "nan", "nat", "none"}
+
+                drop_cols: List[str] = []
+                for col in display_view.columns:
+                    col_text = _clean(col)
+                    col_lower = col_text.lower()
+                    if col_lower.startswith("unnamed:"):
+                        drop_cols.append(col)
+                        continue
+                    if (("usd" in col_lower and "ils" in col_lower) or ("שער" in col_text and "דולר" in col_text and "שקל" in col_text)):
+                        drop_cols.append(col)
+                        continue
+                    if display_view[col].map(_is_blank_like).all():
+                        drop_cols.append(col)
+                if drop_cols:
+                    display_view = display_view.drop(columns=drop_cols, errors="ignore")
 
                 def _to_ratio_for_display(v: object) -> float:
                     s = _clean(v)
@@ -4375,7 +4468,7 @@ def main() -> None:
                         if col in {"Quantity", "Origin_Buy_Price", "Cost_Origin", "Commission", "Cost_ILS", "Current_Value_ILS"}:
                             edited[col] = st.number_input(col, value=float(_num(val)), key=f"e_{col}")
                         elif col == "Purchase_Date":
-                            d = pd.to_datetime(val, errors="coerce")
+                            d = _parse_dates_flexible(pd.Series([val])).iloc[0]
                             edited[col] = st.date_input(col, value=(d.date() if pd.notna(d) else datetime.now().date()), key=f"e_{col}").strftime("%Y-%m-%d")
                         elif col == "Platform":
                             edited[col] = _select_or_type(tr("Platform", "פלטפורמה"), platforms, _clean(val), f"edit_{selected}_platform", tr)
@@ -4422,7 +4515,7 @@ def main() -> None:
                     selected_rows = trades[trades["Trade_ID"].astype(str) == selected] if "Trade_ID" in trades.columns else pd.DataFrame()
                     if not selected_rows.empty:
                         src = selected_rows.iloc[0]
-                        src_date = pd.to_datetime(src.get("Purchase_Date", ""), errors="coerce")
+                        src_date = _parse_dates_flexible(pd.Series([src.get("Purchase_Date", "")])).iloc[0]
                         delete_payload.update(
                             {
                                 "Platform": _clean(src.get("Platform", "")),
