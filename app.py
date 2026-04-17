@@ -1860,13 +1860,24 @@ def _apply_signed_color(styler: object, columns: list[str]) -> object:
     return styler
 
 
-def _render_dataframe_adaptive(data: object, is_mobile: bool, mobile_fallback: Optional[pd.DataFrame] = None, **kwargs) -> None:
+def _render_dataframe_adaptive(data: object, is_mobile: bool, mobile_fallback: Optional[object] = None, **kwargs) -> None:
     """Render Styler on desktop, plain DataFrame on mobile for stability."""
-    if is_mobile and hasattr(data, "data"):
-        fallback = mobile_fallback if isinstance(mobile_fallback, pd.DataFrame) else getattr(data, "data", None)
-        if isinstance(fallback, pd.DataFrame):
-            st.dataframe(fallback, **kwargs)
-            return
+    if is_mobile:
+        if mobile_fallback is not None:
+            try:
+                st.dataframe(mobile_fallback, **kwargs)
+                return
+            except Exception:
+                if hasattr(mobile_fallback, "data"):
+                    raw_df = getattr(mobile_fallback, "data", None)
+                    if isinstance(raw_df, pd.DataFrame):
+                        st.dataframe(raw_df, **kwargs)
+                        return
+        if hasattr(data, "data"):
+            fallback = getattr(data, "data", None)
+            if isinstance(fallback, pd.DataFrame):
+                st.dataframe(fallback, **kwargs)
+                return
     st.dataframe(data, **kwargs)
 
 
@@ -4370,8 +4381,54 @@ def main() -> None:
                     s = _clean(v).lower()
                     return s in {"", "nan", "nat", "none"}
 
+                def _base_col_name(col_name: object) -> str:
+                    c = _clean(col_name)
+                    c = re.sub(r"\s*\(\d+\)$", "", c)
+                    return re.sub(r"\s+", " ", c).strip()
+
+                def _normalized_col_key(col_name: object) -> str:
+                    return _base_col_name(col_name).lower().replace("_", " ").replace("-", " ")
+
+                def _coalesce_alias_columns(df_in: pd.DataFrame, aliases: List[str]) -> pd.DataFrame:
+                    alias_keys = {_normalized_col_key(a) for a in aliases}
+                    candidates = [c for c in df_in.columns if _normalized_col_key(c) in alias_keys]
+                    if len(candidates) <= 1:
+                        return df_in
+
+                    target_col: Optional[str] = None
+                    for alias in aliases:
+                        alias_key = _normalized_col_key(alias)
+                        for c in candidates:
+                            if _normalized_col_key(c) == alias_key:
+                                target_col = c
+                                break
+                        if target_col is not None:
+                            break
+                    if target_col is None:
+                        target_col = candidates[0]
+
+                    merged = df_in[candidates].copy()
+                    for c in candidates:
+                        merged[c] = merged[c].map(lambda v: np.nan if _is_blank_like(v) else v)
+                    df_in[target_col] = merged.bfill(axis=1).iloc[:, 0]
+
+                    extras = [c for c in candidates if c != target_col]
+                    if extras:
+                        df_in = df_in.drop(columns=extras, errors="ignore")
+                    return df_in
+
+                alias_groups = [
+                    ["Sell_Price_Origin", "Sell Price", "Sale Price", "מחיר מכירה", "שער מכירה"],
+                    ["Yield_ILS", "Return ILS", "תשואה ILS", "תשואה שקלית", "תשואה נטו (₪)", "Net Return (ILS)"],
+                    ["Yield_Origin", "Return (Origin)", "תשואה בשער מקור", "תשואה מקור", "תשואה נטו (מקור)", "Net Return (Origin)"],
+                    ["Current_Value_ILS", "Value ILS", "Current Value (ILS)", "שווי ILS", "שווי שקלי", "שווי עדכני (₪)"],
+                    ["Value USD", "Current Value (USD)", "שווי USD", "שווי בדולר", "שווי עדכני (USD)"],
+                ]
+                for aliases in alias_groups:
+                    display_view = _coalesce_alias_columns(display_view, aliases)
+
                 drop_cols: List[str] = []
-                keep_even_if_blank = {"Market_Price_Origin", "Sell_Price_Origin", "שער נוכחי", "מחיר מכירה"}
+                keep_even_if_blank: set[str] = set()
                 for col in display_view.columns:
                     col_text = _clean(col)
                     col_lower = col_text.lower()
@@ -4427,30 +4484,14 @@ def main() -> None:
                 if yield_cols:
                     tx_styled = _apply_signed_color(tx_styled, yield_cols)
 
-                mobile_tx_view: Optional[pd.DataFrame] = None
+                mobile_tx_render: Optional[object] = None
                 if is_mobile:
-                    mobile_tx_view = display_view.copy()
-                    for col in yield_cols:
-                        if col in mobile_tx_view.columns:
-                            mobile_tx_view[col] = mobile_tx_view[col].map(
-                                lambda v: "" if (pd.isna(v) or _clean(v) == "") else f"{_num(v):.2%}"
-                            )
-                    sell_price_like_cols = [
-                        c for c in mobile_tx_view.columns
-                        if _clean(c).lower() in {"sell_price_origin", "sell price", "sale price", "מחיר מכירה", "שער מכירה"}
-                    ]
-                    for col in sell_price_like_cols:
-                        mobile_tx_view[col] = mobile_tx_view[col].map(
-                            lambda v: "" if (pd.isna(v) or _clean(v) == "") else f"{_num(v):,.4f}"
-                        )
-                    for date_col in ["Purchase_Date", "תאריך רכישה", "Sell_Date", "תאריך מכירה"]:
-                        if date_col in mobile_tx_view.columns:
-                            mobile_tx_view[date_col] = mobile_tx_view[date_col].map(_safe_date_display)
+                    mobile_tx_render = tx_styled
 
                 _render_dataframe_adaptive(
                     tx_styled,
                     is_mobile,
-                    mobile_fallback=mobile_tx_view,
+                    mobile_fallback=mobile_tx_render,
                     use_container_width=True,
                     hide_index=True,
                 )
