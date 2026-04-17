@@ -3893,6 +3893,9 @@ def main() -> None:
                         exposure_base["Current_Price"] = derived_price
                 exposure_work = exposure_base.copy()
                 exposure_work["Ticker"] = exposure_work["Ticker"].map(_clean)
+                for numeric_col in ["Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]:
+                    if numeric_col in exposure_work.columns:
+                        exposure_work[numeric_col] = exposure_work[numeric_col].map(_num)
                 exposure_view = localize_dataframe_columns(exposure_work, language)
                 current_price_col = localize_column_name("Current_Price", language)
                 pnl_col = localize_column_name("Net_PnL_ILS", language)
@@ -3911,16 +3914,22 @@ def main() -> None:
                             pnl_col: "{:,.0f}",
                             yield_origin_col: "{:.2%}",
                             yield_ils_col: "{:.2%}",
-                        }
+                        },
+                        na_rep="",
                     )
                     exposure_styled = _apply_signed_color(exposure_styled, [pnl_col, yield_origin_col, yield_ils_col])
-                    _render_dataframe_adaptive(
-                        exposure_styled,
-                        is_mobile,
-                        force_same_render_path=True,
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                    # Mobile browsers sometimes drop Styler colors in virtualized grid;
+                    # st.table preserves static styled colors/percent formatting reliably.
+                    if is_mobile:
+                        st.table(exposure_styled)
+                    else:
+                        _render_dataframe_adaptive(
+                            exposure_styled,
+                            is_mobile,
+                            force_same_render_path=True,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
                 category_labels = {
