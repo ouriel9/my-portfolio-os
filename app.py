@@ -4944,11 +4944,28 @@ def main() -> None:
             cqa3.metric(tr("Rows in Snapshot", "שורות בתמונת מצב"), f"{len(df):,}")
 
         status_counts = core["status_counts"].copy()
+
+        def _render_recent_data_table(df_src: pd.DataFrame) -> None:
+            recent_view, _ = _with_calendar_purchase_date(localize_snapshot_view(df_src, language), language)
+            signed_cols = [
+                c for c in recent_view.columns
+                if any(token in str(c).lower() for token in ["yield", "return", "תשואה", "pnl", "רווח"])
+            ]
+            recent_styled = recent_view.style.format(na_rep="")
+            if signed_cols:
+                recent_styled = _apply_signed_color(recent_styled, signed_cols)
+            _render_dataframe_adaptive(
+                recent_styled,
+                is_mobile,
+                force_same_render_path=True,
+                use_container_width=True,
+                hide_index=True,
+            )
+
         if status_counts.empty:
             st.info(tr("No status distribution available.", "אין נתוני סטטוס להצגה."))
             st.subheader(tr("Recent Data", "נתונים אחרונים"))
-            recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df, language), language)
-            st.dataframe(recent_view, column_config=recent_date_cfg)
+            _render_recent_data_table(df)
             return
 
         status_counts_view = status_counts.copy()
@@ -4959,8 +4976,7 @@ def main() -> None:
         st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
-        recent_view, recent_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(df, language), language)
-        st.dataframe(recent_view, column_config=recent_date_cfg)
+        _render_recent_data_table(df)
 
     if live_updates:
         if page == page_manage:
