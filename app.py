@@ -1860,6 +1860,16 @@ def _apply_signed_color(styler: object, columns: list[str]) -> object:
     return styler
 
 
+def _render_dataframe_adaptive(data: object, is_mobile: bool, mobile_fallback: Optional[pd.DataFrame] = None, **kwargs) -> None:
+    """Render Styler on desktop, plain DataFrame on mobile for stability."""
+    if is_mobile and hasattr(data, "data"):
+        fallback = mobile_fallback if isinstance(mobile_fallback, pd.DataFrame) else getattr(data, "data", None)
+        if isinstance(fallback, pd.DataFrame):
+            st.dataframe(fallback, **kwargs)
+            return
+    st.dataframe(data, **kwargs)
+
+
 def _parse_dates_flexible(series: pd.Series) -> pd.Series:
     raw = series.copy()
     clean_vals = raw.map(_clean)
@@ -3832,7 +3842,7 @@ def main() -> None:
                         }
                     )
                     exposure_styled = _apply_signed_color(exposure_styled, [pnl_col, yield_origin_col, yield_ils_col])
-                    st.dataframe(exposure_styled, use_container_width=True, hide_index=True)
+                    _render_dataframe_adaptive(exposure_styled, is_mobile, use_container_width=True, hide_index=True)
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
                 category_labels = {
@@ -4006,11 +4016,8 @@ def main() -> None:
                     rates_df = pd.DataFrame(
                         [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
                     )
-                    st.dataframe(
-                        rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
+                    rates_styled = rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"})
+                    _render_dataframe_adaptive(rates_styled, is_mobile, use_container_width=True, hide_index=True)
             else:
                 report_df = reports_payload.get(selected_key, pd.DataFrame()) if isinstance(reports_payload, dict) else pd.DataFrame()
                 if not isinstance(report_df, pd.DataFrame) or report_df.empty:
@@ -4031,7 +4038,7 @@ def main() -> None:
                     signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "pnl", "תשואה", "רווח"])]
                     if signed_cols:
                         report_styled = _apply_signed_color(report_styled, signed_cols)
-                    st.dataframe(report_styled, use_container_width=True, hide_index=True)
+                    _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
 
         with tab_deposits:
             if can_show_build_up:
@@ -4419,7 +4426,24 @@ def main() -> None:
                     tx_styled = tx_styled.format(style_format, na_rep="")
                 if yield_cols:
                     tx_styled = _apply_signed_color(tx_styled, yield_cols)
-                st.dataframe(tx_styled, use_container_width=True, hide_index=True)
+
+                mobile_tx_view: Optional[pd.DataFrame] = None
+                if is_mobile:
+                    mobile_tx_view = display_view.copy()
+                    for col in yield_cols:
+                        if col in mobile_tx_view.columns:
+                            mobile_tx_view[col] = mobile_tx_view[col].map(lambda v: "" if pd.isna(v) else f"{float(v):.2%}")
+                    for date_col in ["Purchase_Date", "תאריך רכישה", "Sell_Date", "תאריך מכירה"]:
+                        if date_col in mobile_tx_view.columns:
+                            mobile_tx_view[date_col] = mobile_tx_view[date_col].map(_safe_date_display)
+
+                _render_dataframe_adaptive(
+                    tx_styled,
+                    is_mobile,
+                    mobile_fallback=mobile_tx_view,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
     elif page == page_risk:
         # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
@@ -4473,7 +4497,7 @@ def main() -> None:
                 }
             )
             fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
-            st.dataframe(fifo_styled, use_container_width=True, hide_index=True)
+            _render_dataframe_adaptive(fifo_styled, is_mobile, use_container_width=True, hide_index=True)
 
         holdings = open_trades.groupby("Ticker", as_index=False)["Quantity"].sum()
         value_series = portfolio_price_history(tuple(holdings["Ticker"]), tuple(holdings["Quantity"]), days=365)
@@ -4528,7 +4552,7 @@ def main() -> None:
                 }
             )
             scenario_styled = _apply_signed_color(scenario_styled, ["Shock", "Estimated P/L (ILS)"])
-            st.dataframe(scenario_styled, use_container_width=True, hide_index=True)
+            _render_dataframe_adaptive(scenario_styled, is_mobile, use_container_width=True, hide_index=True)
 
     elif page == page_manage:
         st.markdown(f"### {tr('Trade Management (Add / Edit / Delete)', 'ניהול עסקאות (הוספה / עריכה / מחיקה)')}")
