@@ -3500,33 +3500,55 @@ def main() -> None:
         using_apps_script = bool(web_url_clean)
         if using_apps_script and not is_apps_script_web_app_url(web_url_clean):
             if is_google_sheet_url(web_url_clean):
-                st.error(tr("Google Sheets URL was entered instead of Apps Script Web App URL", "הוזן קישור של Google Sheets במקום קישור Web App של Apps Script"))
-                st.info(tr("Use a URL that starts with https://script.google.com/macros/s/ and ends with /exec", "צריך להדביק קישור שמתחיל ב-https://script.google.com/macros/s/ ומסתיים ב-/exec"))
+                backup_df, backup_mode = _load_emergency_snapshot_backup()
+                if not backup_df.empty:
+                    st.warning(tr("Web App URL is invalid, loading backup data.", "קישור ה-Web App לא תקין, נטען מגיבוי."))
+                    df, source_mode = backup_df, backup_mode
+                else:
+                    st.error(tr("Google Sheets URL was entered instead of Apps Script Web App URL", "הוזן קישור של Google Sheets במקום קישור Web App של Apps Script"))
+                    st.info(tr("Use a URL that starts with https://script.google.com/macros/s/ and ends with /exec", "צריך להדביק קישור שמתחיל ב-https://script.google.com/macros/s/ ומסתיים ב-/exec"))
+                    st.stop()
             else:
-                st.error(tr("Invalid Web App URL", "קישור Web App לא תקין"))
-                st.info("https://script.google.com/macros/s/.../exec")
-            st.stop()
+                backup_df, backup_mode = _load_emergency_snapshot_backup()
+                if not backup_df.empty:
+                    st.warning(tr("Invalid Web App URL, loading backup data.", "קישור Web App לא תקין, נטען מגיבוי."))
+                    df, source_mode = backup_df, backup_mode
+                else:
+                    st.error(tr("Invalid Web App URL", "קישור Web App לא תקין"))
+                    st.info("https://script.google.com/macros/s/.../exec")
+                    st.stop()
 
         if not using_apps_script and not _clean(spreadsheet_ref):
-            st.error(tr("Missing Google connection: set Web App URL or Spreadsheet URL/ID", "חסר חיבור לגוגל: הזן Web App URL או Spreadsheet URL/ID עבור gspread"))
-            st.stop()
-
-        try:
-            df, source_mode = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
-        except Exception as exc:
-            exc_text = str(exc)
-            if _is_timeout_error(exc):
-                st.error(tr("Google data read failed due to timeout.", "קריאת נתונים מגוגל נכשלה בגלל Timeout."))
-                st.info(
-                    tr(
-                        "Apps Script timed out. The app will auto-use local backup data when available; otherwise retry in a minute.",
-                        "Apps Script חרג מזמן התגובה. האפליקציה תעבור אוטומטית לגיבוי מקומי אם קיים; אחרת נסה שוב בעוד דקה.",
-                    )
-                )
-                st.caption(exc_text)
+            backup_df, backup_mode = _load_emergency_snapshot_backup()
+            if not backup_df.empty:
+                st.warning(tr("Missing Google connection settings, loading backup data.", "חסרות הגדרות חיבור לגוגל, נטען מגיבוי."))
+                df, source_mode = backup_df, backup_mode
             else:
-                st.error(f"{tr('Google data read failed', 'קריאת נתונים מגוגל נכשלה')}: {exc_text}")
-            st.stop()
+                st.error(tr("Missing Google connection: set Web App URL or Spreadsheet URL/ID", "חסר חיבור לגוגל: הזן Web App URL או Spreadsheet URL/ID עבור gspread"))
+                st.stop()
+
+        if "df" not in locals() or not isinstance(locals().get("df"), pd.DataFrame):
+            try:
+                df, source_mode = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
+            except Exception as exc:
+                backup_df, backup_mode = _load_emergency_snapshot_backup()
+                if not backup_df.empty:
+                    st.warning(tr("Google read failed on this session, using backup data (same baseline as desktop).", "קריאת הנתונים מגוגל נכשלה בסשן הזה, נטען מגיבוי (אותו בסיס נתונים כמו במחשב)."))
+                    df, source_mode = backup_df, backup_mode
+                else:
+                    exc_text = str(exc)
+                    if _is_timeout_error(exc):
+                        st.error(tr("Google data read failed due to timeout.", "קריאת נתונים מגוגל נכשלה בגלל Timeout."))
+                        st.info(
+                            tr(
+                                "Apps Script timed out. The app will auto-use local backup data when available; otherwise retry in a minute.",
+                                "Apps Script חרג מזמן התגובה. האפליקציה תעבור אוטומטית לגיבוי מקומי אם קיים; אחרת נסה שוב בעוד דקה.",
+                            )
+                        )
+                        st.caption(exc_text)
+                    else:
+                        st.error(f"{tr('Google data read failed', 'קריאת נתונים מגוגל נכשלה')}: {exc_text}")
+                    st.stop()
 
     loading_placeholder.empty()
 
