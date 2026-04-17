@@ -4641,7 +4641,13 @@ def main() -> None:
                 }
             )
             fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
-            _render_dataframe_adaptive(fifo_styled, is_mobile, use_container_width=True, hide_index=True)
+            _render_dataframe_adaptive(
+                fifo_styled,
+                is_mobile,
+                force_same_render_path=True,
+                use_container_width=True,
+                hide_index=True,
+            )
 
         holdings = open_trades.groupby("Ticker", as_index=False)["Quantity"].sum()
         value_series = portfolio_price_history(tuple(holdings["Ticker"]), tuple(holdings["Quantity"]), days=365)
@@ -4696,7 +4702,13 @@ def main() -> None:
                 }
             )
             scenario_styled = _apply_signed_color(scenario_styled, ["Shock", "Estimated P/L (ILS)"])
-            _render_dataframe_adaptive(scenario_styled, is_mobile, use_container_width=True, hide_index=True)
+            _render_dataframe_adaptive(
+                scenario_styled,
+                is_mobile,
+                force_same_render_path=True,
+                use_container_width=True,
+                hide_index=True,
+            )
 
     elif page == page_manage:
         st.markdown(f"### {tr('Trade Management (Add / Edit / Delete)', 'ניהול עסקאות (הוספה / עריכה / מחיקה)')}")
