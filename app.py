@@ -892,7 +892,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top)) !important;
             left: 3.9rem !important;
-            right: 3.9rem !important;
+            right: 5.4rem !important;
             z-index: 100001 !important;
             margin: 0 !important;
         }}
@@ -1695,10 +1695,32 @@ def inject_client_fixes() -> None:
             } catch (e) { /* cross-origin iframe – skip */ }
           }
 
+          function makeWatchlistExpandUp() {
+            try {
+              const markers = ['tradingview watchlist', 'רשימת מעקב tradingview'];
+              const expanders = Array.from(rootDoc.querySelectorAll('[data-testid="stExpander"]'));
+              expanders.forEach((expander) => {
+                const summary = expander.querySelector('summary');
+                if (!summary) return;
+                const label = (summary.innerText || '').trim().toLowerCase();
+                if (!markers.some((m) => label.indexOf(m) >= 0)) return;
+
+                const details = summary.closest('details') || expander.querySelector('details');
+                if (!details) return;
+                details.style.display = 'flex';
+                details.style.flexDirection = 'column-reverse';
+                details.style.alignItems = 'stretch';
+              });
+            } catch (e) {
+              // Ignore non-critical DOM patch issues.
+            }
+          }
+
           function run() {
             removeBranding();
             setupTabSwipe();
             fixSidebarLeft();
+            makeWatchlistExpandUp();
           }
 
           run();
@@ -3927,45 +3949,6 @@ def main() -> None:
                 return out
 
             def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview") -> None:
-                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
-                category_labels = {
-                    "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
-                    "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
-                    "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
-                }
-                watch_rows = []
-                for item in DEFAULT_TRADINGVIEW_WATCHLIST:
-                    watch_rows.append(
-                        {
-                            "Ticker": item["ticker"],
-                            "Title": f"{item['ticker']} - {item['label']}",
-                            "Symbol": item["tv_symbol"],
-                            "Category": category_labels[item["category"]],
-                        }
-                    )
-
-                if watch_rows:
-                    watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    watchlist_reset_key = f"{widget_prefix}_watchlist_reset_token"
-                    if watchlist_reset_key not in st.session_state:
-                        st.session_state[watchlist_reset_key] = False
-                    reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
-                    open_container = st.expander(f"{watchlist_label}{reset_char}", expanded=False)
-                    with open_container:
-                        for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
-                            part = watch_df[watch_df["Category"] == cat]
-                            if part.empty:
-                                continue
-                            st.markdown(f"**{cat}**")
-                            for idx, row in enumerate(part.itertuples(index=False), 1):
-                                if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
-                                    st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
-                                    st.session_state["tv_chart_open"] = True
-                                    st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
-                                    st.session_state[watchlist_reset_key] = not bool(st.session_state.get(watchlist_reset_key, False))
-                                    st.rerun()
-                else:
-                    st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
                 st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
                 exposure_cols = ["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
@@ -4019,6 +4002,46 @@ def main() -> None:
                             use_container_width=True,
                             hide_index=True,
                         )
+
+                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
+                category_labels = {
+                    "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
+                    "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
+                    "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
+                }
+                watch_rows = []
+                for item in DEFAULT_TRADINGVIEW_WATCHLIST:
+                    watch_rows.append(
+                        {
+                            "Ticker": item["ticker"],
+                            "Title": f"{item['ticker']} - {item['label']}",
+                            "Symbol": item["tv_symbol"],
+                            "Category": category_labels[item["category"]],
+                        }
+                    )
+
+                if watch_rows:
+                    watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
+                    watchlist_reset_key = f"{widget_prefix}_watchlist_reset_token"
+                    if watchlist_reset_key not in st.session_state:
+                        st.session_state[watchlist_reset_key] = False
+                    reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
+                    open_container = st.expander(f"{watchlist_label}{reset_char}", expanded=False)
+                    with open_container:
+                        for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
+                            part = watch_df[watch_df["Category"] == cat]
+                            if part.empty:
+                                continue
+                            st.markdown(f"**{cat}**")
+                            for idx, row in enumerate(part.itertuples(index=False), 1):
+                                if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
+                                    st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
+                                    st.session_state["tv_chart_open"] = True
+                                    st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
+                                    st.session_state[watchlist_reset_key] = not bool(st.session_state.get(watchlist_reset_key, False))
+                                    st.rerun()
+                else:
+                    st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
                 if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
                     active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
