@@ -5103,10 +5103,9 @@ def main() -> None:
 
                 if is_sell_side:
                     sell_from_open_lot = False
-                    open_lot_options: List[Tuple[str, str]] = []
+                    open_lot_ids: List[str] = []
                     if not open_trades.empty:
                         lots_src = open_trades.copy()
-                        lots_src = lots_src[lots_src["Ticker"].map(lambda v: _clean(v).upper()) == _clean(new_row["Ticker"]).upper()]
                         for _, lot in lots_src.iterrows():
                             lot_id = _clean(lot.get("Trade_ID", ""))
                             if not lot_id:
@@ -5114,24 +5113,22 @@ def main() -> None:
                             lot_qty = float(_num(lot.get("Quantity", 0.0)))
                             if lot_qty <= 0:
                                 continue
-                            lot_date = _parse_dates_flexible(pd.Series([lot.get("Purchase_Date", "")])).iloc[0]
-                            lot_date_txt = lot_date.strftime("%Y-%m-%d") if pd.notna(lot_date) else _clean(lot.get("Purchase_Date", ""))
-                            lot_label = f"{lot_id} | {_clean(lot.get('Platform', ''))} | {lot_date_txt} | Qty {lot_qty:.8f}"
-                            open_lot_options.append((lot_label, lot_id))
+                            open_lot_ids.append(lot_id)
+                        open_lot_ids = sorted(set(open_lot_ids))
 
                     sell_from_open_lot = st.checkbox(
                         tr("Sell from existing open lot", "מכירה מתוך לוט פתוח קיים"),
-                        value=bool(open_lot_options),
-                        disabled=not bool(open_lot_options),
+                        value=bool(open_lot_ids),
+                        disabled=not bool(open_lot_ids),
                     )
 
                     chosen_source_trade_id = ""
                     source_row = None
-                    if sell_from_open_lot and open_lot_options:
-                        labels = [lbl for lbl, _ in open_lot_options]
-                        chosen_label = st.selectbox(tr("Source open lot", "לוט מקור פתוח"), labels)
-                        label_to_id = {lbl: tid for lbl, tid in open_lot_options}
-                        chosen_source_trade_id = label_to_id.get(chosen_label, "")
+                    if sell_from_open_lot and open_lot_ids:
+                        chosen_source_trade_id = st.selectbox(
+                            tr("Source open lot (Trade_ID)", "לוט מקור פתוח (Trade_ID)"),
+                            open_lot_ids,
+                        )
                         candidate_rows = open_trades[open_trades["Trade_ID"].astype(str).map(_clean) == _clean(chosen_source_trade_id)]
                         if not candidate_rows.empty:
                             source_row = candidate_rows.iloc[0]
