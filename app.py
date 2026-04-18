@@ -978,6 +978,16 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         }}
         /* ══════════════════════════════════════════════════════════════════ */
     }}
+
+    # Sidebar customizations
+    <style>
+    /* Force the Streamlit sidebar to stay on the LEFT even in Hebrew (RTL) mode. */
+    section[data-testid="stSidebar"],
+    [data-testid="stSidebar"] {{
+        left: 0 !important;
+        right: auto !important;
+        direction: ltr !important;
+    }}
     </style>
     """
 
@@ -1914,6 +1924,13 @@ def _num(value: object) -> float:
         return 0.0
 
 
+def _num_or_nan(value: object) -> float:
+    s = _clean(value)
+    if not s or s.lower() in {"nan", "nat", "none"}:
+        return np.nan
+    return _num(value)
+
+
 def _signed_value_color(value: object) -> str:
     num = _num(value)
     if num > 0:
@@ -1995,6 +2012,12 @@ def _parse_dates_flexible(series: pd.Series) -> pd.Series:
     if dash_dmy_mask.any():
         parsed.loc[dash_dmy_mask] = pd.to_datetime(clean_vals[dash_dmy_mask], format="%d-%m-%Y", errors="coerce")
 
+    # Google Sheets can surface dates as serial numbers (e.g. 46130).
+    raw_num = pd.to_numeric(raw, errors="coerce")
+    serial_mask = parsed.isna() & raw_num.between(20000, 80000, inclusive="both")
+    if serial_mask.any():
+        parsed.loc[serial_mask] = pd.to_datetime(raw_num[serial_mask], unit="D", origin="1899-12-30", errors="coerce")
+
     # Final fallback: day-first only.
     remaining = parsed.isna() & clean_vals.ne("")
     if remaining.any():
@@ -2004,13 +2027,21 @@ def _parse_dates_flexible(series: pd.Series) -> pd.Series:
 
 def _to_trade_id(row: pd.Series) -> str:
     platform = _clean(row.get("Platform", ""))
+    location = _clean(row.get("Current_Location", ""))
+    asset_type = _clean(row.get("Type", ""))
     ticker = _clean(row.get("Ticker", "")).upper()
     purchase_raw = row.get("Purchase_Date", "")
     purchase_dt = _parse_dates_flexible(pd.Series([purchase_raw])).iloc[0]
     purchase_date = purchase_dt.strftime("%Y-%m-%d") if pd.notna(purchase_dt) else _clean(purchase_raw)
     qty = _num(row.get("Quantity", 0))
+    buy_price = _num(row.get("Origin_Buy_Price", 0))
     cost_origin = _num(row.get("Cost_Origin", 0))
-    raw = f"{platform}|{ticker}|{purchase_date}|{qty}|{cost_origin}"
+    currency = _normalize_currency_code(row.get("Origin_Currency", ""))
+    commission = _num(row.get("Commission", 0))
+    raw = (
+        f"{platform}|{location}|{asset_type}|{ticker}|{purchase_date}|"
+        f"{qty:.12f}|{buy_price:.12f}|{cost_origin:.12f}|{currency}|{commission:.12f}"
+    )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -2368,22 +2399,30 @@ def _safe_quote(symbol: str) -> float:
     return 0.0
 
 
-def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None) -> str:
+def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None, help_text: Optional[str] = None) -> str:
     cleaned = sorted({_clean(v) for v in options if _clean(v)})
     tr_local = tr_fn or (lambda en, he: he)
-    mode = st.radio(
-        f"{label} - {tr_local('Input mode', 'אופן הזנה')}",
-        [tr_local("Pick from list", "בחירה מרשימה"), tr_local("Type manually", "הקלדה ידנית")],
-        horizontal=True,
-        key=f"{key_prefix}_{label}_mode",
-    )
-    if mode == tr_local("Pick from list", "בחירה מרשימה"):
-        selectable = cleaned if cleaned else ([default] if _clean(default) else [])
-        if not selectable:
-            return st.text_input(label, value=default, key=f"{key_prefix}_{label}_fallback")
-        index = selectable.index(default) if default in selectable else 0
-        return st.selectbox(label, selectable, index=index, key=f"{key_prefix}_{label}_pick")
-    return st.text_input(label, value=default, key=f"{key_prefix}_{label}_type")
+    default_clean = _clean(default)
+    if default_clean and default_clean not in cleaned:
+        cleaned = [default_clean] + cleaned
+
+    other_label = tr_local("Other (type manually)", "אחר (הקלדה ידנית)")
+    if not cleaned:
+        return st.text_input(label, value=default_clean, key=f"{key_prefix}_{label}_type", help=help_text)
+
+    selectable = cleaned + [other_label]
+    default_select = default_clean if default_clean in cleaned else cleaned[0]
+    index = selectable.index(default_select) if default_select in selectable else 0
+    picked = st.selectbox(label, selectable, index=index, key=f"{key_prefix}_{label}_pick", help=help_text)
+
+    if picked == other_label:
+        return st.text_input(
+            tr_local("Custom value", "ערך מותאם"),
+            value=(default_clean if default_select == other_label else ""),
+            key=f"{key_prefix}_{label}_type",
+            help=help_text,
+        )
+    return _clean(picked)
 
 
 def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
@@ -3033,7 +3072,8 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
 
     for col in ["Yield_At_Sale", "Yield_Origin", "Yield_ILS"]:
         if col in df.columns:
-            df[col] = df[col].map(_num)
+            # Keep truly missing yields as NaN so downstream logic can backfill.
+            df[col] = df[col].map(_num_or_nan)
 
     # ── Validate Cost_Origin against Quantity * Origin_Buy_Price ──
     # If they diverge significantly, recalculate (fixes stale cost data from spreadsheet).
@@ -3441,6 +3481,9 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
             "Sell_Price_Origin": float(_num(src.get("Sell_Price_Origin", 0.0))),
         }
 
+        if out["Cost_Origin"] <= 0 and out["Quantity"] > 0 and out["Origin_Buy_Price"] > 0:
+            out["Cost_Origin"] = float(out["Quantity"] * out["Origin_Buy_Price"])
+
         is_closed = _is_closed_status(out.get("Status", "")) or out.get("Action", "") == "SELL"
         out["Status"] = "סגור" if is_closed else "פתוח"
         out["Action"] = "SELL" if is_closed else "BUY"
@@ -3582,7 +3625,16 @@ def main() -> None:
     page_manage = tr("Trade Management", "ניהול עסקאות")
     page_risk = tr("Risk & FIFO", "סיכונים ופיפו")
     page_quality = tr("Data Quality", "בקרת נתונים")
-    page_options = [page_dashboard, page_manage, page_risk, page_quality]
+    page_id_to_label = {
+        "dashboard": page_dashboard,
+        "manage": page_manage,
+        "risk": page_risk,
+        "quality": page_quality,
+    }
+    page_order = ["dashboard", "manage", "risk", "quality"]
+    active_page_id = _clean(st.session_state.get("active_page_id", "dashboard")) or "dashboard"
+    if active_page_id not in page_id_to_label:
+        active_page_id = "dashboard"
     is_mobile = _is_mobile_client()
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
@@ -3590,23 +3642,31 @@ def main() -> None:
 
     if is_mobile:
         # ── Mobile: top segmented control for page nav ──
-        page_labels = {
-            tr("📊 Overview", "📊 סקירה"): page_dashboard,
-            tr("💼 Trades", "💼 עסקאות"): page_manage,
-            tr("🛡 Risk", "🛡 סיכון"): page_risk,
-            tr("📋 Data", "📋 נתונים"): page_quality,
+        mobile_label_to_id = {
+            tr("📊 Overview", "📊 סקירה"): "dashboard",
+            tr("💼 Trades", "💼 עסקאות"): "manage",
+            tr("🛡 Risk", "🛡 סיכון"): "risk",
+            tr("📋 Data", "📋 נתונים"): "quality",
         }
+        mobile_options = list(mobile_label_to_id.keys())
+        active_mobile_index = 0
+        for i, lbl in enumerate(mobile_options):
+            if mobile_label_to_id.get(lbl) == active_page_id:
+                active_mobile_index = i
+                break
         page_choice = st.radio(
             tr("Page", "עמוד"),
-            list(page_labels.keys()),
+            mobile_options,
             horizontal=True,
-            key="page_selector",
+            index=active_mobile_index,
             label_visibility="collapsed",
         )
-        page = page_labels.get(page_choice, page_dashboard)
+        active_page_id = mobile_label_to_id.get(page_choice, "dashboard")
     else:
         # ── Desktop: sidebar option-menu navigation ──
         st.sidebar.title(tr("Navigation", "ניווט"))
+        page_options = [page_id_to_label[p] for p in page_order]
+        active_page_index = page_order.index(active_page_id) if active_page_id in page_order else 0
         if option_menu is not None:
             nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
             nav_container_border = "0px solid transparent"
@@ -3620,7 +3680,7 @@ def main() -> None:
                     menu_title=None,
                     options=page_options,
                     icons=["house", "wallet", "shield-check", "database-check"],
-                    default_index=0,
+                    default_index=active_page_index,
                     orientation="vertical",
                     styles={
                         "container": {
@@ -3650,9 +3710,16 @@ def main() -> None:
                         },
                     },
                 )
+                label_to_id = {v: k for k, v in page_id_to_label.items()}
+                active_page_id = label_to_id.get(page, "dashboard")
         else:
             st.sidebar.caption(tr("Install streamlit-option-menu for enhanced navigation.", "להשלמת תפריט הניווט יש להתקין streamlit-option-menu."))
-            page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options)
+            page = st.sidebar.selectbox(tr("Page", "עמוד"), page_options, index=active_page_index)
+            label_to_id = {v: k for k, v in page_id_to_label.items()}
+            active_page_id = label_to_id.get(page, "dashboard")
+
+    st.session_state["active_page_id"] = active_page_id
+    page = page_id_to_label.get(active_page_id, page_dashboard)
 
     st.markdown(
         f"<div class='app-header-wrap'><h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>"
@@ -4402,7 +4469,7 @@ def main() -> None:
                         fx_cols.append(col)
                 if fx_cols:
                     tx_view = tx_view.drop(columns=fx_cols, errors="ignore")
-                prioritized_cols = [c for c in ["Ticker", "Purchase_Date"] if c in tx_view.columns]
+                prioritized_cols = [c for c in ["Trade_ID", "Purchase_Date"] if c in tx_view.columns]
                 remaining_cols = [c for c in tx_view.columns if c not in prioritized_cols]
                 tx_view = tx_view[prioritized_cols + remaining_cols]
 
@@ -4433,7 +4500,7 @@ def main() -> None:
                     scope_options = [both_label, open_label, closed_label]
                     scope_key = "dashboard_transactions_status_scope"
                     if st.session_state.get(scope_key) not in scope_options:
-                        st.session_state[scope_key] = open_label
+                        st.session_state[scope_key] = both_label
                     status_scope = st.radio(
                         tr("Position scope", "הצגת פוזיציות"),
                         scope_options,
@@ -4521,6 +4588,33 @@ def main() -> None:
                         tx_view["Yield_At_Sale"] = np.where(has_existing_yield, existing_yield_sale, sale_yield_calc)
                     else:
                         tx_view["Yield_At_Sale"] = sale_yield_calc
+
+                    # Backfill current-yield columns if sheet formulas are missing/blank.
+                    cost_ils_series = tx_view["Cost_ILS"].map(_num) if "Cost_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    value_ils_series = tx_view["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    yield_ils_calc = np.where(cost_ils_series > 0, (value_ils_series - cost_ils_series) / cost_ils_series, np.nan)
+
+                    cost_origin_series = tx_view["Cost_Origin"].map(_num) if "Cost_Origin" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    value_origin_series = np.where(
+                        tx_view["Origin_Currency"].map(_normalize_currency_code) == "USD",
+                        np.where(fx_now > 0, value_ils_series / fx_now, np.nan),
+                        value_ils_series,
+                    )
+                    yield_origin_calc = np.where(cost_origin_series > 0, (value_origin_series - cost_origin_series) / cost_origin_series, np.nan)
+
+                    if "Yield_ILS" in tx_view.columns:
+                        existing_yield_ils = tx_view["Yield_ILS"]
+                        has_existing_ils = ~existing_yield_ils.map(lambda v: pd.isna(v) or _clean(v) == "")
+                        tx_view["Yield_ILS"] = np.where(has_existing_ils, existing_yield_ils, yield_ils_calc)
+                    else:
+                        tx_view["Yield_ILS"] = yield_ils_calc
+
+                    if "Yield_Origin" in tx_view.columns:
+                        existing_yield_origin = tx_view["Yield_Origin"]
+                        has_existing_origin = ~existing_yield_origin.map(lambda v: pd.isna(v) or _clean(v) == "")
+                        tx_view["Yield_Origin"] = np.where(has_existing_origin, existing_yield_origin, yield_origin_calc)
+                    else:
+                        tx_view["Yield_Origin"] = yield_origin_calc
 
 
                     # Hide dedicated helper column (user requested).
@@ -4680,8 +4774,6 @@ def main() -> None:
                 for col in yield_cols:
                     display_view[col] = display_view[col].map(_to_ratio_for_display)
 
-                style_format: Dict[str, object] = {col: "{:.2%}" for col in yield_cols}
-
                 def _safe_date_display(v: object) -> str:
                     if pd.isna(v):
                         return ""
@@ -4698,9 +4790,13 @@ def main() -> None:
                         return parsed_one.strftime("%d/%m/%Y")
                     return s
 
+                style_format: Dict[str, object] = {}
                 for date_col in ["Purchase_Date", "תאריך רכישה", "Sell_Date", "תאריך מכירה"]:
                     if date_col in display_view.columns:
                         style_format[date_col] = _safe_date_display
+                for ycol in yield_cols:
+                    if ycol in display_view.columns:
+                        style_format[ycol] = "{:.2%}"
 
                 tx_styled = display_view.style
                 if style_format:
@@ -4736,7 +4832,6 @@ def main() -> None:
                 except Exception:
                     pass
                 st.session_state["risk_page_last_refresh_ts"] = now_ts
-##
         st.markdown(f"### {tr('Risk, Performance and FIFO', 'סיכונים, ביצועים ועלות פיפו')}")
         fifo_df = fifo_metrics(trades)
         st.subheader(tr("FIFO Engine", "מנוע פיפו"))
@@ -4876,28 +4971,62 @@ def main() -> None:
         if preview_cols:
             sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in trade_view.columns]
             if sort_cols:
+                # Use a stable sort and a Trade_ID tie-breaker so row order does not drift between reruns.
+                if "Trade_ID" in trade_view.columns and "Trade_ID" not in sort_cols:
+                    sort_cols = sort_cols + ["Trade_ID"]
                 asc = [False if c == "Purchase_Date" else True for c in sort_cols]
-                trade_view = trade_view.sort_values(sort_cols, ascending=asc)
+                trade_view = trade_view.sort_values(sort_cols, ascending=asc, kind="mergesort")
 
-            manage_select_df = trade_view[preview_cols].copy()
-            selected_trade_id = st.session_state.get("selected_trade_id", "")
-            manage_select_df.insert(0, "__select__", manage_select_df["Trade_ID"].astype(str) == str(selected_trade_id))
+            manage_select_df = trade_view[preview_cols].copy().reset_index(drop=True)
+            row_trade_ids = manage_select_df["Trade_ID"].astype(str).map(_clean)
+            selected_trade_id = _clean(st.session_state.get("selected_trade_id", ""))
+            visible_trade_ids = {tid for tid in row_trade_ids.tolist() if tid}
+            if selected_trade_id and selected_trade_id not in visible_trade_ids:
+                selected_trade_id = ""
+                st.session_state["selected_trade_id"] = ""
+
+            manage_select_df.insert(0, "__select__", row_trade_ids == selected_trade_id)
+            row_trade_id_by_pos = {i: tid for i, tid in enumerate(row_trade_ids.tolist()) if tid}
             manage_select_df = manage_select_df.rename(columns={"__select__": tr("Select", "בחר")})
 
             manage_select_view, manage_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(manage_select_df, language), language)
+            select_col = tr("Select", "בחר")
+            table_signature = hashlib.sha1(
+                "|".join(manage_select_df["Trade_ID"].astype(str).tolist()).encode("utf-8")
+            ).hexdigest()[:12]
             edited_manage_df = st.data_editor(
                 manage_select_view,
                 use_container_width=True,
                 hide_index=True,
                 column_config=manage_date_cfg,
-                key="manage_table_selector",
+                disabled=[c for c in manage_select_view.columns if c != select_col],
+                key=f"manage_table_selector_{table_signature}",
             )
 
-            select_col = tr("Select", "בחר")
-            trade_id_col = SNAPSHOT_HEADERS["Trade_ID"][language]
-            selected_rows = edited_manage_df[edited_manage_df[select_col] == True] if select_col in edited_manage_df.columns else pd.DataFrame()
-            if not selected_rows.empty and trade_id_col in selected_rows.columns:
-                st.session_state["selected_trade_id"] = _clean(selected_rows.iloc[0][trade_id_col])
+            selected_ids: List[str] = []
+            if select_col in edited_manage_df.columns:
+                selected_mask = edited_manage_df[select_col].fillna(False).astype(bool)
+                selected_indices = selected_mask[selected_mask].index.tolist()
+                selected_ids = [
+                    row_trade_id_by_pos.get(int(i), "")
+                    for i in selected_indices
+                ]
+                selected_ids = [tid for tid in selected_ids if tid]
+
+            resolved_selected_id = ""
+            if selected_ids:
+                # Strict single-select model: newest checked row replaces previous selection.
+                newly_checked = [tid for tid in selected_ids if tid and tid != selected_trade_id]
+                resolved_selected_id = newly_checked[-1] if newly_checked else selected_ids[-1]
+
+            prev_selected_id = _clean(st.session_state.get("selected_trade_id", ""))
+            if resolved_selected_id != prev_selected_id:
+                st.session_state["selected_trade_id"] = resolved_selected_id
+
+            # If multiple rows were checked in the editor, force rerun so only one remains checked.
+            if len(selected_ids) > 1:
+                st.rerun()
+
             selected_trade_id = _clean(st.session_state.get("selected_trade_id", ""))
 
             if selected_trade_id:
@@ -4922,32 +5051,198 @@ def main() -> None:
         locations = trades["Current_Location"].dropna().astype(str).tolist() if "Current_Location" in trades.columns else []
 
         if mode == "add":
+            partial_sell_meta: Optional[Dict[str, object]] = None
+            field_help = {
+                "side": tr("Choose if this new row is a purchase or a sale event.", "בחר אם הרשומה החדשה היא קנייה או מכירה."),
+                "Current_Location": tr("Where the asset is currently held (wallet/broker/exchange).", "איפה הנכס מוחזק כרגע (ארנק/ברוקר/זירה)."),
+                "Platform": tr("The trading platform/broker where the trade was executed.", "הפלטפורמה/ברוקר שבה בוצעה העסקה."),
+                "Type": tr("Asset category such as Crypto or Capital Market.", "סוג הנכס, למשל קריפטו או שוק ההון."),
+                "Ticker": tr("Asset symbol, for example BTC or VOO.", "סימול הנכס, למשל BTC או VOO."),
+                "Purchase_Date": tr("Original buy date of this lot.", "תאריך הקנייה המקורי של הלוט הזה."),
+                "Sell_Date": tr("Execution date of the sale.", "תאריך ביצוע המכירה."),
+                "Sell_Price_Origin": tr("Actual sale price per unit in the original currency.", "מחיר המכירה בפועל ליחידה במטבע המקור."),
+                "Quantity": tr("Number of units/coins in this trade.", "כמות היחידות/מטבעות בעסקה."),
+                "Origin_Buy_Price": tr("Buy price per unit in the original currency.", "שער קנייה ליחידה במטבע המקור."),
+                "Cost_Origin": tr("Total trade cost in original currency.", "עלות כוללת במטבע המקור."),
+                "Origin_Currency": tr("Currency of buy price and origin cost (USD/ILS).", "המטבע של שער הקנייה והעלות (USD/ILS)."),
+                "Commission": tr("Broker/exchange fee paid for this trade.", "העמלה ששולמה על העסקה."),
+            }
+
+            side_label_map = {
+                tr("Buy", "קנייה"): "BUY",
+                tr("Sell", "מכירה"): "SELL",
+            }
+            side_options = list(side_label_map.keys())
+            side_key = "add_trade_side"
+            current_side_label = _clean(st.session_state.get(side_key, side_options[0]))
+            if current_side_label not in side_options:
+                current_side_label = side_options[0]
+            side_index = side_options.index(current_side_label)
+            side_label = st.radio(
+                tr("Trade side", "צד העסקה"),
+                side_options,
+                horizontal=True,
+                key=side_key,
+                index=side_index,
+                help=field_help["side"],
+            )
+            selected_side = side_label_map[side_label]
+            is_sell_side = selected_side == "SELL"
+
             with st.form("add_form"):
                 new_row = {
-                    "Current_Location": _select_or_type(tr("Current location", "מיקום נוכחי"), locations, "", "add_location", tr),
-                    "Platform": _select_or_type(tr("Platform", "פלטפורמה"), platforms, "Bit2C", "add_platform", tr),
-                    "Type": _select_or_type(tr("Asset type", "סוג נכס"), types, "קריפטו", "add_type", tr),
-                    "Ticker": _select_or_type(tr("Ticker", "טיקר"), tickers, "BTC", "add_ticker", tr).upper(),
-                    "Purchase_Date": st.date_input(tr("Purchase date", "תאריך רכישה"), value=datetime.now()).strftime("%Y-%m-%d"),
-                    "Quantity": st.number_input(tr("Quantity", "כמות"), value=0.0, format="%.8f"),
-                    "Origin_Buy_Price": st.number_input(tr("Buy price", "שער קנייה"), value=0.0),
-                    "Cost_Origin": st.number_input(tr("Origin cost", "עלות מקור"), value=0.0),
-                    "Origin_Currency": _select_or_type(tr("Origin currency", "מטבע מקור"), currencies, "USD", "add_currency", tr).upper(),
-                    "Commission": st.number_input(tr("Commission", "עמלה"), value=0.0),
-                    "Status": st.selectbox(tr("Status", "סטטוס"), ["פתוח", "סגור"]),
-                    "Cost_ILS": st.number_input(tr("Cost ILS", "עלות ILS"), value=0.0),
-                    "Current_Value_ILS": st.number_input(tr("Value ILS", "שווי ILS"), value=0.0),
-                    "Action": st.selectbox(tr("Accounting action", "פעולה חשבונאית"), ["BUY", "SELL"]),
+                    "Current_Location": _select_or_type(tr("Current location", "מיקום נוכחי"), locations, "", "add_location", tr, help_text=field_help["Current_Location"]),
+                    "Platform": _select_or_type(tr("Platform", "פלטפורמה"), platforms, "Bit2C", "add_platform", tr, help_text=field_help["Platform"]),
+                    "Type": _select_or_type(tr("Asset type", "סוג נכס"), types, "קריפטו", "add_type", tr, help_text=field_help["Type"]),
+                    "Ticker": _select_or_type(tr("Ticker", "טיקר"), tickers, "BTC", "add_ticker", tr, help_text=field_help["Ticker"]).upper(),
+                    "Origin_Currency": _select_or_type(tr("Origin currency", "מטבע מקור"), currencies, "USD", "add_currency", tr, help_text=field_help["Origin_Currency"]).upper(),
+                    "Action": selected_side,
                     "Event_Type": "TRADE",
+                    "Sell_Price_Origin": 0.0,
                 }
-                if _is_closed_status(new_row.get("Status", "")) or _clean(new_row.get("Action", "")).upper() == "SELL":
-                    new_row["Sell_Date"] = st.date_input(
-                        tr("Sell date", "תאריך מכירה"),
-                        value=datetime.now(),
-                        key="add_sell_date",
-                    ).strftime("%Y-%m-%d")
+
+                if is_sell_side:
+                    sell_from_open_lot = False
+                    open_lot_options: List[Tuple[str, str]] = []
+                    if not open_trades.empty:
+                        lots_src = open_trades.copy()
+                        lots_src = lots_src[lots_src["Ticker"].map(lambda v: _clean(v).upper()) == _clean(new_row["Ticker"]).upper()]
+                        for _, lot in lots_src.iterrows():
+                            lot_id = _clean(lot.get("Trade_ID", ""))
+                            if not lot_id:
+                                continue
+                            lot_qty = float(_num(lot.get("Quantity", 0.0)))
+                            if lot_qty <= 0:
+                                continue
+                            lot_date = _parse_dates_flexible(pd.Series([lot.get("Purchase_Date", "")])).iloc[0]
+                            lot_date_txt = lot_date.strftime("%Y-%m-%d") if pd.notna(lot_date) else _clean(lot.get("Purchase_Date", ""))
+                            lot_label = f"{lot_id} | {_clean(lot.get('Platform', ''))} | {lot_date_txt} | Qty {lot_qty:.8f}"
+                            open_lot_options.append((lot_label, lot_id))
+
+                    sell_from_open_lot = st.checkbox(
+                        tr("Sell from existing open lot", "מכירה מתוך לוט פתוח קיים"),
+                        value=bool(open_lot_options),
+                        disabled=not bool(open_lot_options),
+                    )
+
+                    chosen_source_trade_id = ""
+                    source_row = None
+                    if sell_from_open_lot and open_lot_options:
+                        labels = [lbl for lbl, _ in open_lot_options]
+                        chosen_label = st.selectbox(tr("Source open lot", "לוט מקור פתוח"), labels)
+                        label_to_id = {lbl: tid for lbl, tid in open_lot_options}
+                        chosen_source_trade_id = label_to_id.get(chosen_label, "")
+                        candidate_rows = open_trades[open_trades["Trade_ID"].astype(str).map(_clean) == _clean(chosen_source_trade_id)]
+                        if not candidate_rows.empty:
+                            source_row = candidate_rows.iloc[0]
+
+                    if source_row is not None:
+                        src_qty = float(_num(source_row.get("Quantity", 0.0)))
+                        src_buy_price = float(_num(source_row.get("Origin_Buy_Price", 0.0)))
+                        src_cost = float(_num(source_row.get("Cost_Origin", 0.0)))
+                        src_commission = float(_num(source_row.get("Commission", 0.0)))
+                        src_purchase_dt = _parse_dates_flexible(pd.Series([source_row.get("Purchase_Date", "")])).iloc[0]
+                        src_purchase_txt = src_purchase_dt.strftime("%Y-%m-%d") if pd.notna(src_purchase_dt) else _clean(source_row.get("Purchase_Date", ""))
+
+                        sell_qty = st.number_input(
+                            tr("Sell quantity", "כמות למכירה"),
+                            min_value=0.0,
+                            max_value=float(src_qty),
+                            value=float(src_qty),
+                            format="%.8f",
+                            help=field_help["Quantity"],
+                        )
+                        sell_date_txt = st.date_input(
+                            tr("Sell date", "תאריך מכירה"),
+                            value=datetime.now(),
+                            key="add_sell_date",
+                            help=field_help["Sell_Date"],
+                        ).strftime("%Y-%m-%d")
+                        sell_price_origin = st.number_input(
+                            tr("Sell price", "מחיר מכירה"),
+                            value=0.0,
+                            help=field_help["Sell_Price_Origin"],
+                        )
+                        new_row["Sell_Price_Origin"] = float(sell_price_origin)
+
+                        ratio = (sell_qty / src_qty) if src_qty > 1e-12 else 0.0
+                        allocated_cost = float(src_cost * ratio)
+                        allocated_commission = float(src_commission * ratio)
+                        fx_for_origin = manage_fx if _normalize_currency_code(source_row.get("Origin_Currency", "")) == "USD" else 1.0
+
+                        new_row.update(
+                            {
+                                "Current_Location": _clean(source_row.get("Current_Location", "")),
+                                "Platform": _clean(source_row.get("Platform", "")),
+                                "Type": _clean(source_row.get("Type", "")),
+                                "Ticker": _clean(source_row.get("Ticker", "")).upper(),
+                                "Origin_Currency": _normalize_currency_code(source_row.get("Origin_Currency", "")),
+                                "Purchase_Date": src_purchase_txt,
+                                "Quantity": float(sell_qty),
+                                "Origin_Buy_Price": src_buy_price,
+                                "Cost_Origin": allocated_cost,
+                                "Commission": allocated_commission,
+                                "Status": "סגור",
+                                "Sell_Date": sell_date_txt,
+                                "Current_Value_ILS": float(sell_qty * sell_price_origin * fx_for_origin),
+                                "Cost_ILS": 0.0,
+                            }
+                        )
+
+                        remaining_qty = max(0.0, src_qty - float(sell_qty))
+                        remaining_cost = max(0.0, src_cost - allocated_cost)
+                        remaining_commission = max(0.0, src_commission - allocated_commission)
+                        partial_sell_meta = {
+                            "source_trade_id": _clean(chosen_source_trade_id),
+                            "remaining_qty": remaining_qty,
+                            "remaining_cost": remaining_cost,
+                            "remaining_commission": remaining_commission,
+                            "source_row": source_row.to_dict(),
+                            "is_partial": remaining_qty > 1e-9,
+                        }
+                        st.caption(
+                            tr(
+                                f"Remaining open quantity after sale: {remaining_qty:.8f}",
+                                f"כמות פתוחה שתישאר לאחר המכירה: {remaining_qty:.8f}",
+                            )
+                        )
+                    else:
+                        new_row.update(
+                            {
+                                "Purchase_Date": st.date_input(tr("Original purchase date", "תאריך קנייה מקורי"), value=datetime.now(), help=field_help["Purchase_Date"]).strftime("%Y-%m-%d"),
+                                "Quantity": st.number_input(tr("Sell quantity", "כמות למכירה"), value=0.0, format="%.8f", help=field_help["Quantity"]),
+                                "Origin_Buy_Price": st.number_input(tr("Buy price", "שער קנייה"), value=0.0, help=field_help["Origin_Buy_Price"]),
+                                "Cost_Origin": st.number_input(tr("Origin cost", "עלות מקור"), value=0.0, help=field_help["Cost_Origin"]),
+                                "Commission": st.number_input(tr("Commission", "עמלה"), value=0.0, help=field_help["Commission"]),
+                                "Status": "סגור",
+                                "Sell_Date": st.date_input(tr("Sell date", "תאריך מכירה"), value=datetime.now(), key="add_sell_date_manual", help=field_help["Sell_Date"]).strftime("%Y-%m-%d"),
+                            }
+                        )
+                        sell_price_origin = st.number_input(tr("Sell price", "מחיר מכירה"), value=0.0, help=field_help["Sell_Price_Origin"])
+                        new_row["Sell_Price_Origin"] = float(sell_price_origin)
+                        fx_for_origin = manage_fx if _normalize_currency_code(new_row.get("Origin_Currency", "")) == "USD" else 1.0
+                        new_row["Current_Value_ILS"] = float(new_row["Quantity"] * sell_price_origin * fx_for_origin)
+                        new_row["Cost_ILS"] = 0.0
+
+                    if float(_num(new_row.get("Cost_Origin", 0.0))) <= 0 and float(_num(new_row.get("Quantity", 0.0))) > 0 and float(_num(new_row.get("Origin_Buy_Price", 0.0))) > 0:
+                        new_row["Cost_Origin"] = float(_num(new_row.get("Quantity", 0.0)) * _num(new_row.get("Origin_Buy_Price", 0.0)))
                 else:
-                    new_row["Sell_Date"] = ""
+                    new_row.update(
+                        {
+                            "Purchase_Date": st.date_input(tr("Purchase date", "תאריך רכישה"), value=datetime.now(), help=field_help["Purchase_Date"]).strftime("%Y-%m-%d"),
+                            "Quantity": st.number_input(tr("Quantity", "כמות"), value=0.0, format="%.8f", help=field_help["Quantity"]),
+                            "Origin_Buy_Price": st.number_input(tr("Buy price", "שער קנייה"), value=0.0, help=field_help["Origin_Buy_Price"]),
+                            "Cost_Origin": st.number_input(tr("Origin cost", "עלות מקור"), value=0.0, help=field_help["Cost_Origin"]),
+                            "Commission": st.number_input(tr("Commission", "עמלה"), value=0.0, help=field_help["Commission"]),
+                            "Status": "פתוח",
+                            "Sell_Date": "",
+                            "Current_Value_ILS": 0.0,
+                            "Cost_ILS": 0.0,
+                        }
+                    )
+                    if float(_num(new_row.get("Cost_Origin", 0.0))) <= 0 and float(_num(new_row.get("Quantity", 0.0))) > 0 and float(_num(new_row.get("Origin_Buy_Price", 0.0))) > 0:
+                        new_row["Cost_Origin"] = float(_num(new_row.get("Quantity", 0.0)) * _num(new_row.get("Origin_Buy_Price", 0.0)))
+
                 new_row["Trade_ID"] = _to_trade_id(pd.Series(new_row))
                 submitted = st.form_submit_button(tr("Save", "שמור"))
 
@@ -4955,14 +5250,66 @@ def main() -> None:
                 if not write_enabled:
                     st.error(tr("Cannot save in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן לשמור במצב gspread. הגדר Web App URL תקין בצד שמאל."))
                 else:
+                    add_errors: List[str] = []
+                    if float(_num(new_row.get("Quantity", 0.0))) <= 0:
+                        add_errors.append(tr("Quantity must be greater than zero.", "כמות חייבת להיות גדולה מאפס."))
+                    if float(_num(new_row.get("Origin_Buy_Price", 0.0))) <= 0:
+                        add_errors.append(tr("Buy price must be greater than zero.", "שער קנייה חייב להיות גדול מאפס."))
+                    if _clean(new_row.get("Action", "")).upper() == "SELL":
+                        p_dt = _parse_dates_flexible(pd.Series([new_row.get("Purchase_Date", "")])).iloc[0]
+                        s_dt = _parse_dates_flexible(pd.Series([new_row.get("Sell_Date", "")])).iloc[0]
+                        if pd.notna(p_dt) and pd.notna(s_dt) and s_dt < p_dt:
+                            add_errors.append(tr("Sell date cannot be earlier than purchase date.", "תאריך מכירה לא יכול להיות מוקדם מתאריך הקנייה."))
+                        if float(_num(new_row.get("Current_Value_ILS", 0.0))) <= 0:
+                            add_errors.append(tr("For SELL, sale price must produce a positive sale value.", "בעסקת מכירה, מחיר המכירה חייב להפיק שווי מכירה חיובי."))
+
+                    if add_errors:
+                        for e in add_errors:
+                            st.error(e)
+                        st.stop()
+
                     ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
-                    if ok:
+                    if not ok:
+                        st.error(f"{tr('Add failed', 'הוספה נכשלה')}: {msg}")
+                    else:
+                        # Partial sell: update the source open lot to remaining quantity/cost.
+                        if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
+                            src = dict(partial_sell_meta.get("source_row", {}))
+                            src_trade_id = _clean(partial_sell_meta.get("source_trade_id", ""))
+                            source_update = {
+                                "Trade_ID": src_trade_id,
+                                "Current_Location": _clean(src.get("Current_Location", "")),
+                                "Platform": _clean(src.get("Platform", "")),
+                                "Type": _clean(src.get("Type", "")),
+                                "Ticker": _clean(src.get("Ticker", "")).upper(),
+                                "Purchase_Date": _clean(src.get("Purchase_Date", "")),
+                                "Quantity": float(_num(partial_sell_meta.get("remaining_qty", 0.0))),
+                                "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0.0))),
+                                "Cost_Origin": float(_num(partial_sell_meta.get("remaining_cost", 0.0))),
+                                "Origin_Currency": _normalize_currency_code(src.get("Origin_Currency", "")),
+                                "Commission": float(_num(partial_sell_meta.get("remaining_commission", 0.0))),
+                                "Status": "פתוח",
+                                "Sell_Date": "",
+                                "Cost_ILS": 0.0,
+                                "Current_Value_ILS": 0.0,
+                                "Action": "BUY",
+                                "Event_Type": "TRADE",
+                            }
+                            ok_edit, msg_edit = sync_trade_to_sheet(web_url_clean, api_token, "edit", source_update)
+                            if not ok_edit:
+                                st.warning(
+                                    tr(
+                                        "Sale row was added, but source lot update failed. Please edit the source lot manually.",
+                                        "שורת המכירה נוספה, אך עדכון לוט המקור נכשל. יש לעדכן את לוט המקור ידנית.",
+                                    )
+                                )
+                                st.error(msg_edit)
+
                         st.success(tr("Trade added directly to Google Sheets", "הרשומה נוספה ישירות ל-Google Sheets"))
                         st.info(msg)
                         load_google_snapshot_data.clear()
+                        load_google_snapshot_data_via_gspread.clear()
                         st.rerun()
-                    else:
-                        st.error(f"{tr('Add failed', 'הוספה נכשלה')}: {msg}")
 
         elif mode == "edit":
             selected = _clean(st.session_state.get("selected_trade_id", ""))
@@ -5024,6 +5371,7 @@ def main() -> None:
                             st.success(tr("Trade updated directly in Google Sheets", "הרשומה עודכנה ישירות ב-Google Sheets"))
                             st.info(msg)
                             load_google_snapshot_data.clear()
+                            load_google_snapshot_data_via_gspread.clear()
                             st.rerun()
                         else:
                             st.error(f"{tr('Update failed', 'עדכון נכשל')}: {msg}")
@@ -5056,6 +5404,7 @@ def main() -> None:
                         st.success(tr("Trade deleted directly from Google Sheets", "הרשומה נמחקה ישירות מ-Google Sheets"))
                         st.info(msg)
                         load_google_snapshot_data.clear()
+                        load_google_snapshot_data_via_gspread.clear()
                         st.rerun()
                     else:
                         st.error(f"{tr('Delete failed', 'מחיקה נכשלה')}: {msg}")
