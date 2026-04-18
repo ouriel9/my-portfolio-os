@@ -3336,6 +3336,18 @@ def build_demo_snapshot_data() -> pd.DataFrame:
         },
     ]
     df = pd.DataFrame(demo_rows)
+
+    # Keep demo portfolio intentionally compact for presentations (< 100k ILS total open value).
+    open_mask = df.get("Status", "").map(_clean) != "סגור"
+    open_value_ils = float(df.loc[open_mask, "Current_Value_ILS"].map(_num).sum()) if "Current_Value_ILS" in df.columns else 0.0
+    target_open_value_ils = 98000.0
+    if open_value_ils > (target_open_value_ils + 1e-9):
+        scale = target_open_value_ils / open_value_ils
+        for col in ["Origin_Buy_Price", "Cost_Origin", "Cost_ILS", "Current_Value_ILS", "Commission"]:
+            if col in df.columns:
+                df[col] = df[col].map(_num).astype(float)
+                df.loc[open_mask, col] = df.loc[open_mask, col].map(_num) * scale
+
     return _normalize_snapshot_df(df)
 
 
