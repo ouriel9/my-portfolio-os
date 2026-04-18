@@ -49,6 +49,11 @@ except Exception:
 
 RISK_FREE_ANNUAL = 0.02
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
+CRYPTO_SHARE_TICKERS = {"IBIT", "ETHA", "BSOL", "MSTR"}
+BTC_SHARE_TICKERS = {"BTC", "IBIT"}
+CHART_CRYPTO_TICKERS = {"IBIT", "ETHA", "BSOL", "BTC", "ETH", "SOL", "XRP"}
+CHART_STOCK_TICKERS = {"MSTR"}
+CHART_FORCED_ETF_TICKERS = {"QQQ", "VOO"}
 _BRAND_PALETTE = [
     "#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
     "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
@@ -169,9 +174,33 @@ VALUE_LABELS = {
 
 
 def localize_column_name(col: str, language: str) -> str:
-    if col in COLUMN_LABELS:
-        return COLUMN_LABELS[col][language]
-    return col
+    raw = COLUMN_LABELS[col][language] if col in COLUMN_LABELS else col
+    return _flip_currency_header_order(raw)
+
+
+def _flip_currency_header_order(col_name: str) -> str:
+    c = _clean(col_name)
+    if not c:
+        return c
+    c = re.sub(r"\((USD|ILS)\)", lambda mm: mm.group(1).upper(), c, flags=re.IGNORECASE)
+    c = re.sub(r"\s+", " ", c).strip()
+
+    suffix = re.match(r"^(.+?)\s+(USD|ILS)$", c, flags=re.IGNORECASE)
+    if suffix:
+        return f"{suffix.group(2).upper()} {suffix.group(1).strip()}"
+
+    prefix = re.match(r"^(USD|ILS)\s+(.+)$", c, flags=re.IGNORECASE)
+    if prefix:
+        return f"{prefix.group(2).strip()} {prefix.group(1).upper()}"
+
+    compact_suffix = re.match(r"^(.+?)(USD|ILS)$", c, flags=re.IGNORECASE)
+    if compact_suffix:
+        return f"{compact_suffix.group(2).upper()} {compact_suffix.group(1).strip()}"
+
+    compact_prefix = re.match(r"^(USD|ILS)(.+)$", c, flags=re.IGNORECASE)
+    if compact_prefix:
+        return f"{compact_prefix.group(2).strip()} {compact_prefix.group(1).upper()}"
+    return c
 
 
 def localize_dataframe_columns(df: pd.DataFrame, language: str) -> pd.DataFrame:
@@ -182,15 +211,17 @@ def localize_dataframe_columns(df: pd.DataFrame, language: str) -> pd.DataFrame:
 
 def localize_snapshot_view(df: pd.DataFrame, language: str) -> pd.DataFrame:
     out = df.copy()
+    out = out.drop(columns=[c for c in out.columns if _clean(c).lower() in {"סטטוס מכירה", "sell status", "sale status"}], errors="ignore")
     renamed = {}
     for col in out.columns:
         if col in SNAPSHOT_HEADERS:
-            renamed[col] = SNAPSHOT_HEADERS[col][language]
+            renamed[col] = _flip_currency_header_order(SNAPSHOT_HEADERS[col][language])
     if renamed:
         out = out.rename(columns=renamed)
+    out = out.rename(columns=lambda c: _flip_currency_header_order(str(c)))
 
     for raw_col, labels in VALUE_LABELS.items():
-        visible_col = SNAPSHOT_HEADERS.get(raw_col, {}).get(language, raw_col)
+        visible_col = _flip_currency_header_order(SNAPSHOT_HEADERS.get(raw_col, {}).get(language, raw_col))
         if visible_col in out.columns:
             out[visible_col] = out[visible_col].map(lambda v: labels.get(_clean(v), {}).get(language, _clean(v)))
     return out
@@ -812,11 +843,17 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         .modebar-container, .modebar {{ display: none !important; }}
         /* ── Fix scroll locking when touching charts/tables on mobile ── */
         [data-testid="stPlotlyChart"] {{
-            touch-action: pan-y !important;
+            touch-action: pan-y pinch-zoom !important;
             -webkit-overflow-scrolling: touch !important;
         }}
         [data-testid="stPlotlyChart"] .plotly .drag {{
-            touch-action: pan-y !important;
+            touch-action: pan-y pinch-zoom !important;
+        }}
+        .js-plotly-plot,
+        .js-plotly-plot .plotly,
+        .js-plotly-plot .plotly .draglayer,
+        .js-plotly-plot .plotly .nsewdrag {{
+            touch-action: pan-y pinch-zoom !important;
         }}
         [data-testid="stDataFrame"] {{
             touch-action: pan-x pan-y !important;
@@ -852,13 +889,19 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         /* Force the element container holding the page nav to full width */
         [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
             width: 100% !important;
+            position: fixed !important;
+            top: calc(0.55rem + env(safe-area-inset-top)) !important;
+            left: 3.9rem !important;
+            right: 3.9rem !important;
+            z-index: 100001 !important;
+            margin: 0 !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
             background: {nav_bg} !important;
             border: 1px solid {nav_border} !important;
             border-radius: 12px !important;
             padding: 3px !important;
-            margin: 0 0 6px 0 !important;
+            margin: 0 !important;
             width: 100% !important;
             box-sizing: border-box !important;
         }}
@@ -927,6 +970,9 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             min-width: 0 !important;
             max-width: 50% !important;
             width: 50% !important;
+        }}
+        .block-container {{
+            padding-top: calc(4.4rem + env(safe-area-inset-top)) !important;
         }}
         /* ══════════════════════════════════════════════════════════════════ */
     }}
@@ -1527,6 +1573,8 @@ def inject_client_fixes() -> None:
               'select',
               '.js-plotly-plot',
               '[data-testid="stDataFrame"]',
+              '[data-testid="stTable"]',
+              '[data-testid="stDataEditor"]',
               'iframe',
               '[data-no-swipe]'
             ].join(',');
@@ -2328,9 +2376,9 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
 
     total_value = float(work["Current_Value_ILS"].sum())
 
-    crypto_mask = (work["Type"] == "קריפטו") | (work["Ticker"].isin(CRYPTO_ETFS))
+    crypto_mask = (work["Type"] == "קריפטו") | (work["Ticker"].isin(CRYPTO_SHARE_TICKERS))
     crypto_value = float(work.loc[crypto_mask, "Current_Value_ILS"].sum())
-    btc_value = float(work.loc[work["Ticker"].isin(["BTC", "IBIT", "MSTR"]), "Current_Value_ILS"].sum())
+    btc_value = float(work.loc[work["Ticker"].isin(BTC_SHARE_TICKERS), "Current_Value_ILS"].sum())
 
     usd_ils = _safe_quote("USDILS=X")
     btc_usd = _safe_quote("BTC-USD")
@@ -3433,7 +3481,6 @@ def main() -> None:
         language_default = DEFAULT_LANGUAGE
     theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_SYSTEM))
 
-    st.sidebar.markdown("### App")
     language = st.sidebar.selectbox("Language" if language_default == LANG_EN else "שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
     tr = (lambda en, he: he if language == LANG_HE else en)
     theme_label_to_value = {
@@ -3778,10 +3825,12 @@ def main() -> None:
                 ticker = _clean(row.get("Ticker", "")).upper()
                 type_text = _clean(row.get("Type", ""))
                 type_upper = type_text.upper()
-                if "ETF" in type_upper or ticker in CRYPTO_ETFS:
-                    return tr("ETF", "ETF")
-                if (type_text == "קריפטו") or (type_upper == "CRYPTO") or (ticker in {"BTC", "ETH", "SOL", "XRP"}):
+                if ticker in CHART_STOCK_TICKERS:
+                    return tr("Stocks", "מניות")
+                if (type_text == "קריפטו") or (type_upper == "CRYPTO") or (ticker in CHART_CRYPTO_TICKERS):
                     return tr("Crypto", "קריפטו")
+                if "ETF" in type_upper or ticker in CHART_FORCED_ETF_TICKERS:
+                    return tr("ETF", "ETF")
                 return tr("Stocks", "מניות")
 
             class_work["Asset_Class"] = class_work.apply(_class_bucket, axis=1)
@@ -3878,6 +3927,46 @@ def main() -> None:
                 return out
 
             def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview") -> None:
+                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
+                category_labels = {
+                    "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
+                    "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
+                    "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
+                }
+                watch_rows = []
+                for item in DEFAULT_TRADINGVIEW_WATCHLIST:
+                    watch_rows.append(
+                        {
+                            "Ticker": item["ticker"],
+                            "Title": f"{item['ticker']} - {item['label']}",
+                            "Symbol": item["tv_symbol"],
+                            "Category": category_labels[item["category"]],
+                        }
+                    )
+
+                if watch_rows:
+                    watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
+                    watchlist_reset_key = f"{widget_prefix}_watchlist_reset_token"
+                    if watchlist_reset_key not in st.session_state:
+                        st.session_state[watchlist_reset_key] = False
+                    reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
+                    open_container = st.expander(f"{watchlist_label}{reset_char}", expanded=False)
+                    with open_container:
+                        for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
+                            part = watch_df[watch_df["Category"] == cat]
+                            if part.empty:
+                                continue
+                            st.markdown(f"**{cat}**")
+                            for idx, row in enumerate(part.itertuples(index=False), 1):
+                                if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
+                                    st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
+                                    st.session_state["tv_chart_open"] = True
+                                    st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
+                                    st.session_state[watchlist_reset_key] = not bool(st.session_state.get(watchlist_reset_key, False))
+                                    st.rerun()
+                else:
+                    st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
+
                 st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
                 exposure_cols = ["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
                 if summary_df.empty:
@@ -3930,46 +4019,6 @@ def main() -> None:
                             use_container_width=True,
                             hide_index=True,
                         )
-
-                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
-                category_labels = {
-                    "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
-                    "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
-                    "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
-                }
-                watch_rows = []
-                for item in DEFAULT_TRADINGVIEW_WATCHLIST:
-                    watch_rows.append(
-                        {
-                            "Ticker": item["ticker"],
-                            "Title": f"{item['ticker']} - {item['label']}",
-                            "Symbol": item["tv_symbol"],
-                            "Category": category_labels[item["category"]],
-                        }
-                    )
-
-                if watch_rows:
-                    watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    watchlist_reset_key = f"{widget_prefix}_watchlist_reset_token"
-                    if watchlist_reset_key not in st.session_state:
-                        st.session_state[watchlist_reset_key] = False
-                    reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
-                    open_container = st.expander(f"{watchlist_label}{reset_char}", expanded=False)
-                    with open_container:
-                        for cat in [category_labels["crypto"], category_labels["stocks"], category_labels["macro"]]:
-                            part = watch_df[watch_df["Category"] == cat]
-                            if part.empty:
-                                continue
-                            st.markdown(f"**{cat}**")
-                            for idx, row in enumerate(part.itertuples(index=False), 1):
-                                if st.button(row.Title, key=f"{widget_prefix}_watch_{cat}_{idx}_{row.Symbol}"):
-                                    st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
-                                    st.session_state["tv_chart_open"] = True
-                                    st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
-                                    st.session_state[watchlist_reset_key] = not bool(st.session_state.get(watchlist_reset_key, False))
-                                    st.rerun()
-                else:
-                    st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
                 if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
                     active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
@@ -4426,25 +4475,28 @@ def main() -> None:
             def _normalize_header_text(col: str) -> str:
                 c = _clean(col)
                 fixed = {
-                    "USD שווי": "שווי USD",
-                    "USD עלות": "עלות USD",
-                    "ILS שווי": "שווי ILS",
-                    "ILS עלות": "עלות ILS",
                     "עלות שקלית": "עלותILS",
-                    "Value USD": "Value USD",
-                    "Cost USD": "Cost USD",
-                    "Value ILS": "Value ILS",
-                    "Cost ILS": "Cost ILS",
                 }
                 if c in fixed:
                     return fixed[c]
-                m = re.match(r"^(USD|ILS)\s*[-_:]?\s*(.+)$", c, flags=re.IGNORECASE)
-                if m:
-                    return f"{m.group(2)} {m.group(1).upper()}"
-                c = re.sub(r"\((USD|ILS)\)", lambda mm: mm.group(1).upper(), c, flags=re.IGNORECASE)
                 return c
 
             tx_view = tx_view.rename(columns=lambda c: _normalize_header_text(str(c)))
+
+            def _is_hidden_tx_column(col_name: object) -> bool:
+                c = _clean(col_name)
+                c_base = re.sub(r"\s*\(\d+\)$", "", c)
+                low = c_base.lower().replace("_", " ").replace("-", " ")
+                low = re.sub(r"\s+", " ", low).strip()
+                buy_price_dup_aliases = {
+                    "origin buy price", "buy price", "שער קנייה", "שער קניה",
+                }
+                sell_status_aliases = {
+                    "sell status", "sale status", "סטטוס מכירה",
+                }
+                return (low in buy_price_dup_aliases) or (low in sell_status_aliases)
+
+            tx_view = tx_view.drop(columns=[c for c in tx_view.columns if _is_hidden_tx_column(c)], errors="ignore")
 
             if is_open_only and not tx_view.empty:
                 # Final guard: remove sale-only fields that may be reintroduced by computed/localized columns.
