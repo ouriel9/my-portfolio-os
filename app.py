@@ -888,11 +888,13 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         ══════════════════════════════════════════════════════════════════ */
         /* Force the element container holding the page nav to full width */
         [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
-            width: 100% !important;
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top)) !important;
-            left: 3.9rem !important;
-            right: 5.4rem !important;
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+            width: clamp(220px, 64vw, 340px) !important;
+            max-width: calc(100vw - 8.8rem) !important;
             z-index: 100001 !important;
             margin: 0 !important;
         }}
