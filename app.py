@@ -227,7 +227,7 @@ def localize_snapshot_view(df: pd.DataFrame, language: str) -> pd.DataFrame:
     return out
 
 
-def _with_calendar_purchase_date(df: pd.DataFrame, language: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
+def _with_calendar_purchase_date(df: pd.DataFrame, language: str, force_uniform: bool = False) -> Tuple[pd.DataFrame, Dict[str, object]]:
     out = df.copy()
     localized_purchase = SNAPSHOT_HEADERS.get("Purchase_Date", {}).get(language, "Purchase_Date")
     localized_sell = SNAPSHOT_HEADERS.get("Sell_Date", {}).get(language, "Sell_Date")
@@ -237,7 +237,7 @@ def _with_calendar_purchase_date(df: pd.DataFrame, language: str) -> Tuple[pd.Da
             date_cols.append(c)
     if not date_cols:
         return out, {}
-    mobile_client = _is_mobile_client()
+    mobile_client = _is_mobile_client() and (not force_uniform)
     column_config: Dict[str, object] = {}
     for purchase_col in date_cols:
         parsed = _parse_dates_flexible(out[purchase_col])
@@ -4989,7 +4989,11 @@ def main() -> None:
             row_trade_id_by_pos = {i: tid for i, tid in enumerate(row_trade_ids.tolist()) if tid}
             manage_select_df = manage_select_df.rename(columns={"__select__": tr("Select", "בחר")})
 
-            manage_select_view, manage_date_cfg = _with_calendar_purchase_date(localize_snapshot_view(manage_select_df, language), language)
+            manage_select_view, manage_date_cfg = _with_calendar_purchase_date(
+                localize_snapshot_view(manage_select_df, language),
+                language,
+                force_uniform=True,
+            )
             select_col = tr("Select", "בחר")
             table_signature = hashlib.sha1(
                 "|".join(manage_select_df["Trade_ID"].astype(str).tolist()).encode("utf-8")
