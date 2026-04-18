@@ -3590,6 +3590,9 @@ def main() -> None:
         language_default = DEFAULT_LANGUAGE
     theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_SYSTEM))
 
+    if "demo_mode_persist" not in st.session_state:
+        st.session_state["demo_mode_persist"] = bool(settings.get("demo_mode", False))
+
     language = st.sidebar.selectbox("Language" if language_default == LANG_EN else "שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
     tr = (lambda en, he: he if language == LANG_HE else en)
     theme_label_to_value = {
@@ -3605,7 +3608,11 @@ def main() -> None:
         index=list(theme_label_to_value.keys()).index(default_theme_label),
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
-    demo_mode = st.sidebar.checkbox(tr("Demo view", "מצב הדגמה"), value=bool(settings.get("demo_mode", False)))
+    demo_mode = st.sidebar.checkbox(
+        tr("Demo view", "מצב הדגמה"),
+        value=bool(st.session_state.get("demo_mode_persist", False)),
+        key="demo_mode_persist",
+    )
     live_updates = st.sidebar.checkbox(tr("Live updates", "עדכון חי"), value=False)
     refresh_seconds = st.sidebar.selectbox(
         tr("Refresh every", "רענון כל"),
