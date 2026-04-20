@@ -410,7 +410,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     [data-testid="stApp"] {{
         direction: ltr !important;
     }}
-    .block-container {{padding-top: 0.5rem;}}
+    .block-container {{padding-top: 0.1rem;}}
     .app-header-wrap {{
         text-align: center !important;
         direction: inherit !important;
