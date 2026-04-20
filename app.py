@@ -48,6 +48,23 @@ except Exception:
     gspread = None
 
 RISK_FREE_ANNUAL = 0.02
+
+# ── Auto-detect corporate proxy (Intel WPAD) so yfinance / requests work ──
+def _auto_detect_proxy() -> None:
+    """If HTTPS_PROXY is not set and we're on an Intel network (WPAD),
+    auto-configure os.environ so that all Python HTTP libs go through the proxy."""
+    if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
+        return  # already configured
+    try:
+        import urllib.request
+        urllib.request.urlopen("http://wpad.intel.com/wpad.dat", timeout=2)
+        os.environ["HTTPS_PROXY"] = "http://proxy-iil.intel.com:912"
+        os.environ["HTTP_PROXY"] = "http://proxy-iil.intel.com:912"
+    except Exception:
+        pass
+
+_auto_detect_proxy()
+
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
 CRYPTO_SHARE_TICKERS = {"IBIT", "ETHA", "BSOL", "MSTR"}
 BTC_SHARE_TICKERS = {"BTC", "IBIT"}
@@ -3581,6 +3598,1247 @@ def dataframe_completeness(df: pd.DataFrame) -> Tuple[int, int, float]:
     return non_empty, total_cells, completeness
 
 
+
+# ════════════════════════════════════════════════════════════════════════
+# PREMIUM ENHANCEMENTS — inlined (was premium_enhancements.py)
+# Glassmorphism CSS, PWA meta tags, keyboard shortcuts, command palette,
+# toast notifications, advanced analytics helpers and one-click exports.
+# All additive and failure-swallowing: the base app keeps working even
+# if any single sub-layer cannot load.
+# ════════════════════════════════════════════════════════════════════════
+import base64 as _pp_b64
+import io as _pp_io
+import math as _pp_math
+from typing import Optional as _PP_Optional, Sequence as _PP_Sequence
+
+
+def apply_premium_polish(language: str = "עברית",
+                         is_dark: bool = False,
+                         is_mobile: bool = False) -> None:
+    """Inject every premium UX layer.  Safe to call once per rerun."""
+    try:
+        _pp_inject_premium_css(is_dark=is_dark, is_mobile=is_mobile)
+    except Exception:
+        pass
+    try:
+        _pp_inject_mobile_polish_v2(is_dark=is_dark, is_mobile=is_mobile)
+    except Exception:
+        pass
+    try:
+        _pp_inject_pwa_assets(language=language, is_dark=is_dark)
+    except Exception:
+        pass
+    try:
+        _pp_inject_productivity_layer(language=language)
+    except Exception:
+        pass
+
+
+def _pp_inject_premium_css(is_dark: bool, is_mobile: bool) -> None:
+    accent = "#6366f1"
+    accent_2 = "#06b6d4"
+    bg_soft = "rgba(148,163,184,0.10)" if is_dark else "rgba(99,102,241,0.06)"
+    border_soft = "rgba(148,163,184,0.22)" if is_dark else "rgba(15,23,42,0.08)"
+    card_bg = (
+        "linear-gradient(180deg, rgba(30,41,59,0.72) 0%, rgba(15,23,42,0.72) 100%)"
+        if is_dark
+        else "linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(248,250,252,0.85) 100%)"
+    )
+    shadow = (
+        "0 10px 28px -12px rgba(0,0,0,0.55), 0 2px 6px -2px rgba(0,0,0,0.35)"
+        if is_dark
+        else "0 10px 28px -14px rgba(15,23,42,0.22), 0 2px 6px -3px rgba(15,23,42,0.12)"
+    )
+    css = f"""
+    <style id="premium-polish">
+    :root {{
+        --pp-accent: {accent};
+        --pp-accent-2: {accent_2};
+        --pp-bg-soft: {bg_soft};
+        --pp-border-soft: {border_soft};
+        --pp-card-bg: {card_bg};
+        --pp-shadow: {shadow};
+        --pp-radius: 16px;
+        --pp-radius-sm: 10px;
+    }}
+    html, body, [class*="css"] {{
+        font-feature-settings: "cv11","ss01","ss03";
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+    }}
+    div[data-testid="stMetric"] {{
+        background: var(--pp-card-bg);
+        border: 1px solid var(--pp-border-soft);
+        border-radius: var(--pp-radius);
+        padding: 14px 18px;
+        box-shadow: var(--pp-shadow);
+        backdrop-filter: blur(10px) saturate(1.05);
+        -webkit-backdrop-filter: blur(10px) saturate(1.05);
+        transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+        position: relative; overflow: hidden;
+    }}
+    div[data-testid="stMetric"]::before {{
+        content: ""; position: absolute; inset: 0 auto auto 0;
+        width: 4px; height: 100%;
+        background: linear-gradient(180deg, var(--pp-accent), var(--pp-accent-2));
+        opacity: .95;
+    }}
+    div[data-testid="stMetric"]:hover {{
+        transform: translateY(-2px); border-color: var(--pp-accent);
+    }}
+    div[data-testid="stMetricValue"] {{
+        font-weight: 700 !important; letter-spacing: -0.01em;
+    }}
+    .stButton > button, .stDownloadButton > button {{
+        border-radius: 12px !important;
+        border: 1px solid var(--pp-border-soft) !important;
+        transition: transform .12s ease, box-shadow .12s ease, background .12s ease !important;
+        font-weight: 600 !important;
+    }}
+    .stButton > button:hover, .stDownloadButton > button:hover {{
+        transform: translateY(-1px); box-shadow: var(--pp-shadow);
+        border-color: var(--pp-accent) !important;
+    }}
+    .stButton > button:focus-visible, .stDownloadButton > button:focus-visible {{
+        outline: 2px solid var(--pp-accent) !important; outline-offset: 2px !important;
+    }}
+    .stTextInput input, .stNumberInput input, .stDateInput input,
+    .stSelectbox div[data-baseweb="select"], .stMultiSelect div[data-baseweb="select"] {{
+        border-radius: 12px !important;
+    }}
+    button[data-baseweb="tab"] {{
+        border-radius: 10px 10px 0 0 !important; font-weight: 600 !important;
+    }}
+    button[data-baseweb="tab"][aria-selected="true"] {{ color: var(--pp-accent) !important; }}
+    details[data-testid="stExpander"], div[data-testid="stExpander"] {{
+        border-radius: var(--pp-radius) !important;
+        border: 1px solid var(--pp-border-soft) !important;
+        box-shadow: var(--pp-shadow);
+        background: var(--pp-card-bg) !important;
+        backdrop-filter: blur(8px);
+    }}
+    div[data-testid="stDataFrame"] {{
+        border-radius: var(--pp-radius-sm) !important;
+        border: 1px solid var(--pp-border-soft) !important;
+        overflow: hidden;
+    }}
+    div[data-testid="stAlert"] {{ border-radius: 14px !important; border-left-width: 4px !important; }}
+    *::-webkit-scrollbar {{ width: 10px; height: 10px; }}
+    *::-webkit-scrollbar-thumb {{
+        background: linear-gradient(180deg, var(--pp-accent), var(--pp-accent-2));
+        border-radius: 999px; border: 2px solid transparent; background-clip: padding-box;
+    }}
+    *::-webkit-scrollbar-track {{ background: transparent; }}
+    section.main > div.block-container {{ animation: pp-fade .35s ease both; }}
+    @keyframes pp-fade {{
+        from {{ opacity: 0; transform: translateY(4px); }}
+        to   {{ opacity: 1; transform: translateY(0); }}
+    }}
+    #pp-cmdk-overlay {{
+        position: fixed; inset: 0; background: rgba(2,6,23,.55);
+        backdrop-filter: blur(6px); z-index: 999999; display: none;
+        align-items: flex-start; justify-content: center; padding-top: 14vh;
+    }}
+    #pp-cmdk {{
+        width: min(620px, 92vw);
+        background: {'#0f172a' if is_dark else '#ffffff'};
+        color: {'#e2e8f0' if is_dark else '#0f172a'};
+        border-radius: 16px; border: 1px solid var(--pp-border-soft);
+        box-shadow: 0 40px 80px -20px rgba(0,0,0,.55);
+        overflow: hidden; font-family: -apple-system,Segoe UI,Roboto,Helvetica,Arial;
+    }}
+    #pp-cmdk input {{
+        width: 100%; padding: 14px 18px; font-size: 16px;
+        background: transparent; border: 0; outline: 0;
+        color: inherit; border-bottom: 1px solid var(--pp-border-soft);
+    }}
+    #pp-cmdk ul {{ list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }}
+    #pp-cmdk li {{
+        padding: 10px 14px; border-radius: 10px; cursor: pointer;
+        display:flex; justify-content:space-between; gap:12px; align-items:center;
+    }}
+    #pp-cmdk li[aria-selected="true"], #pp-cmdk li:hover {{
+        background: var(--pp-bg-soft); color: var(--pp-accent);
+    }}
+    #pp-cmdk kbd {{
+        font-size: 11px; padding: 2px 6px; border-radius: 6px;
+        border: 1px solid var(--pp-border-soft); opacity: .75;
+    }}
+    #pp-toast {{
+        position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(40px);
+        background: #0f172a; color: #fff;
+        padding: 10px 18px; border-radius: 999px; font-size: 13px; font-weight: 600;
+        box-shadow: 0 20px 40px -10px rgba(0,0,0,.5);
+        opacity: 0; transition: opacity .2s, transform .2s; z-index: 999999;
+        pointer-events: none;
+    }}
+    #pp-toast.show {{ opacity: 1; transform: translateX(-50%) translateY(0); }}
+    @media (max-width: 820px) {{
+        section.main > div.block-container {{
+            padding: 0.6rem 0.75rem 5rem 0.75rem !important;
+            max-width: 100% !important;
+        }}
+        h1 {{ font-size: 1.4rem !important; line-height: 1.2 !important; }}
+        h2 {{ font-size: 1.2rem !important; line-height: 1.2 !important; }}
+        h3 {{ font-size: 1.05rem !important; }}
+        div[data-testid="stMetric"] {{ padding: 10px 12px !important; }}
+        div[data-testid="stMetricValue"] {{ font-size: 1.25rem !important; }}
+        div[data-testid="stMetricLabel"] {{ font-size: 0.72rem !important; opacity: .85; }}
+        .stButton > button, .stDownloadButton > button {{ min-height: 44px; font-size: 0.95rem; }}
+        .stTextInput input, .stNumberInput input, .stDateInput input {{
+            font-size: 16px !important; min-height: 44px;
+        }}
+        div[data-baseweb="select"] > div {{ min-height: 44px !important; }}
+        div[data-testid="stDataFrame"], div[data-testid="stTable"] {{
+            overflow-x: auto; -webkit-overflow-scrolling: touch;
+        }}
+        [data-testid="stSidebar"] {{ width: 80vw !important; min-width: 260px !important; }}
+        div[role="radiogroup"] {{ gap: 6px !important; flex-wrap: wrap; }}
+        div[role="radiogroup"] > label {{
+            border: 1px solid var(--pp-border-soft);
+            padding: 8px 12px; border-radius: 999px;
+            background: var(--pp-card-bg);
+        }}
+        .js-plotly-plot .plotly .modebar {{ transform: scale(.8); }}
+        section.main {{ padding-bottom: env(safe-area-inset-bottom); }}
+    }}
+    @media (prefers-reduced-motion: reduce) {{
+        *, *::before, *::after {{ animation: none !important; transition: none !important; }}
+    }}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MOBILE POLISH v2  — modern fluid design, 60fps, iOS/Android-grade feel
+# Additive layer on top of _pp_inject_premium_css; safe & non-breaking.
+# ════════════════════════════════════════════════════════════════════════
+def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
+    """Fluid typography, glass UI, faster animations, premium mobile feel.
+
+    All selectors are additive — they only refine the look of existing
+    components and never hide or change layout semantics. Safe on desktop
+    (no-ops inside media queries where appropriate).
+    """
+    bg_base = "#0b1220" if is_dark else "#f7f8fb"
+    surface = "rgba(30,41,59,0.62)" if is_dark else "rgba(255,255,255,0.72)"
+    surface_strong = "rgba(15,23,42,0.88)" if is_dark else "rgba(255,255,255,0.94)"
+    border = "rgba(148,163,184,0.22)" if is_dark else "rgba(15,23,42,0.08)"
+    text = "#e2e8f0" if is_dark else "#0f172a"
+    muted = "#94a3b8" if is_dark else "#64748b"
+    shimmer_a = "rgba(255,255,255,0.05)" if is_dark else "rgba(15,23,42,0.04)"
+    shimmer_b = "rgba(255,255,255,0.12)" if is_dark else "rgba(15,23,42,0.10)"
+
+    css = f"""
+    <style id="pp-mobile-polish-v2">
+    /* ── Fluid design tokens (desktop + mobile scale smoothly) ── */
+    :root {{
+        --pp2-fs-h1: clamp(1.35rem, 1.05rem + 1.4vw, 2.05rem);
+        --pp2-fs-h2: clamp(1.15rem, 0.95rem + 1.0vw, 1.55rem);
+        --pp2-fs-h3: clamp(1.00rem, 0.88rem + 0.6vw, 1.25rem);
+        --pp2-fs-body: clamp(0.92rem, 0.88rem + 0.2vw, 1.02rem);
+        --pp2-fs-metric-v: clamp(1.05rem, 0.80rem + 1.2vw, 1.65rem);
+        --pp2-fs-metric-l: clamp(0.68rem, 0.60rem + 0.3vw, 0.88rem);
+        --pp2-radius-xl: 20px;
+        --pp2-radius-l: 14px;
+        --pp2-radius-m: 10px;
+        --pp2-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --pp2-dur-fast: 120ms;
+        --pp2-dur: 220ms;
+        --pp2-surface: {surface};
+        --pp2-surface-strong: {surface_strong};
+        --pp2-border: {border};
+        --pp2-text: {text};
+        --pp2-muted: {muted};
+        --pp2-grad: linear-gradient(135deg,#6366f1 0%,#06b6d4 55%,#10b981 100%);
+    }}
+
+    /* ── Smooth native scrolling + no tap-highlight flash ── */
+    html {{ scroll-behavior: smooth; }}
+    body, [data-testid="stAppViewContainer"] {{
+        -webkit-tap-highlight-color: transparent;
+        overscroll-behavior-y: contain;
+        text-size-adjust: 100%; -webkit-text-size-adjust: 100%;
+    }}
+    * {{ -webkit-touch-callout: none; }}
+    input, textarea, [contenteditable] {{ -webkit-touch-callout: default; }}
+
+    /* ── Fluid typography (desktop + mobile) ── */
+    .block-container h1, .block-container [data-testid="stHeading"] h1 {{ font-size: var(--pp2-fs-h1) !important; letter-spacing: -0.01em; }}
+    .block-container h2 {{ font-size: var(--pp2-fs-h2) !important; letter-spacing: -0.005em; }}
+    .block-container h3 {{ font-size: var(--pp2-fs-h3) !important; }}
+    .block-container p, .block-container li, .block-container label {{ font-size: var(--pp2-fs-body); }}
+
+    /* ── Metric refinement: gradient hairline + tabular numerics ── */
+    [data-testid="stMetric"] {{
+        border-radius: var(--pp2-radius-l) !important;
+        position: relative;
+    }}
+    [data-testid="stMetricValue"] {{
+        font-variant-numeric: tabular-nums !important;
+        font-size: var(--pp2-fs-metric-v) !important;
+    }}
+    [data-testid="stMetricLabel"] {{
+        font-size: var(--pp2-fs-metric-l) !important;
+        text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600 !important;
+    }}
+    [data-testid="stMetricDelta"] {{ font-variant-numeric: tabular-nums; font-weight: 600; }}
+
+    /* Tabular numerics in data frames too → column alignment looks crisp */
+    [data-testid="stDataFrame"] {{ font-variant-numeric: tabular-nums; }}
+
+    /* ── Buttons: modern press feedback (no layout shift) ── */
+    .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {{
+        transition: transform var(--pp2-dur-fast) var(--pp2-ease),
+                    box-shadow var(--pp2-dur-fast) var(--pp2-ease),
+                    background var(--pp2-dur-fast) var(--pp2-ease) !important;
+        will-change: transform;
+    }}
+    .stButton > button:active, .stDownloadButton > button:active,
+    [data-testid="stFormSubmitButton"] button:active {{
+        transform: scale(0.97) !important;
+        transition-duration: 60ms !important;
+    }}
+
+    /* Primary (indigo) → gradient, crisp on retina */
+    button[kind="primary"], button[data-testid="baseButton-primary"] {{
+        background: var(--pp2-grad) !important;
+        border: 0 !important; color: #fff !important;
+        box-shadow: 0 6px 16px -4px rgba(99,102,241,0.45) !important;
+    }}
+    button[kind="primary"]:hover, button[data-testid="baseButton-primary"]:hover {{
+        filter: brightness(1.05) saturate(1.05);
+    }}
+
+    /* ── Plotly: perf + clipping ── */
+    [data-testid="stPlotlyChart"] {{
+        border-radius: var(--pp2-radius-l) !important;
+        content-visibility: auto;
+        contain-intrinsic-size: 360px;
+    }}
+    [data-testid="stDataFrame"] {{
+        content-visibility: auto;
+        contain-intrinsic-size: 480px;
+    }}
+
+    /* ── Skeleton shimmer utility for any <div class="pp-skeleton"> ── */
+    .pp-skeleton {{
+        background: linear-gradient(90deg, {shimmer_a} 0%, {shimmer_b} 50%, {shimmer_a} 100%);
+        background-size: 200% 100%;
+        animation: pp-shimmer 1.2s linear infinite;
+        border-radius: var(--pp2-radius-m);
+    }}
+    @keyframes pp-shimmer {{ 0%{{background-position:200% 0}} 100%{{background-position:-200% 0}} }}
+
+    /* ── Focus rings: accessible & modern ── */
+    :focus-visible {{
+        outline: 2px solid #6366f1 !important;
+        outline-offset: 2px !important;
+        border-radius: 8px;
+    }}
+
+    /* ── Sidebar surface: subtle glass ── */
+    [data-testid="stSidebar"] > div:first-child {{
+        backdrop-filter: blur(14px) saturate(1.1);
+        -webkit-backdrop-filter: blur(14px) saturate(1.1);
+    }}
+
+    /* ── Expanders: soft hover lift ── */
+    details[data-testid="stExpander"]:hover,
+    div[data-testid="stExpander"]:hover {{
+        border-color: rgba(99,102,241,0.45) !important;
+    }}
+
+    /* ── Tab list: smooth horizontal momentum scroll on mobile ── */
+    [data-baseweb="tab-list"] {{
+        scroll-behavior: smooth;
+        mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+    }}
+
+    /* ──────────────────────────────────────────────────────────
+       MOBILE (≤ 820px) — premium phone experience
+    ────────────────────────────────────────────────────────── */
+    @media (max-width: 820px) {{
+        html, body {{ background: {bg_base}; }}
+
+        /* Tighter vertical rhythm, better thumb reach */
+        .block-container {{
+            padding-top: calc(4.6rem + env(safe-area-inset-top)) !important;
+            padding-bottom: calc(1.2rem + env(safe-area-inset-bottom)) !important;
+        }}
+
+        /* 2-col KPI with equal heights + soft gradient hairline */
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {{
+            flex-wrap: nowrap !important;
+            gap: 0.5rem !important;
+        }}
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > [data-testid="stColumn"] {{
+            flex: 1 1 0 !important; min-width: 0 !important; max-width: 50% !important;
+        }}
+        [data-testid="stMetric"] {{
+            padding: 0.55rem 0.7rem !important;
+            min-height: 78px !important;
+            border-radius: var(--pp2-radius-l) !important;
+            background: var(--pp2-surface) !important;
+            backdrop-filter: blur(10px) saturate(1.1);
+            -webkit-backdrop-filter: blur(10px) saturate(1.1);
+            border: 1px solid var(--pp2-border) !important;
+            box-shadow: 0 4px 14px -6px rgba(15,23,42,0.18) !important;
+        }}
+        [data-testid="stMetric"]::before {{
+            width: 3px !important;
+        }}
+
+        /* Bigger, thumb-friendly controls (Apple HIG 44pt) */
+        .stButton > button, .stDownloadButton > button,
+        [data-testid="stFormSubmitButton"] button,
+        div[data-baseweb="select"] > div,
+        .stTextInput input, .stNumberInput input, .stDateInput input {{
+            min-height: 44px !important;
+            font-size: 16px !important; /* prevent iOS zoom */
+            border-radius: 12px !important;
+        }}
+
+        /* Sticky toolbar row above content when it contains buttons */
+        [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .stButton) {{
+            position: sticky; top: calc(3.6rem + env(safe-area-inset-top));
+            z-index: 50;
+            backdrop-filter: blur(12px) saturate(1.1);
+            -webkit-backdrop-filter: blur(12px) saturate(1.1);
+            background: var(--pp2-surface);
+            border-radius: 12px; padding: 6px; margin-bottom: 6px;
+        }}
+
+        /* Tabs: floating pill appearance */
+        [data-baseweb="tab-list"] {{
+            gap: 4px !important;
+            padding: 4px !important;
+            border-radius: 14px !important;
+            background: var(--pp2-surface) !important;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--pp2-border) !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+            border-radius: 10px !important;
+            padding: 8px 12px !important;
+            min-height: 40px !important;
+            border: 0 !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {{
+            background: var(--pp2-grad) !important;
+            color: #fff !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
+
+        /* Plotly charts: taller intrinsic box, no modebar */
+        [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; }}
+        .modebar-container, .modebar {{ display: none !important; }}
+
+        /* DataFrame: card-like */
+        [data-testid="stDataFrame"] {{
+            border-radius: var(--pp2-radius-l) !important;
+            box-shadow: 0 2px 10px -4px rgba(15,23,42,0.12);
+        }}
+
+        /* Expanders: rounder, tighter */
+        details[data-testid="stExpander"], div[data-testid="stExpander"] {{
+            border-radius: var(--pp2-radius-l) !important;
+        }}
+        [data-testid="stExpander"] summary {{
+            min-height: 44px !important; padding: 10px 12px !important;
+        }}
+
+        /* Alert boxes: flatter & rounder */
+        [data-testid="stAlert"] {{
+            border-radius: 14px !important;
+            border-left-width: 4px !important;
+        }}
+
+        /* Inputs: soft glass surfaces */
+        .stTextInput > div, .stNumberInput > div, .stDateInput > div,
+        div[data-baseweb="select"] > div {{
+            border-radius: 12px !important;
+            background: var(--pp2-surface) !important;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }}
+
+        /* Hero title — compact but bold */
+        .app-main-title {{
+            font-size: clamp(1.35rem, 1.1rem + 2vw, 1.75rem) !important;
+            background: var(--pp2-grad);
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .app-sub-title {{ font-size: 0.84rem !important; color: var(--pp2-muted) !important; }}
+
+        /* Top floating nav (the 4-way radio) — glass + shadow */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
+            background: var(--pp2-surface-strong) !important;
+            backdrop-filter: blur(18px) saturate(1.15) !important;
+            -webkit-backdrop-filter: blur(18px) saturate(1.15) !important;
+            box-shadow: 0 8px 24px -10px rgba(15,23,42,0.28) !important;
+            border: 1px solid var(--pp2-border) !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) {{
+            background: var(--pp2-grad) !important;
+            box-shadow: 0 4px 12px -2px rgba(99,102,241,0.55);
+        }}
+
+        /* Safer hamburger — bigger, subtle press */
+        [data-testid="collapsedControl"] button,
+        [data-testid="stSidebarCollapsedControl"] button,
+        button[aria-label*="sidebar"] {{
+            transition: transform 120ms var(--pp2-ease), box-shadow 120ms var(--pp2-ease) !important;
+        }}
+        [data-testid="collapsedControl"] button:active,
+        [data-testid="stSidebarCollapsedControl"] button:active,
+        button[aria-label*="sidebar"]:active {{
+            transform: scale(0.92) !important;
+        }}
+
+        /* Native-like swipe for sidebar */
+        [data-testid="stSidebar"] {{
+            box-shadow: 8px 0 32px -12px rgba(0,0,0,0.35) !important;
+        }}
+
+        /* Spinner centering */
+        [data-testid="stSpinner"] {{ padding: 14px 0; }}
+    }}
+
+    /* Small phones: even tighter */
+    @media (max-width: 420px) {{
+        .block-container {{ padding-left: 0.55rem !important; padding-right: 0.55rem !important; }}
+        [data-testid="stMetric"] {{ min-height: 70px !important; padding: 0.45rem 0.55rem !important; }}
+        [data-testid="stMetricValue"] {{ font-size: 1.05rem !important; }}
+        [data-testid="stMetricLabel"] {{ font-size: 0.60rem !important; }}
+    }}
+
+    /* Respect reduced-motion users */
+    @media (prefers-reduced-motion: reduce) {{
+        html {{ scroll-behavior: auto; }}
+        .pp-skeleton {{ animation: none; }}
+    }}
+
+    /* Dark tint pass for v2 surfaces */
+    {("html, body { background: " + bg_base + " !important; }") if is_dark else ""}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+    # Tiny JS: haptic feedback on primary button taps + passive touch listeners
+    # (improves perceived speed + frees the main thread on scroll).
+    components.html(
+        """
+        <script>(function(){
+          try {
+            var d = window.parent ? window.parent.document : document;
+            if (d.getElementById('pp2-haptics')) return;
+            var s = d.createElement('script'); s.id = 'pp2-haptics';
+            s.textContent = `
+              (function(){
+                function vib(ms){ try{ if (navigator.vibrate) navigator.vibrate(ms); }catch(e){} }
+                document.addEventListener('pointerdown', function(ev){
+                  var t = ev.target && ev.target.closest && ev.target.closest(
+                    'button, [role="tab"], [data-baseweb="radio"], .stButton>button, .stDownloadButton>button'
+                  );
+                  if (t) vib(8);
+                }, {passive: true, capture: true});
+                // Force passive listeners on wheel/touchmove for perf
+                var origAdd = EventTarget.prototype.addEventListener;
+                EventTarget.prototype.addEventListener = function(type, fn, opts){
+                  if (type === 'touchmove' || type === 'wheel' || type === 'touchstart') {
+                    if (opts === undefined || opts === false) opts = {passive:true};
+                    else if (typeof opts === 'object' && opts.passive === undefined) opts.passive = true;
+                  }
+                  return origAdd.call(this, type, fn, opts);
+                };
+              })();
+            `;
+            d.head.appendChild(s);
+          } catch(e){}
+        })();</script>
+        """,
+        height=0, width=0,
+    )
+
+
+def _pp_inline_icon(color: str) -> str:
+    svg = (
+        f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'>"
+        f"<rect width='192' height='192' rx='36' fill='{color}'/>"
+        f"<path d='M40 140 L76 96 L104 120 L152 60' stroke='white' stroke-width='10' "
+        f"fill='none' stroke-linecap='round' stroke-linejoin='round'/>"
+        f"<circle cx='152' cy='60' r='8' fill='white'/></svg>"
+    )
+    return "data:image/svg+xml;base64," + _pp_b64.b64encode(svg.encode()).decode()
+
+
+def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
+    theme_color = "#0f172a" if is_dark else "#6366f1"
+    manifest = {
+        "name": "Portfolio Manager",
+        "short_name": "Portfolio",
+        "start_url": ".",
+        "display": "standalone",
+        "background_color": "#0f172a" if is_dark else "#ffffff",
+        "theme_color": theme_color,
+        "orientation": "any",
+        "lang": "he" if language.startswith("ע") else "en",
+        "icons": [
+            {"src": _pp_inline_icon(theme_color), "sizes": "192x192", "type": "image/svg+xml"},
+        ],
+    }
+    manifest_data_uri = "data:application/manifest+json;base64," + _pp_b64.b64encode(
+        json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+    ).decode()
+    html = f"""
+    <script>
+    (function() {{
+      try {{
+        var doc = window.parent ? window.parent.document : document;
+        var head = doc.head;
+        function ensure(sel, attrs) {{
+          var el = doc.querySelector(sel);
+          if (!el) {{ el = doc.createElement(attrs._tag); head.appendChild(el); }}
+          for (var k in attrs) if (k !== '_tag') el.setAttribute(k, attrs[k]);
+        }}
+        ensure('meta[name="viewport"]', {{_tag:'meta', name:'viewport',
+          content:'width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover'}});
+        ensure('meta[name="theme-color"]', {{_tag:'meta', name:'theme-color', content:'{theme_color}'}});
+        ensure('meta[name="apple-mobile-web-app-capable"]', {{_tag:'meta', name:'apple-mobile-web-app-capable', content:'yes'}});
+        ensure('meta[name="apple-mobile-web-app-status-bar-style"]', {{_tag:'meta', name:'apple-mobile-web-app-status-bar-style', content:'black-translucent'}});
+        ensure('meta[name="mobile-web-app-capable"]', {{_tag:'meta', name:'mobile-web-app-capable', content:'yes'}});
+        ensure('link[rel="manifest"]', {{_tag:'link', rel:'manifest', href:'{manifest_data_uri}'}});
+      }} catch(e) {{}}
+    }})();
+    </script>
+    """
+    components.html(html, height=0, width=0)
+
+
+def _pp_inject_productivity_layer(language: str) -> None:
+    is_he = language.startswith("ע")
+    cmds = [
+        {"id": "nav-dashboard", "label": "דשבורד" if is_he else "Dashboard", "hint": "g d"},
+        {"id": "nav-manage",    "label": "ניהול עסקאות" if is_he else "Trade Management", "hint": "g t"},
+        {"id": "nav-risk",      "label": "סיכונים ופיפו" if is_he else "Risk & FIFO", "hint": "g r"},
+        {"id": "nav-quality",   "label": "בקרת נתונים" if is_he else "Data Quality", "hint": "g q"},
+        {"id": "toggle-theme",  "label": "החלפת ערכת נושא" if is_he else "Toggle theme", "hint": "t"},
+        {"id": "focus-search",  "label": "חיפוש" if is_he else "Focus search", "hint": "/"},
+        {"id": "rerun",         "label": "רענון" if is_he else "Rerun", "hint": "r"},
+        {"id": "help",          "label": "קיצורי מקלדת" if is_he else "Keyboard shortcuts", "hint": "?"},
+    ]
+    cmds_json = json.dumps(cmds, ensure_ascii=False)
+    placeholder = "הקלד לחיפוש פעולה…" if is_he else "Type to search actions…"
+    html = f"""
+    <script>
+    (function() {{
+      try {{
+        var doc = window.parent ? window.parent.document : document;
+        if (doc.getElementById('pp-cmdk-overlay')) return;
+        var overlay = doc.createElement('div');
+        overlay.id = 'pp-cmdk-overlay';
+        overlay.innerHTML = `
+          <div id="pp-cmdk" role="dialog" aria-modal="true">
+            <input id="pp-cmdk-input" type="text" placeholder="{placeholder}" autocomplete="off"/>
+            <ul id="pp-cmdk-list"></ul>
+          </div>`;
+        doc.body.appendChild(overlay);
+        var toast = doc.createElement('div');
+        toast.id = 'pp-toast';
+        doc.body.appendChild(toast);
+        var CMDS = {cmds_json};
+        var listEl = doc.getElementById('pp-cmdk-list');
+        var inputEl = doc.getElementById('pp-cmdk-input');
+        var selected = 0;
+        function showToast(msg) {{
+          toast.textContent = msg;
+          toast.classList.add('show');
+          clearTimeout(toast._t);
+          toast._t = setTimeout(function() {{ toast.classList.remove('show'); }}, 1600);
+        }}
+        window.ppToast = showToast;
+        function render(filter) {{
+          var q = (filter || '').trim().toLowerCase();
+          var items = CMDS.filter(function(c) {{
+            if (!q) return true;
+            return (c.label + ' ' + c.hint).toLowerCase().indexOf(q) !== -1;
+          }});
+          if (selected >= items.length) selected = 0;
+          listEl.innerHTML = items.map(function(c, i) {{
+            return '<li data-id="'+c.id+'" aria-selected="'+(i===selected)+'">'+
+                   '<span>'+c.label+'</span><kbd>'+c.hint+'</kbd></li>';
+          }}).join('') || '<li style="opacity:.6">—</li>';
+          Array.prototype.forEach.call(listEl.querySelectorAll('li[data-id]'), function(li) {{
+            li.addEventListener('click', function() {{ runCommand(li.getAttribute('data-id')); }});
+          }});
+        }}
+        function openPalette() {{
+          overlay.style.display = 'flex';
+          inputEl.value = ''; selected = 0; render('');
+          setTimeout(function() {{ inputEl.focus(); }}, 10);
+        }}
+        function closePalette() {{ overlay.style.display = 'none'; }}
+        window.ppOpenPalette = openPalette;
+        function clickByText(needles) {{
+          var nodes = doc.querySelectorAll('label, button, [role="tab"]');
+          for (var i=0;i<nodes.length;i++) {{
+            var t = (nodes[i].innerText || '').trim();
+            for (var j=0;j<needles.length;j++) {{
+              if (t && t.indexOf(needles[j]) !== -1) {{ nodes[i].click(); return true; }}
+            }}
+          }}
+          return false;
+        }}
+        function runCommand(id) {{
+          closePalette();
+          try {{
+            if (id === 'nav-dashboard') clickByText(['דשבורד','Dashboard','סקירה','Overview']);
+            else if (id === 'nav-manage') clickByText(['ניהול עסקאות','Trade','עסקאות','Trades']);
+            else if (id === 'nav-risk') clickByText(['סיכונים','Risk','סיכון']);
+            else if (id === 'nav-quality') clickByText(['בקרת נתונים','Data Quality','נתונים','Data']);
+            else if (id === 'toggle-theme') {{
+              var b = doc.querySelector('header button[kind="header"]'); if (b) b.click();
+              showToast('Theme');
+            }} else if (id === 'focus-search') {{
+              var inp = doc.querySelector('input[type="text"], input[type="search"]');
+              if (inp) inp.focus();
+            }} else if (id === 'rerun') {{
+              location.reload();
+            }} else if (id === 'help') {{
+              showToast('⌘K · / · t · r · g d/t/r/q · ?');
+            }}
+          }} catch(e) {{}}
+        }}
+        inputEl && inputEl.addEventListener('input', function(e) {{ selected = 0; render(e.target.value); }});
+        overlay.addEventListener('click', function(e) {{ if (e.target === overlay) closePalette(); }});
+        var gBuffer = 0;
+        doc.addEventListener('keydown', function(e) {{
+          var tag = (e.target && e.target.tagName || '').toLowerCase();
+          var typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
+          if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {{
+            e.preventDefault(); openPalette(); return;
+          }}
+          if (e.key === 'Escape' && overlay.style.display === 'flex') {{
+            e.preventDefault(); closePalette(); return;
+          }}
+          if (overlay.style.display === 'flex') {{
+            var items = listEl.querySelectorAll('li[data-id]');
+            if (e.key === 'ArrowDown') {{ selected = Math.min(selected+1, items.length-1); render(inputEl.value); e.preventDefault(); }}
+            else if (e.key === 'ArrowUp') {{ selected = Math.max(selected-1, 0); render(inputEl.value); e.preventDefault(); }}
+            else if (e.key === 'Enter' && items[selected]) {{ runCommand(items[selected].getAttribute('data-id')); e.preventDefault(); }}
+            return;
+          }}
+          if (typing) return;
+          if (e.key === '/') {{ e.preventDefault(); runCommand('focus-search'); return; }}
+          if (e.key === '?') {{ e.preventDefault(); runCommand('help'); return; }}
+          if (e.key === 't') {{ runCommand('toggle-theme'); return; }}
+          if (e.key === 'r') {{ runCommand('rerun'); return; }}
+          if (e.key === 'f') {{
+            if (doc.fullscreenElement) doc.exitFullscreen(); else doc.documentElement.requestFullscreen();
+            return;
+          }}
+          if (e.key === 'g') {{ gBuffer = Date.now(); return; }}
+          if (gBuffer && (Date.now() - gBuffer) < 900) {{
+            gBuffer = 0;
+            if (e.key === 'd') runCommand('nav-dashboard');
+            else if (e.key === 't') runCommand('nav-manage');
+            else if (e.key === 'r') runCommand('nav-risk');
+            else if (e.key === 'q') runCommand('nav-quality');
+          }}
+        }}, true);
+      }} catch(e) {{}}
+    }})();
+    </script>
+    """
+    components.html(html, height=0, width=0)
+
+
+# ── Advanced analytics helpers ───────────────────────────────────────────
+def pp_herfindahl_index(values) -> float:
+    """HHI concentration on [0,1].  0 = perfectly diversified."""
+    arr = np.asarray([v for v in values if v and v > 0], dtype=float)
+    if arr.size == 0:
+        return 0.0
+    w = arr / arr.sum()
+    return float((w ** 2).sum())
+
+
+def pp_historical_var(returns, alpha: float = 0.95) -> float:
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return 0.0
+    return float(-np.quantile(arr, 1.0 - alpha))
+
+
+def pp_historical_cvar(returns, alpha: float = 0.95) -> float:
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size == 0:
+        return 0.0
+    q = np.quantile(arr, 1.0 - alpha)
+    tail = arr[arr <= q]
+    if tail.size == 0:
+        return float(-q)
+    return float(-tail.mean())
+
+
+def pp_max_drawdown(series) -> float:
+    arr = np.asarray(list(series), dtype=float)
+    if arr.size == 0:
+        return 0.0
+    peak = np.maximum.accumulate(arr)
+    dd = (arr - peak) / np.where(peak == 0, 1, peak)
+    return float(dd.min())
+
+
+def pp_sharpe_ratio(returns, rf_annual: float = 0.02, periods: int = 252) -> float:
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size < 2 or arr.std(ddof=1) == 0:
+        return 0.0
+    rf = rf_annual / periods
+    return float((arr.mean() - rf) / arr.std(ddof=1) * _pp_math.sqrt(periods))
+
+
+def pp_sortino_ratio(returns, rf_annual: float = 0.02, periods: int = 252) -> float:
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size < 2:
+        return 0.0
+    rf = rf_annual / periods
+    downside = arr[arr < rf]
+    dd = downside.std(ddof=1) if downside.size > 1 else 0.0
+    if dd == 0:
+        return 0.0
+    return float((arr.mean() - rf) / dd * _pp_math.sqrt(periods))
+
+
+def pp_calmar_ratio(returns, periods: int = 252) -> float:
+    arr = np.asarray(list(returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size < 2:
+        return 0.0
+    cum = (1 + arr).cumprod()
+    mdd = abs(pp_max_drawdown(cum))
+    if mdd == 0:
+        return 0.0
+    cagr = cum[-1] ** (periods / arr.size) - 1
+    return float(cagr / mdd)
+
+
+def pp_monte_carlo_projection(start_value: float,
+                              daily_returns,
+                              horizon_days: int = 252,
+                              n_paths: int = 1000,
+                              seed: _PP_Optional[int] = 42) -> pd.DataFrame:
+    """Return a DataFrame with p10 / p50 / p90 / mean simulated paths."""
+    arr = np.asarray(list(daily_returns), dtype=float)
+    arr = arr[~np.isnan(arr)]
+    if arr.size < 5 or start_value <= 0 or horizon_days <= 0:
+        return pd.DataFrame()
+    rng = np.random.default_rng(seed)
+    mu, sigma = arr.mean(), arr.std(ddof=1)
+    sigma = max(sigma, 1e-6)
+    shocks = rng.normal(mu, sigma, size=(n_paths, horizon_days))
+    paths = start_value * np.cumprod(1 + shocks, axis=1)
+    p10 = np.percentile(paths, 10, axis=0)
+    p50 = np.percentile(paths, 50, axis=0)
+    p90 = np.percentile(paths, 90, axis=0)
+    mean = paths.mean(axis=0)
+    return pd.DataFrame({"day": np.arange(1, horizon_days + 1),
+                         "p10": p10, "p50": p50, "p90": p90, "mean": mean})
+
+
+def pp_dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Portfolio") -> bytes:
+    buf = _pp_io.BytesIO()
+    try:
+        with pd.ExcelWriter(buf, engine="xlsxwriter") as xw:
+            df.to_excel(xw, sheet_name=sheet_name[:31], index=False)
+    except Exception:
+        try:
+            with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+                df.to_excel(xw, sheet_name=sheet_name[:31], index=False)
+        except Exception:
+            return b""
+    return buf.getvalue()
+
+
+def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
+                         is_he: bool = True) -> None:
+    """Render a row of one-click export buttons for the supplied DataFrame."""
+    if df is None or df.empty:
+        return
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button(
+            ("⬇️ הורדה CSV" if is_he else "⬇️ CSV"),
+            data=df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"{label_prefix}_{ts}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with c2:
+        st.download_button(
+            ("⬇️ הורדה JSON" if is_he else "⬇️ JSON"),
+            data=df.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
+            file_name=f"{label_prefix}_{ts}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    with c3:
+        xls = pp_dataframe_to_excel_bytes(df, sheet_name=label_prefix)
+        if xls:
+            st.download_button(
+                ("⬇️ הורדה Excel" if is_he else "⬇️ Excel"),
+                data=xls,
+                file_name=f"{label_prefix}_{ts}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+# ── Advanced Analytics Suite (professional-grade risk & performance) ────
+def pp_portfolio_health_score(metrics: Dict[str, float],
+                              hhi: float,
+                              var_95: float) -> Tuple[int, str, str]:
+    """Compute a 0-100 portfolio health score from risk metrics.
+
+    Inputs: sharpe, annual vol, max drawdown (negative ok), CAGR, HHI, VaR 95.
+    Returns: (score, label, color).
+    """
+    sharpe = float(metrics.get("sharpe", 0.0) or 0.0)
+    vol = float(metrics.get("vol", 0.0) or 0.0)
+    mdd = abs(float(metrics.get("mdd", 0.0) or 0.0))
+    cagr = float(metrics.get("cagr", 0.0) or 0.0)
+    # Each pillar in [0,100]
+    s_sharpe = max(0.0, min(100.0, (sharpe + 0.5) / 2.5 * 100.0))        # -0.5..2.0 → 0..100
+    s_drawdown = max(0.0, min(100.0, (1.0 - mdd / 0.40) * 100.0))          # 0%..40% → 100..0
+    s_vol = max(0.0, min(100.0, (1.0 - vol / 0.45) * 100.0))               # 0..45% → 100..0
+    s_cagr = max(0.0, min(100.0, (cagr + 0.05) / 0.30 * 100.0))            # -5%..25% → 0..100
+    s_conc = max(0.0, min(100.0, (1.0 - max(0.0, hhi - 0.10) / 0.50) * 100.0))  # HHI .10..60 → 100..0
+    s_var = max(0.0, min(100.0, (1.0 - max(0.0, var_95) / 0.08) * 100.0))  # 0..8% daily → 100..0
+    score = int(round(0.25 * s_sharpe + 0.20 * s_drawdown + 0.15 * s_vol +
+                      0.15 * s_cagr + 0.15 * s_conc + 0.10 * s_var))
+    if score >= 75:
+        return score, "Excellent", "#10b981"
+    if score >= 55:
+        return score, "Solid", "#22c55e"
+    if score >= 40:
+        return score, "Balanced", "#f59e0b"
+    if score >= 25:
+        return score, "Cautious", "#f97316"
+    return score, "Fragile", "#ef4444"
+
+
+def render_advanced_analytics(
+    open_trades: pd.DataFrame,
+    value_series: pd.Series,
+    risk_metrics_dict: Dict[str, float],
+    total_value: float,
+    tr,
+    template: str,
+    is_dark: bool,
+    is_mobile: bool,
+    language: str,
+) -> None:
+    """Professional risk + performance analytics block.
+
+    Renders: health-score gauge, risk KPI row (VaR/CVaR/Sortino/Calmar/HHI/Beta),
+    drawdown chart, daily-returns distribution with VaR markers, 30-day rolling
+    volatility, correlation heatmap, benchmark (SPY) comparison, and a Monte
+    Carlo 1-year projection fan chart.  Also exposes a one-click export bar.
+    """
+    st.markdown(f"### {tr('Advanced Analytics Suite', 'מעבדת אנליטיקה מתקדמת')}")
+    if value_series is None or value_series.empty or len(value_series) < 20:
+        st.info(tr(
+            "Not enough market history to run advanced analytics (need at least 20 trading days).",
+            "אין מספיק היסטוריית שוק עבור האנליטיקה המתקדמת (נדרשים לפחות 20 ימי מסחר).",
+        ))
+        return
+
+    vs = pd.to_numeric(value_series, errors="coerce").dropna()
+    if vs.empty:
+        return
+    daily_ret = vs.pct_change().dropna()
+    peak = vs.cummax()
+    drawdown = (vs - peak) / peak.replace(0, np.nan)
+
+    # Concentration (HHI) on open positions
+    hhi = 0.0
+    if not open_trades.empty and "Current_Value_ILS" in open_trades.columns:
+        weights = open_trades.groupby("Ticker")["Current_Value_ILS"].sum()
+        hhi = pp_herfindahl_index(weights.values)
+
+    var_95 = pp_historical_var(daily_ret, alpha=0.95)
+    cvar_95 = pp_historical_cvar(daily_ret, alpha=0.95)
+    sortino = pp_sortino_ratio(daily_ret)
+    calmar = pp_calmar_ratio(daily_ret)
+
+    # Benchmark SPY (beta + comparison line)
+    beta_val = float("nan")
+    bench_close = pd.Series(dtype=float)
+    try:
+        bench_df = _download_close_matrix(("SPY",), days=max(len(vs) + 5, 120))
+        if not bench_df.empty and "SPY" in bench_df.columns:
+            bench_close = pd.to_numeric(bench_df["SPY"], errors="coerce").dropna()
+            if not bench_close.empty:
+                joined = pd.concat([vs.rename("pf"), bench_close.rename("spy")], axis=1).dropna()
+                if len(joined) >= 20:
+                    pf_ret = joined["pf"].pct_change().dropna()
+                    bx_ret = joined["spy"].pct_change().dropna()
+                    common = pf_ret.index.intersection(bx_ret.index)
+                    if len(common) >= 20:
+                        cov = np.cov(pf_ret.loc[common], bx_ret.loc[common], ddof=1)
+                        if cov.shape == (2, 2) and cov[1, 1] > 0:
+                            beta_val = float(cov[0, 1] / cov[1, 1])
+    except Exception:
+        pass
+
+    score, score_label, score_color = pp_portfolio_health_score(risk_metrics_dict, hhi, var_95)
+
+    gauge_fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        number={"font": {"size": 44, "color": score_color}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1,
+                     "tickcolor": "#94a3b8" if is_dark else "#475569"},
+            "bar": {"color": score_color, "thickness": 0.28},
+            "bgcolor": "rgba(0,0,0,0)",
+            "steps": [
+                {"range": [0, 25], "color": "rgba(239,68,68,0.25)"},
+                {"range": [25, 40], "color": "rgba(249,115,22,0.25)"},
+                {"range": [40, 55], "color": "rgba(245,158,11,0.25)"},
+                {"range": [55, 75], "color": "rgba(34,197,94,0.25)"},
+                {"range": [75, 100], "color": "rgba(16,185,129,0.30)"},
+            ],
+            "threshold": {"line": {"color": score_color, "width": 4},
+                          "thickness": 0.9, "value": score},
+        },
+        title={"text": f"<b>{tr('Portfolio Health Score', 'ציון בריאות התיק')}</b><br>"
+                       f"<span style='font-size:0.9rem;color:{score_color}'>{score_label}</span>",
+               "font": {"size": 15}},
+    ))
+    gauge_fig.update_layout(margin=dict(l=10, r=10, t=60, b=10), height=260 if not is_mobile else 230)
+
+    gc1, gc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
+    with gc1:
+        st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), use_container_width=True)
+    with gc2:
+        kpi_row = st.columns(3)
+        kpi_row[0].metric(tr("Daily VaR 95%", "VaR יומי 95%"), f"{var_95:.2%}",
+                          tr("Potential loss / day", "הפסד פוטנציאלי ליום"))
+        kpi_row[1].metric(tr("Daily CVaR 95%", "CVaR יומי 95%"), f"{cvar_95:.2%}",
+                          tr("Expected tail loss", "הפסד ממוצע בזנב"))
+        kpi_row[2].metric(tr("Sortino", "סורטינו"), f"{sortino:.2f}")
+        kpi_row2 = st.columns(3)
+        kpi_row2[0].metric(tr("Calmar", "קלמאר"), f"{calmar:.2f}")
+        kpi_row2[1].metric(tr("Concentration (HHI)", "ריכוזיות (HHI)"), f"{hhi:.2f}",
+                           tr("0=diversified · 1=single-name", "0=מפוזר · 1=נכס יחיד"))
+        kpi_row2[2].metric(tr("Beta vs S&P 500", "ביטא מול S&P 500"),
+                           ("—" if not np.isfinite(beta_val) else f"{beta_val:.2f}"))
+    try:
+        style_metric_cards(border_left_color=score_color, border_radius_px=12, box_shadow=True)
+    except Exception:
+        pass
+
+    st.markdown("&nbsp;", unsafe_allow_html=True)
+
+    # Drawdown (underwater) chart
+    row_a = st.columns(2) if not is_mobile else [st.container(), st.container()]
+    with row_a[0]:
+        dd_fig = go.Figure()
+        dd_fig.add_trace(go.Scatter(
+            x=drawdown.index, y=drawdown.values * 100.0,
+            mode="lines", name=tr("Drawdown %", "משיכה %"),
+            line=dict(color="#ef4444", width=1.6),
+            fill="tozeroy", fillcolor="rgba(239,68,68,0.18)",
+            hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" +
+                          tr("Drawdown", "משיכה") + ": %{y:.2f}%<extra></extra>",
+        ))
+        dd_fig.update_layout(
+            template=template,
+            title=tr("Underwater Drawdown (%)", "עומק משיכה (%)"),
+            yaxis_title="%", xaxis_title=tr("Date", "תאריך"),
+            margin=dict(l=10, r=10, t=50, b=30),
+            hovermode="x unified",
+        )
+        st.plotly_chart(_apply_plotly_theme(dd_fig, is_dark, is_mobile), use_container_width=True)
+
+    # Returns distribution with VaR / CVaR markers
+    with row_a[1]:
+        hist_fig = go.Figure()
+        hist_fig.add_trace(go.Histogram(
+            x=daily_ret.values * 100.0,
+            nbinsx=40,
+            marker=dict(color="#4f46e5", line=dict(color="#312e81", width=0.5)),
+            opacity=0.85,
+            name=tr("Daily returns", "תשואות יומיות"),
+        ))
+        hist_fig.add_vline(x=-var_95 * 100.0, line=dict(color="#f59e0b", dash="dash", width=2),
+                           annotation_text="VaR 95%", annotation_position="top")
+        hist_fig.add_vline(x=-cvar_95 * 100.0, line=dict(color="#ef4444", dash="dot", width=2),
+                           annotation_text="CVaR 95%", annotation_position="bottom")
+        hist_fig.update_layout(
+            template=template,
+            title=tr("Daily Returns Distribution", "פיזור תשואות יומיות"),
+            xaxis_title="%", yaxis_title=tr("Frequency", "שכיחות"),
+            margin=dict(l=10, r=10, t=50, b=30),
+            showlegend=False, bargap=0.04,
+        )
+        st.plotly_chart(_apply_plotly_theme(hist_fig, is_dark, is_mobile), use_container_width=True)
+
+    # Rolling 30-day annualized volatility
+    row_b = st.columns(2) if not is_mobile else [st.container(), st.container()]
+    with row_b[0]:
+        roll_vol = daily_ret.rolling(30).std() * np.sqrt(252) * 100.0
+        roll_vol = roll_vol.dropna()
+        if not roll_vol.empty:
+            vol_fig = go.Figure()
+            vol_fig.add_trace(go.Scatter(
+                x=roll_vol.index, y=roll_vol.values,
+                mode="lines", name=tr("30D Annualized Vol", "תנודתיות שנתית 30 יום"),
+                line=dict(color="#06b6d4", width=2),
+                fill="tozeroy", fillcolor="rgba(6,182,212,0.12)",
+                hovertemplate="%{x|%Y-%m-%d}<br>%{y:.1f}%<extra></extra>",
+            ))
+            vol_fig.update_layout(
+                template=template,
+                title=tr("Rolling 30-Day Volatility (Annualized)", "תנודתיות מתגלגלת 30 יום (שנתית)"),
+                yaxis_title="%", xaxis_title=tr("Date", "תאריך"),
+                margin=dict(l=10, r=10, t=50, b=30), hovermode="x unified",
+            )
+            st.plotly_chart(_apply_plotly_theme(vol_fig, is_dark, is_mobile), use_container_width=True)
+        else:
+            st.info(tr("Not enough data for rolling volatility.", "אין מספיק נתונים לתנודתיות מתגלגלת."))
+
+    # Benchmark comparison (normalized)
+    with row_b[1]:
+        if not bench_close.empty:
+            joined = pd.concat([vs.rename("pf"), bench_close.rename("spy")], axis=1).dropna()
+            if len(joined) >= 5:
+                norm = joined.div(joined.iloc[0]).mul(100.0)
+                bm_fig = go.Figure()
+                bm_fig.add_trace(go.Scatter(x=norm.index, y=norm["pf"], mode="lines",
+                                            name=tr("Portfolio", "תיק"),
+                                            line=dict(color="#4f46e5", width=2.2)))
+                bm_fig.add_trace(go.Scatter(x=norm.index, y=norm["spy"], mode="lines",
+                                            name="S&P 500 (SPY)",
+                                            line=dict(color="#f59e0b", width=2, dash="dot")))
+                bm_fig.update_layout(
+                    template=template,
+                    title=tr("Portfolio vs S&P 500 (Normalized to 100)",
+                             "תיק מול S&P 500 (מנורמל ל-100)"),
+                    yaxis_title=tr("Index", "מדד"), xaxis_title=tr("Date", "תאריך"),
+                    margin=dict(l=10, r=10, t=50, b=30), hovermode="x unified",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                )
+                st.plotly_chart(_apply_plotly_theme(bm_fig, is_dark, is_mobile), use_container_width=True)
+            else:
+                st.info(tr("Benchmark history unavailable.", "אין מספיק היסטוריית בנצ'מרק."))
+        else:
+            st.info(tr("Benchmark (SPY) unavailable — check internet / Yahoo access.",
+                       "בנצ'מרק (SPY) לא זמין — בדוק גישה לרשת / Yahoo."))
+
+    # Correlation heatmap between holdings
+    if not open_trades.empty and "Ticker" in open_trades.columns:
+        held = sorted({_clean(t).upper() for t in open_trades["Ticker"].tolist() if _clean(t)})
+        if 2 <= len(held) <= 25:
+            try:
+                symbols = tuple(_market_symbol(t) for t in held)
+                close_mx = _download_close_matrix(symbols, days=252)
+                if not close_mx.empty and close_mx.shape[1] >= 2:
+                    ret_mx = close_mx.pct_change().dropna(how="all")
+                    corr = ret_mx.corr().round(2)
+                    sym_to_tkr = {_market_symbol(t): t for t in held}
+                    display_labels = [sym_to_tkr.get(c, c) for c in corr.columns]
+                    corr.columns = display_labels
+                    corr.index = display_labels
+                    heat_fig = px.imshow(
+                        corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                        text_auto=".2f", aspect="auto",
+                        title=tr("Return Correlation Heatmap (1Y daily)",
+                                 "מפת מתאמים של תשואות (יומי, שנה)"),
+                    )
+                    heat_fig.update_layout(
+                        template=template,
+                        margin=dict(l=10, r=10, t=50, b=20),
+                        coloraxis_colorbar=dict(title=""),
+                    )
+                    st.plotly_chart(_apply_plotly_theme(heat_fig, is_dark, is_mobile), use_container_width=True)
+            except Exception:
+                pass
+
+    # Monte Carlo projection (1 year)
+    try:
+        mc = pp_monte_carlo_projection(
+            start_value=float(vs.iloc[-1]) if len(vs) else float(total_value),
+            daily_returns=daily_ret.values,
+            horizon_days=252, n_paths=1000,
+        )
+    except Exception:
+        mc = pd.DataFrame()
+    if not mc.empty:
+        mc_fig = go.Figure()
+        mc_fig.add_trace(go.Scatter(x=mc["day"], y=mc["p90"], mode="lines", name="P90",
+                                    line=dict(color="rgba(16,185,129,0.0)", width=0),
+                                    showlegend=False, hoverinfo="skip"))
+        mc_fig.add_trace(go.Scatter(x=mc["day"], y=mc["p10"], mode="lines", name="P10-P90",
+                                    fill="tonexty", fillcolor="rgba(79,70,229,0.18)",
+                                    line=dict(color="rgba(79,70,229,0.0)", width=0)))
+        mc_fig.add_trace(go.Scatter(x=mc["day"], y=mc["p50"], mode="lines",
+                                    name=tr("Median", "חציון"),
+                                    line=dict(color="#4f46e5", width=2.2)))
+        mc_fig.add_trace(go.Scatter(x=mc["day"], y=mc["mean"], mode="lines",
+                                    name=tr("Mean", "ממוצע"),
+                                    line=dict(color="#f59e0b", width=1.6, dash="dash")))
+        mc_fig.update_layout(
+            template=template,
+            title=tr("Monte-Carlo 1-Year Projection (1,000 paths)",
+                     "הדמיית מונטה-קרלו ל-12 חודשים (1,000 מסלולים)"),
+            xaxis_title=tr("Trading days", "ימי מסחר"),
+            yaxis_title=tr("Projected Value", "שווי משוער"),
+            margin=dict(l=10, r=10, t=50, b=30),
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        )
+        st.plotly_chart(_apply_plotly_theme(mc_fig, is_dark, is_mobile), use_container_width=True)
+
+        final_row = mc.iloc[-1]
+        mc_cols = st.columns(3)
+        mc_cols[0].metric(tr("1Y P10 (pessimistic)", "P10 לשנה (פסימי)"),
+                          f"₪{float(final_row['p10']):,.0f}")
+        mc_cols[1].metric(tr("1Y Median", "חציון לשנה"),
+                          f"₪{float(final_row['p50']):,.0f}")
+        mc_cols[2].metric(tr("1Y P90 (optimistic)", "P90 לשנה (אופטימי)"),
+                          f"₪{float(final_row['p90']):,.0f}")
+
+    # Export bar for analytics summary
+    analytics_summary = pd.DataFrame([
+        {"Metric": "Health Score",      "Value": score},
+        {"Metric": "Sharpe",            "Value": round(float(risk_metrics_dict.get("sharpe", 0.0) or 0.0), 3)},
+        {"Metric": "Sortino",           "Value": round(sortino, 3)},
+        {"Metric": "Calmar",            "Value": round(calmar, 3)},
+        {"Metric": "Annual Vol",        "Value": round(float(risk_metrics_dict.get("vol", 0.0) or 0.0), 4)},
+        {"Metric": "Max Drawdown",      "Value": round(float(risk_metrics_dict.get("mdd", 0.0) or 0.0), 4)},
+        {"Metric": "CAGR",              "Value": round(float(risk_metrics_dict.get("cagr", 0.0) or 0.0), 4)},
+        {"Metric": "VaR 95 (daily)",    "Value": round(var_95, 4)},
+        {"Metric": "CVaR 95 (daily)",   "Value": round(cvar_95, 4)},
+        {"Metric": "HHI",               "Value": round(hhi, 4)},
+        {"Metric": "Beta vs SPY",       "Value": (None if not np.isfinite(beta_val) else round(beta_val, 3))},
+    ])
+    st.caption(tr("Export analytics summary:", "ייצוא מסמך האנליטיקה:"))
+    pp_render_export_bar(analytics_summary, label_prefix="analytics_summary",
+                         is_he=(language == LANG_HE))
+# ════════════════════════════════════════════════════════════════════════
+# END OF PREMIUM ENHANCEMENTS
+# ════════════════════════════════════════════════════════════════════════
+
 def main() -> None:
     st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="auto")
 
@@ -3624,6 +4882,16 @@ def main() -> None:
     inject_global_styles(language, theme_mode)
     inject_client_fixes()
     inject_dark_dropdown_fix(_resolve_theme_base(theme_mode) == "dark")
+
+    # ── Premium polish, PWA meta tags, keyboard shortcuts, command palette ──
+    try:
+        apply_premium_polish(
+            language=language,
+            is_dark=_resolve_theme_base(theme_mode) == "dark",
+            is_mobile=_is_mobile_client(),
+        )
+    except Exception:
+        pass
 
     _render_premium_sidebar_lottie(language)
     _space(16)
@@ -4039,6 +5307,34 @@ def main() -> None:
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
                 )
                 st.plotly_chart(_apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True), use_container_width=True)
+
+            # ── Treemap: at-a-glance allocation + P/L color overlay ──
+            if not summary.empty and float(summary["Value_ILS"].sum()) > 0:
+                tm_src = summary.copy()
+                tm_src["Yield_ILS_Pct"] = tm_src["Yield_ILS"] * 100.0
+                try:
+                    fig_tree = px.treemap(
+                        tm_src,
+                        path=[px.Constant(tr("Portfolio", "תיק")), "Ticker"],
+                        values="Value_ILS",
+                        color="Yield_ILS_Pct",
+                        color_continuous_scale=["#dc2626", "#f59e0b", "#16a34a"],
+                        color_continuous_midpoint=0,
+                        title=tr("Portfolio Treemap (size = value · color = yield)",
+                                 "מפת חום של התיק (גודל = שווי · צבע = תשואה)"),
+                        template=template,
+                        hover_data={"Value_ILS": ":,.0f", "Yield_ILS_Pct": ":.2f"},
+                    )
+                    fig_tree.update_traces(
+                        texttemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{color:.1f}%",
+                        textposition="middle center",
+                    )
+                    fig_tree.update_layout(margin=dict(l=10, r=10, t=50, b=10),
+                                           coloraxis_colorbar=dict(title="%"))
+                    st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile),
+                                    use_container_width=True)
+                except Exception:
+                    pass
 
             def _build_summary_for_exposure(local_open_trades: pd.DataFrame) -> pd.DataFrame:
                 if local_open_trades.empty:
@@ -4939,6 +6235,25 @@ def main() -> None:
                 hide_index=True,
             )
 
+        # ── Advanced Analytics Suite (professional risk analytics) ──
+        try:
+            render_advanced_analytics(
+                open_trades=open_trades,
+                value_series=value_series,
+                risk_metrics_dict=metrics,
+                total_value=total_value,
+                tr=tr,
+                template=template,
+                is_dark=is_dark,
+                is_mobile=is_mobile,
+                language=language,
+            )
+        except Exception as _adv_exc:
+            st.caption(tr(
+                f"Advanced analytics unavailable: {_adv_exc}",
+                f"האנליטיקה המתקדמת אינה זמינה: {_adv_exc}",
+            ))
+
     elif page == page_manage:
         st.markdown(f"### {tr('Trade Management (Add / Edit / Delete)', 'ניהול עסקאות (הוספה / עריכה / מחיקה)')}")
         st.caption(tr("Changes are saved directly to Google Sheets via Apps Script (no CSV write).", "שמירה מתבצעת ישירות ל-Google Sheets דרך Apps Script (ללא כתיבה ל-CSV)."))
@@ -5419,13 +6734,89 @@ def main() -> None:
 
     else:
         st.markdown(f"### {tr('Data Quality', 'בקרת נתונים ואיכות')}")
-        if is_demo:
-            non_empty_cells, total_cells, completeness = dataframe_completeness(df)
-            dupes = int(df.duplicated(subset=["Trade_ID"]).sum()) if "Trade_ID" in df.columns else 0
-            cqa1, cqa2, cqa3 = st.columns(3)
-            cqa1.metric(tr("Data Completeness", "שלמות נתונים"), f"{completeness:.1%}")
-            cqa2.metric(tr("Duplicate Trade IDs", "כפילויות Trade ID"), f"{dupes}")
-            cqa3.metric(tr("Rows in Snapshot", "שורות בתמונת מצב"), f"{len(df):,}")
+
+        # ── Always-on Data Quality KPIs ──
+        non_empty_cells, total_cells, completeness = dataframe_completeness(df)
+        dupes = int(df.duplicated(subset=["Trade_ID"]).sum()) if "Trade_ID" in df.columns else 0
+        missing_ticker = int(df["Ticker"].map(_clean).eq("").sum()) if "Ticker" in df.columns else 0
+        missing_qty = 0
+        if "Quantity" in df.columns:
+            missing_qty = int(pd.to_numeric(df["Quantity"], errors="coerce").fillna(0).eq(0).sum())
+        missing_date = 0
+        if "Purchase_Date" in df.columns:
+            missing_date = int(_parse_dates_flexible(df["Purchase_Date"]).isna().sum())
+
+        cqa1, cqa2, cqa3, cqa4 = st.columns(4)
+        cqa1.metric(tr("Data Completeness", "שלמות נתונים"), f"{completeness:.1%}")
+        cqa2.metric(tr("Duplicate Trade IDs", "כפילויות Trade ID"), f"{dupes}")
+        cqa3.metric(tr("Missing Tickers", "טיקרים חסרים"), f"{missing_ticker}")
+        cqa4.metric(tr("Rows in Snapshot", "שורות בתמונת מצב"), f"{len(df):,}")
+        try:
+            style_metric_cards(border_left_color="#06b6d4", border_radius_px=12, box_shadow=True)
+        except Exception:
+            pass
+
+        # ── Column-level completeness ──
+        if not df.empty:
+            col_total = len(df)
+            col_rows = []
+            for c in df.columns:
+                s = df[c]
+                if s.dtype.kind in "biufc":
+                    non_empty = int(pd.to_numeric(s, errors="coerce").notna().sum())
+                else:
+                    non_empty = int(s.astype(str).map(_clean).ne("").sum())
+                col_rows.append({"Column": str(c), "Completeness": non_empty / col_total if col_total else 0.0})
+            col_df = pd.DataFrame(col_rows).sort_values("Completeness", ascending=True)
+            try:
+                fig_cc = px.bar(
+                    col_df,
+                    x="Completeness", y="Column", orientation="h",
+                    title=tr("Column-Level Completeness", "שלמות נתונים ברמת עמודה"),
+                    template=template,
+                    color="Completeness",
+                    color_continuous_scale=["#ef4444", "#f59e0b", "#10b981"],
+                    range_color=(0.0, 1.0),
+                )
+                fig_cc.update_traces(
+                    hovertemplate="<b>%{y}</b><br>" + tr("Completeness", "שלמות") + ": %{x:.1%}<extra></extra>",
+                    texttemplate="%{x:.0%}", textposition="outside",
+                )
+                fig_cc.update_layout(
+                    xaxis_tickformat=".0%",
+                    yaxis_title="",
+                    margin=dict(l=10, r=10, t=50, b=20),
+                    coloraxis_showscale=False,
+                    height=max(320, 22 * len(col_df) + 80),
+                )
+                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True),
+                                use_container_width=True)
+            except Exception:
+                pass
+
+        # ── Suggested actions based on issues found ──
+        issues: List[str] = []
+        if dupes:
+            issues.append(tr(f"• {dupes} duplicate Trade_ID rows — deduplicate in the source sheet.",
+                             f"• {dupes} רשומות עם Trade_ID כפול — מומלץ למזג בגיליון המקור."))
+        if missing_ticker:
+            issues.append(tr(f"• {missing_ticker} rows with empty Ticker — fill or remove.",
+                             f"• {missing_ticker} שורות ללא טיקר — יש להשלים או להסיר."))
+        if missing_qty:
+            issues.append(tr(f"• {missing_qty} rows with zero quantity — verify or archive.",
+                             f"• {missing_qty} שורות עם כמות 0 — יש לוודא או לארכב."))
+        if missing_date:
+            issues.append(tr(f"• {missing_date} rows with invalid purchase date — fix date formats.",
+                             f"• {missing_date} שורות עם תאריך רכישה לא תקין — יש לתקן פורמט."))
+        if completeness < 0.95:
+            issues.append(tr(f"• Overall completeness is {completeness:.1%} — target ≥ 95%.",
+                             f"• שלמות כוללת: {completeness:.1%} — יעד מומלץ: 95% ומעלה."))
+        if issues:
+            with st.expander(tr("Data quality issues & suggested fixes", "ממצאי איכות נתונים והמלצות תיקון"),
+                              expanded=True):
+                st.markdown("\n".join(issues))
+        else:
+            st.success(tr("No data-quality issues detected.", "לא נמצאו בעיות איכות נתונים."))
 
         status_counts = core["status_counts"].copy()
 
