@@ -4032,7 +4032,7 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
 
-        /* Plotly charts: taller intrinsic box, locked by default for smooth scroll */
+        /* Plotly charts: taller intrinsic box, locked mode for smooth scroll */
         [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; position: relative; }}
         [data-testid="stPlotlyChart"].pp-chart-locked .js-plotly-plot,
         [data-testid="stPlotlyChart"].pp-chart-locked .plot-container,
@@ -4042,19 +4042,6 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             touch-action: pan-y !important;
             pointer-events: none !important;
         }}
-        /* Keep the lock toggle clickable even when chart is locked */
-        .pp-chart-lock-btn {{
-            position: absolute; top: 6px; right: 6px; z-index: 100;
-            width: 32px; height: 32px; border-radius: 8px;
-            border: 1px solid var(--pp2-border);
-            background: var(--pp2-surface); backdrop-filter: blur(8px);
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; font-size: 16px; opacity: 0.75;
-            transition: opacity 150ms, background 150ms;
-            pointer-events: auto !important;
-        }}
-        .pp-chart-lock-btn:active {{ transform: scale(0.92); }}
-        .pp-chart-lock-btn:hover {{ opacity: 1; }}
         .modebar-container, .modebar {{ display: none !important; }}
 
         /* Radio buttons: always horizontal, no wrap */
@@ -4190,44 +4177,22 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
                   }
                   return origAdd.call(this, type, fn, opts);
                 };
-                // Prevent keyboard from opening on mobile select/multiselect inputs
+                // Global chart lock: controlled by a CSS class on body
                 var isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
                 if (isMobile) {
-                  var obs = new MutationObserver(function(){
-                    document.querySelectorAll('[data-baseweb="select"] input, [data-baseweb="popover"] input').forEach(function(inp){
-                      if (!inp.dataset.ppReadonly) {
-                        inp.dataset.ppReadonly = '1';
-                        inp.setAttribute('readonly', 'readonly');
-                        inp.setAttribute('inputmode', 'none');
-                        inp.addEventListener('focus', function(){ this.blur(); }, {once: false});
+                  // Watch for the hidden marker element that Streamlit sets
+                  var lockObs = new MutationObserver(function(){
+                    var marker = document.querySelector('#pp-chart-lock-state');
+                    var locked = marker && marker.dataset.locked === '1';
+                    document.querySelectorAll('[data-testid="stPlotlyChart"]').forEach(function(chart){
+                      if (locked) {
+                        chart.classList.add('pp-chart-locked');
+                      } else {
+                        chart.classList.remove('pp-chart-locked');
                       }
                     });
-                    // Add lock/unlock toggle buttons to Plotly charts
-                    document.querySelectorAll('[data-testid="stPlotlyChart"]').forEach(function(chart){
-                      if (chart.dataset.ppLockInit) return;
-                      chart.dataset.ppLockInit = '1';
-                      chart.classList.add('pp-chart-locked');
-                      var btn = document.createElement('div');
-                      btn.className = 'pp-chart-lock-btn';
-                      btn.textContent = '🔒';
-                      btn.title = 'Tap to unlock zoom/pan';
-                      btn.addEventListener('click', function(e){
-                        e.stopPropagation();
-                        var locked = chart.classList.toggle('pp-chart-locked');
-                        btn.textContent = locked ? '🔒' : '🔓';
-                        btn.title = locked ? 'Tap to unlock zoom/pan' : 'Tap to lock (enable scroll)';
-                        vib(12);
-                      });
-                      chart.style.position = 'relative';
-                      chart.appendChild(btn);
-                    });
                   });
-                  obs.observe(document.body, {childList: true, subtree: true});
-                  // Also handle existing inputs
-                  document.querySelectorAll('[data-baseweb="select"] input').forEach(function(inp){
-                    inp.setAttribute('readonly', 'readonly');
-                    inp.setAttribute('inputmode', 'none');
-                  });
+                  lockObs.observe(document.body, {childList: true, subtree: true});
                 }
               })();
             `;
@@ -4939,6 +4904,11 @@ def main() -> None:
         index=list(theme_label_to_value.keys()).index(default_theme_label),
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
+    chart_lock = st.sidebar.checkbox(
+        tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
+        value=bool(st.session_state.get("chart_lock_persist", True)),
+        key="chart_lock_persist",
+    )
     demo_mode = st.sidebar.checkbox(
         tr("Demo view", "מצב הדגמה"),
         value=bool(st.session_state.get("demo_mode_persist", False)),
@@ -4955,6 +4925,10 @@ def main() -> None:
     inject_global_styles(language, theme_mode)
     inject_client_fixes()
     inject_dark_dropdown_fix(_resolve_theme_base(theme_mode) == "dark")
+
+    # Hidden marker for chart lock state (read by JS in mobile polish)
+    _lock_val = "1" if chart_lock else "0"
+    st.markdown(f'<div id="pp-chart-lock-state" data-locked="{_lock_val}" style="display:none"></div>', unsafe_allow_html=True)
 
     # ── Premium polish, PWA meta tags, keyboard shortcuts, command palette ──
     try:
