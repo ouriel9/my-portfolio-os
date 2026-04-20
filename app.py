@@ -3922,6 +3922,16 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         contain-intrinsic-size: 480px;
     }}
 
+    /* ── Chart lock: works on both desktop and mobile ── */
+    [data-testid="stPlotlyChart"].pp-chart-locked .js-plotly-plot,
+    [data-testid="stPlotlyChart"].pp-chart-locked .plot-container,
+    [data-testid="stPlotlyChart"].pp-chart-locked .svg-container,
+    [data-testid="stPlotlyChart"].pp-chart-locked .nsewdrag,
+    [data-testid="stPlotlyChart"].pp-chart-locked .drag {{
+        touch-action: pan-y !important;
+        pointer-events: none !important;
+    }}
+
     /* ── Skeleton shimmer utility for any <div class="pp-skeleton"> ── */
     .pp-skeleton {{
         background: linear-gradient(90deg, {shimmer_a} 0%, {shimmer_b} 50%, {shimmer_a} 100%);
@@ -4032,16 +4042,8 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
 
-        /* Plotly charts: taller intrinsic box, locked mode for smooth scroll */
+        /* Plotly charts: taller intrinsic box, no modebar on mobile */
         [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; position: relative; }}
-        [data-testid="stPlotlyChart"].pp-chart-locked .js-plotly-plot,
-        [data-testid="stPlotlyChart"].pp-chart-locked .plot-container,
-        [data-testid="stPlotlyChart"].pp-chart-locked .svg-container,
-        [data-testid="stPlotlyChart"].pp-chart-locked .nsewdrag,
-        [data-testid="stPlotlyChart"].pp-chart-locked .drag {{
-            touch-action: pan-y !important;
-            pointer-events: none !important;
-        }}
         .modebar-container, .modebar {{ display: none !important; }}
 
         /* Radio buttons: always horizontal, no wrap */
@@ -4168,32 +4170,15 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
                   );
                   if (t) vib(8);
                 }, {passive: true, capture: true});
-                // Force passive listeners on wheel/touchmove for perf
+                // Force passive listeners on wheel/touchmove for perf (exclude touchstart to not break dropdowns)
                 var origAdd = EventTarget.prototype.addEventListener;
                 EventTarget.prototype.addEventListener = function(type, fn, opts){
-                  if (type === 'touchmove' || type === 'wheel' || type === 'touchstart') {
+                  if (type === 'touchmove' || type === 'wheel') {
                     if (opts === undefined || opts === false) opts = {passive:true};
                     else if (typeof opts === 'object' && opts.passive === undefined) opts.passive = true;
                   }
                   return origAdd.call(this, type, fn, opts);
                 };
-                // Global chart lock: controlled by a CSS class on body
-                var isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-                if (isMobile) {
-                  // Watch for the hidden marker element that Streamlit sets
-                  var lockObs = new MutationObserver(function(){
-                    var marker = document.querySelector('#pp-chart-lock-state');
-                    var locked = marker && marker.dataset.locked === '1';
-                    document.querySelectorAll('[data-testid="stPlotlyChart"]').forEach(function(chart){
-                      if (locked) {
-                        chart.classList.add('pp-chart-locked');
-                      } else {
-                        chart.classList.remove('pp-chart-locked');
-                      }
-                    });
-                  });
-                  lockObs.observe(document.body, {childList: true, subtree: true});
-                }
               })();
             `;
             d.head.appendChild(s);
@@ -4904,9 +4889,10 @@ def main() -> None:
         index=list(theme_label_to_value.keys()).index(default_theme_label),
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
+    _default_chart_lock = _is_mobile_client()
     chart_lock = st.sidebar.checkbox(
         tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
-        value=bool(st.session_state.get("chart_lock_persist", True)),
+        value=bool(st.session_state.get("chart_lock_persist", _default_chart_lock)),
         key="chart_lock_persist",
     )
     demo_mode = st.sidebar.checkbox(
@@ -4926,9 +4912,22 @@ def main() -> None:
     inject_client_fixes()
     inject_dark_dropdown_fix(_resolve_theme_base(theme_mode) == "dark")
 
-    # Hidden marker for chart lock state (read by JS in mobile polish)
-    _lock_val = "1" if chart_lock else "0"
-    st.markdown(f'<div id="pp-chart-lock-state" data-locked="{_lock_val}" style="display:none"></div>', unsafe_allow_html=True)
+    # Chart lock: apply/remove lock class on all Plotly charts in parent document
+    _lock_action = "add" if chart_lock else "remove"
+    components.html(f"""<script>(function(){{
+      try {{
+        var d = window.parent ? window.parent.document : document;
+        function applyLock() {{
+          d.querySelectorAll('[data-testid="stPlotlyChart"]').forEach(function(c){{
+            c.classList.{_lock_action}('pp-chart-locked');
+          }});
+        }}
+        applyLock();
+        var obs = new MutationObserver(applyLock);
+        obs.observe(d.body, {{childList:true, subtree:true}});
+        setTimeout(function(){{ obs.disconnect(); }}, 5000);
+      }} catch(e){{}}
+    }})();</script>""", height=0, width=0)
 
     # ── Premium polish, PWA meta tags, keyboard shortcuts, command palette ──
     try:
