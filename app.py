@@ -410,7 +410,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     [data-testid="stApp"] {{
         direction: ltr !important;
     }}
-    .block-container {{padding-top: 1.2rem;}}
+    .block-container {{padding-top: 0.5rem;}}
     .app-header-wrap {{
         text-align: center !important;
         direction: inherit !important;
@@ -3974,6 +3974,8 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         /* Pin Streamlit header/toolbar to top, no empty scroll space above */
         [data-testid="stHeader"], header[data-testid="stHeader"] {{
             position: sticky !important; top: 0 !important; z-index: 999 !important;
+            height: 0 !important; min-height: 0 !important; padding: 0 !important;
+            overflow: hidden !important;
         }}
         [data-testid="stAppViewContainer"] {{
             padding-top: 0 !important;
@@ -3981,7 +3983,7 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
 
         /* Tighter vertical rhythm, better thumb reach */
         .block-container {{
-            padding-top: calc(1rem + env(safe-area-inset-top)) !important;
+            padding-top: 0.2rem !important;
             padding-bottom: calc(1.2rem + env(safe-area-inset-bottom)) !important;
         }}
 
