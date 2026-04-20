@@ -344,7 +344,10 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
             title_font=dict(size=14),
             font=dict(size=11),
             autosize=True,
+            dragmode=False,
         )
+        fig.layout.xaxis.fixedrange = True
+        fig.layout.yaxis.fixedrange = True
         if is_bar:
             fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
             fig.update_xaxes(tickangle=45, tickfont=dict(size=9))
@@ -4032,9 +4035,27 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
 
-        /* Plotly charts: taller intrinsic box, no modebar */
-        [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; }}
+        /* Plotly charts: taller intrinsic box, no modebar, allow vertical scroll */
+        [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; touch-action: pan-y !important; }}
+        [data-testid="stPlotlyChart"] .js-plotly-plot,
+        [data-testid="stPlotlyChart"] .plot-container,
+        [data-testid="stPlotlyChart"] .svg-container {{
+            touch-action: pan-y !important;
+        }}
         .modebar-container, .modebar {{ display: none !important; }}
+
+        /* Radio buttons: always horizontal, no wrap */
+        [data-testid="stRadio"] > div {{
+            flex-wrap: nowrap !important;
+            gap: 0.35rem !important;
+        }}
+        [data-testid="stRadio"] > div > label {{
+            white-space: nowrap !important;
+            font-size: 13px !important;
+            padding: 6px 10px !important;
+            min-width: 0 !important;
+            flex-shrink: 1 !important;
+        }}
 
         /* DataFrame: card-like */
         [data-testid="stDataFrame"] {{
@@ -4156,6 +4177,38 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
                   }
                   return origAdd.call(this, type, fn, opts);
                 };
+                // Prevent keyboard from opening on mobile select/multiselect inputs
+                var isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+                if (isMobile) {
+                  var obs = new MutationObserver(function(){
+                    document.querySelectorAll('[data-baseweb="select"] input, [data-baseweb="popover"] input').forEach(function(inp){
+                      if (!inp.dataset.ppReadonly) {
+                        inp.dataset.ppReadonly = '1';
+                        inp.setAttribute('readonly', 'readonly');
+                        inp.setAttribute('inputmode', 'none');
+                        inp.addEventListener('focus', function(){ this.blur(); }, {once: false});
+                      }
+                    });
+                  });
+                  obs.observe(document.body, {childList: true, subtree: true});
+                  // Also handle existing inputs
+                  document.querySelectorAll('[data-baseweb="select"] input').forEach(function(inp){
+                    inp.setAttribute('readonly', 'readonly');
+                    inp.setAttribute('inputmode', 'none');
+                  });
+                }
+                // Ensure Plotly charts allow vertical scroll-through
+                if (isMobile) {
+                  document.querySelectorAll('.js-plotly-plot .nsewdrag, .js-plotly-plot .drag').forEach(function(el){
+                    el.style.touchAction = 'pan-y';
+                  });
+                  var plotObs = new MutationObserver(function(){
+                    document.querySelectorAll('.js-plotly-plot .nsewdrag, .js-plotly-plot .drag').forEach(function(el){
+                      el.style.touchAction = 'pan-y';
+                    });
+                  });
+                  plotObs.observe(document.body, {childList: true, subtree: true});
+                }
               })();
             `;
             d.head.appendChild(s);
@@ -5803,7 +5856,7 @@ def main() -> None:
                     scope_options = [both_label, open_label, closed_label]
                     scope_key = "dashboard_transactions_status_scope"
                     if st.session_state.get(scope_key) not in scope_options:
-                        st.session_state[scope_key] = both_label
+                        st.session_state[scope_key] = open_label
                     status_scope = st.radio(
                         tr("Position scope", "הצגת פוזיציות"),
                         scope_options,
