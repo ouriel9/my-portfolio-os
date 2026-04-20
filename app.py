@@ -1906,7 +1906,7 @@ def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "
         new TradingView.widget({{
           "autosize": true,
           "symbol": "{symbol}",
-          "interval": "240",
+          "interval": "D",
           "timezone": "Etc/UTC",
           "theme": "{tv_theme}",
           "style": "1",
@@ -3858,7 +3858,6 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     html {{ scroll-behavior: smooth; }}
     body, [data-testid="stAppViewContainer"] {{
         -webkit-tap-highlight-color: transparent;
-        overscroll-behavior-y: contain;
         text-size-adjust: 100%; -webkit-text-size-adjust: 100%;
     }}
     * {{ -webkit-touch-callout: none; }}
@@ -3972,9 +3971,17 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     @media (max-width: 820px) {{
         html, body {{ background: {bg_base}; }}
 
+        /* Pin Streamlit header/toolbar to top, no empty scroll space above */
+        [data-testid="stHeader"], header[data-testid="stHeader"] {{
+            position: sticky !important; top: 0 !important; z-index: 999 !important;
+        }}
+        [data-testid="stAppViewContainer"] {{
+            padding-top: 0 !important;
+        }}
+
         /* Tighter vertical rhythm, better thumb reach */
         .block-container {{
-            padding-top: calc(4.6rem + env(safe-area-inset-top)) !important;
+            padding-top: calc(1rem + env(safe-area-inset-top)) !important;
             padding-bottom: calc(1.2rem + env(safe-area-inset-bottom)) !important;
         }}
 
@@ -4923,9 +4930,9 @@ def main() -> None:
           }});
         }}
         applyLock();
-        var obs = new MutationObserver(applyLock);
+        // Keep observing indefinitely so new charts on other tabs get locked too
+        var obs = new MutationObserver(function(){{ requestAnimationFrame(applyLock); }});
         obs.observe(d.body, {{childList:true, subtree:true}});
-        setTimeout(function(){{ obs.disconnect(); }}, 5000);
       }} catch(e){{}}
     }})();</script>""", height=0, width=0)
 
