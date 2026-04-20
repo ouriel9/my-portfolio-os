@@ -344,10 +344,7 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
             title_font=dict(size=14),
             font=dict(size=11),
             autosize=True,
-            dragmode=False,
         )
-        fig.layout.xaxis.fixedrange = True
-        fig.layout.yaxis.fixedrange = True
         if is_bar:
             fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
             fig.update_xaxes(tickangle=45, tickfont=dict(size=9))
@@ -4035,13 +4032,29 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
 
-        /* Plotly charts: taller intrinsic box, no modebar, allow vertical scroll */
-        [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; touch-action: pan-y !important; }}
-        [data-testid="stPlotlyChart"] .js-plotly-plot,
-        [data-testid="stPlotlyChart"] .plot-container,
-        [data-testid="stPlotlyChart"] .svg-container {{
+        /* Plotly charts: taller intrinsic box, locked by default for smooth scroll */
+        [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; position: relative; }}
+        [data-testid="stPlotlyChart"].pp-chart-locked .js-plotly-plot,
+        [data-testid="stPlotlyChart"].pp-chart-locked .plot-container,
+        [data-testid="stPlotlyChart"].pp-chart-locked .svg-container,
+        [data-testid="stPlotlyChart"].pp-chart-locked .nsewdrag,
+        [data-testid="stPlotlyChart"].pp-chart-locked .drag {{
             touch-action: pan-y !important;
+            pointer-events: none !important;
         }}
+        /* Keep the lock toggle clickable even when chart is locked */
+        .pp-chart-lock-btn {{
+            position: absolute; top: 6px; right: 6px; z-index: 100;
+            width: 32px; height: 32px; border-radius: 8px;
+            border: 1px solid var(--pp2-border);
+            background: var(--pp2-surface); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; font-size: 16px; opacity: 0.75;
+            transition: opacity 150ms, background 150ms;
+            pointer-events: auto !important;
+        }}
+        .pp-chart-lock-btn:active {{ transform: scale(0.92); }}
+        .pp-chart-lock-btn:hover {{ opacity: 1; }}
         .modebar-container, .modebar {{ display: none !important; }}
 
         /* Radio buttons: always horizontal, no wrap */
@@ -4189,6 +4202,25 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
                         inp.addEventListener('focus', function(){ this.blur(); }, {once: false});
                       }
                     });
+                    // Add lock/unlock toggle buttons to Plotly charts
+                    document.querySelectorAll('[data-testid="stPlotlyChart"]').forEach(function(chart){
+                      if (chart.dataset.ppLockInit) return;
+                      chart.dataset.ppLockInit = '1';
+                      chart.classList.add('pp-chart-locked');
+                      var btn = document.createElement('div');
+                      btn.className = 'pp-chart-lock-btn';
+                      btn.textContent = '🔒';
+                      btn.title = 'Tap to unlock zoom/pan';
+                      btn.addEventListener('click', function(e){
+                        e.stopPropagation();
+                        var locked = chart.classList.toggle('pp-chart-locked');
+                        btn.textContent = locked ? '🔒' : '🔓';
+                        btn.title = locked ? 'Tap to unlock zoom/pan' : 'Tap to lock (enable scroll)';
+                        vib(12);
+                      });
+                      chart.style.position = 'relative';
+                      chart.appendChild(btn);
+                    });
                   });
                   obs.observe(document.body, {childList: true, subtree: true});
                   // Also handle existing inputs
@@ -4196,18 +4228,6 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
                     inp.setAttribute('readonly', 'readonly');
                     inp.setAttribute('inputmode', 'none');
                   });
-                }
-                // Ensure Plotly charts allow vertical scroll-through
-                if (isMobile) {
-                  document.querySelectorAll('.js-plotly-plot .nsewdrag, .js-plotly-plot .drag').forEach(function(el){
-                    el.style.touchAction = 'pan-y';
-                  });
-                  var plotObs = new MutationObserver(function(){
-                    document.querySelectorAll('.js-plotly-plot .nsewdrag, .js-plotly-plot .drag').forEach(function(el){
-                      el.style.touchAction = 'pan-y';
-                    });
-                  });
-                  plotObs.observe(document.body, {childList: true, subtree: true});
                 }
               })();
             `;
