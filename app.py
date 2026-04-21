@@ -460,7 +460,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     }}
     [data-testid="stDecoration"] {{display: block !important; visibility: visible !important;}}
     #MainMenu {{display: block !important; visibility: visible !important; opacity: 1 !important;}}
-    header, [data-testid="stHeader"] {{overflow: visible !important;}}
+    header, [data-testid="stHeader"] {{overflow: visible !important;}}  /* mobile: keep header functional */
     [data-testid="stToolbar"] {{display: flex !important; visibility: visible !important;}}
     [data-testid="stToolbarActions"] {{
         display: flex !important;
@@ -681,11 +681,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             padding-top: 0rem !important;
             margin-top: 0rem !important;
         }}
-        header[data-testid="stHeader"] {{
-            height: 2.4rem !important;
-            min-height: 2.4rem !important;
-            background: transparent !important;
-        }}
+        header[data-testid="stHeader"] {
+            display: none !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            overflow: hidden !important;
+        }
         h1, h2, h3, h4, h5, h6 {{
             direction: {direction} !important;
             text-align: {align} !important;
@@ -708,15 +709,26 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             transform: translateY(-2px);
             box-shadow: 0 10px 18px rgba(0,0,0,0.08) !important;
         }}
-        /* Desktop: Fixed sidebar always visible on left */
-        [data-testid="stSidebar"] {{
+        /* Desktop: Fixed sidebar always visible on left — aggressive dark-mode override */
+        [data-testid="stSidebar"],
+        section[data-testid="stSidebar"] {{
             background: {sidebar_bg} !important;
+            background-color: {sidebar_bg} !important;
             border-right: 1px solid {metric_border} !important;
             min-height: 100vh !important;
         }}
+        [data-testid="stSidebar"] > div,
+        [data-testid="stSidebar"] > div > div,
         [data-testid="stSidebar"] > div:first-child,
-        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"],
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] > div,
+        [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{
             background: {sidebar_bg} !important;
+            background-color: {sidebar_bg} !important;
+        }}
+        /* Force ALL non-interactive children to inherit the sidebar dark bg */
+        [data-testid="stSidebar"] div:not([class*="stButton"]):not([class*="stSelectbox"]):not([data-baseweb]) {{
+            background-color: {sidebar_bg} !important;
         }}
     }}
     @media (max-width: 980px) {{
@@ -1223,6 +1235,23 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         .block-container {{
             padding-top: calc(4.4rem + env(safe-area-inset-top)) !important;
         }}
+        /* ══ RTL FIX: sidebar expander arrow aligns on the right side (RTL layout) ══ */
+        [data-testid="stSidebar"] details[data-testid="stExpander"] > summary,
+        [data-testid="stSidebar"] div[data-testid="stExpander"] > details > summary {{
+            display: flex !important;
+            flex-direction: row-reverse !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            direction: ltr !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stExpander"] svg {{
+            transition: transform 180ms ease;
+        }}
+        /* ══ HEATMAP: horizontal scroll container on mobile ══ */
+        [data-testid="stPlotlyChart"] {{
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }}
         /* ══════════════════════════════════════════════════════════════════ */
     }}
 
@@ -1605,7 +1634,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
 
 
 def inject_dark_dropdown_fix(is_dark: bool) -> None:
-    """Inject dark-mode styles for dropdown popovers into the parent document.
+    """Inject dark-mode styles for dropdown popovers AND sidebar into the parent document.
 
     Streamlit's BaseWeb selectbox dropdown is rendered as a portal at the
     document root level.  CSS injected via st.markdown lives inside the
@@ -1614,13 +1643,58 @@ def inject_dark_dropdown_fix(is_dark: bool) -> None:
     tag directly in the parent document <head> with high-specificity rules.
     """
     if not is_dark:
-        # In light mode, remove any leftover dark-dropdown style tag.
+        # In light mode, remove any leftover dark style tags, timers, and forced inline styles.
         components.html(
             """<script>(function(){
               try {
                 var d = window.parent ? window.parent.document : document;
-                var s = d.getElementById('pm-dark-dropdown');
-                if (s) s.remove();
+                // Remove injected dark style tags
+                ['pm-dark-dropdown','pm-dark-sidebar'].forEach(function(id){
+                  var s = d.getElementById(id);
+                  if (s) s.remove();
+                });
+                // Clear the dark-mode sidebar timer so it stops running
+                if (d.__pmSidebarDarkTimer) {
+                  clearInterval(d.__pmSidebarDarkTimer);
+                  d.__pmSidebarDarkTimer = null;
+                }
+                // Remove forced inline styles from all sidebar elements
+                var sidebar = d.querySelector('[data-testid="stSidebar"]');
+                if (sidebar) {
+                  sidebar.style.removeProperty('background');
+                  sidebar.style.removeProperty('background-color');
+                  var all = sidebar.querySelectorAll('*');
+                  for (var i = 0; i < all.length; i++) {
+                    try {
+                      all[i].style.removeProperty('background');
+                      all[i].style.removeProperty('background-color');
+                      all[i].style.removeProperty('color');
+                    } catch(e2){}
+                  }
+                  // Also clean inside iframes
+                  var iframes = sidebar.querySelectorAll('iframe');
+                  for (var j = 0; j < iframes.length; j++) {
+                    try {
+                      var iDoc = iframes[j].contentDocument || (iframes[j].contentWindow && iframes[j].contentWindow.document);
+                      if (!iDoc) continue;
+                      var st2 = iDoc.getElementById('pm-inner-dark');
+                      if (st2) st2.remove();
+                      if (iDoc.body) {
+                        iDoc.body.style.removeProperty('background');
+                        iDoc.body.style.removeProperty('background-color');
+                        iDoc.body.style.removeProperty('color');
+                      }
+                      var iAll = iDoc.querySelectorAll('*');
+                      for (var k = 0; k < iAll.length; k++) {
+                        try {
+                          iAll[k].style.removeProperty('background');
+                          iAll[k].style.removeProperty('background-color');
+                          iAll[k].style.removeProperty('color');
+                        } catch(e4){}
+                      }
+                    } catch(e3){}
+                  }
+                }
               } catch(e){}
             })();</script>""",
             height=0, width=0,
@@ -1632,6 +1706,8 @@ def inject_dark_dropdown_fix(is_dark: bool) -> None:
     dark_border = "#334155"
     dark_accent = "rgba(99,102,241,0.25)"
     dark_muted = "#94a3b8"
+    sidebar_dark = "#1E1E1E"
+    sidebar_dark2 = "#161616"
 
     dropdown_css = f"""
 [data-baseweb="popover"] {{
@@ -1683,20 +1759,153 @@ body > div[data-baseweb="layer"] li[aria-selected="true"] {{
   background-color: {dark_accent} !important;
 }}
 """
+    sidebar_css = f"""
+/* ══ DARK MODE SIDEBAR — desktop fix ══════════════════════════════ */
+section[data-testid="stSidebar"],
+[data-testid="stSidebar"] {{
+  background: {sidebar_dark} !important;
+  background-color: {sidebar_dark} !important;
+}}
+[data-testid="stSidebar"] > div,
+[data-testid="stSidebar"] > div > div,
+[data-testid="stSidebar"] > div > div > div,
+[data-testid="stSidebar"] [data-testid="stSidebarContent"],
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] > div,
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div {{
+  background: {sidebar_dark} !important;
+  background-color: {sidebar_dark} !important;
+  color: {dark_text} !important;
+}}
+/* Catch any remaining plain white div inside sidebar */
+[data-testid="stSidebar"] div[style*="background-color: white"],
+[data-testid="stSidebar"] div[style*="background: white"],
+[data-testid="stSidebar"] div[style*="background-color: rgb(255"],
+[data-testid="stSidebar"] div[style*="background: rgb(255"],
+[data-testid="stSidebar"] div[style*="background-color:#fff"],
+[data-testid="stSidebar"] div[style*="background:#fff"] {{
+  background: {sidebar_dark} !important;
+  background-color: {sidebar_dark} !important;
+}}
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span:not([data-testid="stMetricDelta"]) {{
+  color: {dark_text} !important;
+}}
+"""
     # Escape for JS string
-    escaped = dropdown_css.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    escaped_dropdown = dropdown_css.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+    escaped_sidebar = sidebar_css.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
 
     components.html(
         f"""<script>(function(){{
           try {{
             var d = window.parent ? window.parent.document : document;
+            // Dropdown dark style
             var s = d.getElementById('pm-dark-dropdown');
             if (!s) {{
               s = d.createElement('style');
               s.id = 'pm-dark-dropdown';
               d.head.appendChild(s);
             }}
-            s.textContent = `{escaped}`;
+            s.textContent = `{escaped_dropdown}`;
+            // Sidebar dark style
+            var sb = d.getElementById('pm-dark-sidebar');
+            if (!sb) {{
+              sb = d.createElement('style');
+              sb.id = 'pm-dark-sidebar';
+              d.head.appendChild(sb);
+            }}
+            sb.textContent = `{escaped_sidebar}`;
+            // ── JS inline-style override: walk all sidebar children and force dark bg ──
+            function forceSidebarDark() {{
+              try {{
+                var sidebar = d.querySelector('[data-testid="stSidebar"]');
+                if (!sidebar) return;
+                var DARK_BG = '{sidebar_dark}';
+                var TEXT = '{dark_text}';
+                var BORDER = '{dark_border}';
+                // Force the sidebar root itself
+                sidebar.style.setProperty('background', DARK_BG, 'important');
+                sidebar.style.setProperty('background-color', DARK_BG, 'important');
+                // Walk ALL descendants and clear white backgrounds
+                var all = sidebar.querySelectorAll('*');
+                for (var i = 0; i < all.length; i++) {{
+                  var el = all[i];
+                  var tag = el.tagName ? el.tagName.toLowerCase() : '';
+                  // Skip interactive / styled elements that should keep their own bg
+                  if (tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea') continue;
+                  if (el.getAttribute && el.getAttribute('data-baseweb')) continue;
+                  // Only force elements that appear visually white/light
+                  var cs = window.getComputedStyle(el);
+                  var bg = cs.backgroundColor;
+                  if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') continue;
+                  // Check if it's light (r+g+b > 500 approximation)
+                  var rgb = bg.match(/[0-9]+/g);
+                  if (rgb && rgb.length >= 3) {{
+                    var brightness = parseInt(rgb[0]) + parseInt(rgb[1]) + parseInt(rgb[2]);
+                    if (brightness > 500) {{
+                      el.style.setProperty('background', DARK_BG, 'important');
+                      el.style.setProperty('background-color', DARK_BG, 'important');
+                    }}
+                  }}
+                }}
+              }} catch(e) {{}}
+            }}
+            forceSidebarDark();
+
+            // ── Pierce into component iframes inside the sidebar ──
+            function forceSidebarIframes() {{
+              try {{
+                var sidebar = d.querySelector('[data-testid="stSidebar"]');
+                if (!sidebar) return;
+                var DARK_BG = '{sidebar_dark}';
+                var TEXT = '{dark_text}';
+                var iframes = sidebar.querySelectorAll('iframe');
+                for (var i = 0; i < iframes.length; i++) {{
+                  try {{
+                    var iDoc = iframes[i].contentDocument || (iframes[i].contentWindow && iframes[i].contentWindow.document);
+                    if (!iDoc || !iDoc.body) continue;
+                    // Force iframe body background
+                    iDoc.body.style.setProperty('background', DARK_BG, 'important');
+                    iDoc.body.style.setProperty('background-color', DARK_BG, 'important');
+                    iDoc.body.style.setProperty('color', TEXT, 'important');
+                    // Inject a persistent style tag inside the iframe
+                    var styleId = 'pm-inner-dark';
+                    if (!iDoc.getElementById(styleId)) {{
+                      var st2 = iDoc.createElement('style');
+                      st2.id = styleId;
+                      st2.textContent = 'html,body{{background:{sidebar_dark}!important;background-color:{sidebar_dark}!important;color:{dark_text}!important;}} .nav,.nav-pills,.stComponent{{background:{sidebar_dark}!important;}} .nav-link{{color:{dark_text}!important;}}';
+                      (iDoc.head || iDoc.body).appendChild(st2);
+                    }}
+                    // Walk all elements in the iframe and force dark on light backgrounds
+                    var all = iDoc.querySelectorAll('*');
+                    var iWin = iframes[i].contentWindow;
+                    for (var j = 0; j < all.length; j++) {{
+                      try {{
+                        var el = all[j];
+                        var tag = (el.tagName || '').toLowerCase();
+                        if (tag === 'button' || tag === 'input' || tag === 'select' || tag === 'textarea') continue;
+                        var cs = iWin.getComputedStyle(el);
+                        var bg = cs.backgroundColor;
+                        if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') continue;
+                        var rgb = bg.match(/[0-9]+/g);
+                        if (rgb && rgb.length >= 3 && (parseInt(rgb[0]) + parseInt(rgb[1]) + parseInt(rgb[2])) > 500) {{
+                          el.style.setProperty('background', DARK_BG, 'important');
+                          el.style.setProperty('background-color', DARK_BG, 'important');
+                        }}
+                      }} catch(e3) {{}}
+                    }}
+                  }} catch(e2) {{}}
+                }}
+              }} catch(e) {{}}
+            }}
+            forceSidebarIframes();
+
+            // Keep re-running so Streamlit rerenders don't undo the fix
+            if (!d.__pmSidebarDarkTimer) {{
+              d.__pmSidebarDarkTimer = setInterval(function(){{ forceSidebarDark(); forceSidebarIframes(); }}, 800);
+            }}
           }} catch(e){{}}
         }})();</script>""",
         height=0, width=0,
@@ -4572,7 +4781,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
     cmds = [
         {"id": "nav-dashboard", "label": "דשבורד" if is_he else "Dashboard", "hint": "g d"},
         {"id": "nav-manage",    "label": "ניהול עסקאות" if is_he else "Trade Management", "hint": "g t"},
-        {"id": "nav-risk",      "label": "סיכונים ופיפו" if is_he else "Risk & FIFO", "hint": "g r"},
+        {"id": "nav-risk",      "label": "סיכונים" if is_he else "Risk", "hint": "g r"},
         {"id": "nav-quality",   "label": "בקרת נתונים" if is_he else "Data Quality", "hint": "g q"},
         {"id": "toggle-theme",  "label": "החלפת ערכת נושא" if is_he else "Toggle theme", "hint": "t"},
         {"id": "focus-search",  "label": "חיפוש" if is_he else "Focus search", "hint": "/"},
@@ -4605,6 +4814,8 @@ def _pp_inject_productivity_layer(language: str) -> None:
         var inputEl = doc.getElementById('pp-cmdk-input');
         var selected = 0;
         function showToast(msg) {{
+          msg = (msg !== undefined && msg !== null) ? String(msg) : '';
+          if (!msg) return;  // never show empty / undefined toast
           toast.textContent = msg;
           toast.style.display = 'block';
           toast.classList.add('show');
@@ -5125,8 +5336,8 @@ def render_advanced_analytics(
                         template=template,
                         margin=dict(l=10, r=10, t=50, b=20),
                         coloraxis_colorbar=dict(title=""),
-                        width=700 if is_mobile else None,
-                        height=500 if is_mobile else None,
+                        width=800 if is_mobile else None,
+                        height=600 if is_mobile else None,
                     )
                     if is_mobile:
                         st.markdown(
@@ -5232,13 +5443,15 @@ def main() -> None:
         footer, [data-testid="stDecoration"] {
             display: none !important; visibility: hidden !important; height: 0 !important;
         }
-        /* Make the native top header a minimal transparent strip so that the
-           3-dots hamburger menu (MainMenu) and the sidebar expand/collapse
-           control remain fully clickable on desktop AND mobile. */
-        header[data-testid="stHeader"] {
-            background: transparent !important;
-            height: 2.4rem !important;
-            min-height: 2.4rem !important;
+        /* Hide the Streamlit native top header on desktop — title becomes the strict top boundary.
+           On mobile the header is kept (toolbar/hamburger needed there). */
+        @media (min-width: 768px) {
+            header[data-testid="stHeader"] {
+                display: none !important;
+                height: 0 !important;
+                min-height: 0 !important;
+                overflow: hidden !important;
+            }
         }
         /* Explicitly ensure the collapse/expand sidebar control stays visible
            in all viewports (this was accidentally hidden before). */
@@ -5406,8 +5619,10 @@ def main() -> None:
                 margin-top: 0rem !important;
             }
             header[data-testid="stHeader"] {
-                height: 2.4rem !important;
-                min-height: 2.4rem !important;
+                display: none !important;
+                height: 0 !important;
+                min-height: 0 !important;
+                overflow: hidden !important;
             }
         }
         </style>
@@ -5565,7 +5780,7 @@ def main() -> None:
 
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
-    page_risk = tr("Reports", "דוחות")
+    page_risk = tr("Risk", "סיכונים")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_id_to_label = {
         "dashboard": page_dashboard,
