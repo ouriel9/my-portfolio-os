@@ -681,12 +681,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             padding-top: 0rem !important;
             margin-top: 0rem !important;
         }}
-        header[data-testid="stHeader"] {
+        header[data-testid="stHeader"] {{
             display: none !important;
             height: 0 !important;
             min-height: 0 !important;
             overflow: hidden !important;
-        }
+        }}
         h1, h2, h3, h4, h5, h6 {{
             direction: {direction} !important;
             text-align: {align} !important;
