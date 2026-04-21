@@ -4857,12 +4857,37 @@ def render_advanced_analytics(
                         title=tr("Return Correlation Heatmap (1Y daily)",
                                  "מפת מתאמים של תשואות (יומי, שנה)"),
                     )
+                    # On mobile: set a fixed min-width so the matrix is
+                    # readable and horizontally scrollable inside its container.
+                    n_assets = len(corr.columns)
+                    cell_px = 52 if is_mobile else 60
+                    heat_min_px = max(300, n_assets * cell_px)
                     heat_fig.update_layout(
                         template=template,
                         margin=dict(l=10, r=10, t=50, b=20),
                         coloraxis_colorbar=dict(title=""),
+                        width=heat_min_px if is_mobile else None,
+                        height=heat_min_px if is_mobile else None,
                     )
-                    st.plotly_chart(_apply_plotly_theme(heat_fig, is_dark, is_mobile), use_container_width=True)
+                    if is_mobile:
+                        st.markdown(
+                            f"<div style='overflow-x:auto;-webkit-overflow-scrolling:touch;'>",
+                            unsafe_allow_html=True,
+                        )
+                    # Desktop: constrain to 80% viewport using column spacers
+                    if not is_mobile:
+                        _, hm_col, _ = st.columns([1, 4, 1])
+                        with hm_col:
+                            st.plotly_chart(
+                                _apply_plotly_theme(heat_fig, is_dark, is_mobile),
+                                use_container_width=True,
+                            )
+                    else:
+                        st.plotly_chart(
+                            _apply_plotly_theme(heat_fig, is_dark, is_mobile),
+                            use_container_width=False,
+                        )
+                        st.markdown("</div>", unsafe_allow_html=True)
             except Exception:
                 pass
 
@@ -5543,11 +5568,12 @@ def main() -> None:
                 top_ticker = _clean(top_row.get("Ticker", "")) or "-"
                 top_holding_value_txt = f"{top_weight:.1%}"
                 top_holding_delta_txt = f"{top_ticker} | ₪{float(top_row['Value_ILS']):,.0f}"
+        total_profit_txt = f"{total_profit:+,.0f} ₪"
         if is_mobile:
             # ── Mobile: 2x2 compact grid ──
             kpi_r1 = st.columns(2)
             kpi_r1[0].metric(tr("Total Value", "שווי כולל"), total_value_txt, f"{total_profit:,.0f} ₪")
-            kpi_r1[1].metric(tr("Total Cost", "עלות כוללת"), total_cost_txt)
+            kpi_r1[1].metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), total_profit_txt)
             kpi_r2 = st.columns(2)
             kpi_r2[0].metric(tr("Return", "תשואה כוללת"), total_return_txt, f"{total_profit:,.0f} ₪")
             kpi_r2[1].metric(
@@ -5559,7 +5585,7 @@ def main() -> None:
             # ── Desktop: 4 columns in a row ──
             kpi_cols = st.columns(4)
             kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
-            kpi_cols[1].metric(tr("Total Cost (ILS)", "עלות כוללת (₪)"), total_cost_txt)
+            kpi_cols[1].metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), total_profit_txt)
             kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), total_return_txt)
             kpi_cols[3].metric(
                 tr("Closed Positions", "פוזיציות סגורות"),
