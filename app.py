@@ -2189,10 +2189,19 @@ def _render_dataframe_adaptive(
     force_same_render_path: bool = False,
     **kwargs,
 ) -> None:
-    """Render Styler with formatting preserved on both desktop and mobile."""
-    # Always render the styled version so that percentage/number formatting
-    # is applied correctly on mobile too. The mobile_fallback path was stripping
-    # Styler formatting (e.g. {:.2%}), causing percentages to disappear.
+    """Render Styler with formatting preserved. All columns default to minimal width."""
+    # Build a column_config that sets every column to 'small' width,
+    # unless the caller already provided one.
+    if "column_config" not in kwargs:
+        try:
+            df = data.data if hasattr(data, "data") else data
+            if isinstance(df, pd.DataFrame):
+                kwargs["column_config"] = {
+                    col: st.column_config.Column(width="small")
+                    for col in df.columns
+                }
+        except Exception:
+            pass
     st.dataframe(data, **kwargs)
 
 
