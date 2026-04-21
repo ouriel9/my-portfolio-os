@@ -516,14 +516,48 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         line-height: 1.15 !important;
         white-space: nowrap !important;
     }}
+    .app-logo-row {{
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        flex-direction: row !important;
+        gap: 0.75rem !important;
+        margin-bottom: 0.2rem !important;
+    }}
+    .app-logo-icon {{
+        flex-shrink: 0 !important;
+        filter: drop-shadow(0 4px 14px rgba(99,102,241,0.4)) !important;
+    }}
+    .app-logo-text {{
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-end !important;
+        gap: 0.08rem !important;
+    }}
+    .app-logo-badge {{
+        font-size: 0.72rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.07em !important;
+        text-transform: uppercase !important;
+        color: #818cf8 !important;
+        background: rgba(99,102,241,0.1) !important;
+        border: 1px solid rgba(129,140,248,0.3) !important;
+        border-radius: 20px !important;
+        padding: 2px 10px !important;
+        line-height: 1.6 !important;
+    }}
     .app-main-title {{
-        text-align: center !important;
-        direction: inherit !important;
-        color: {title_color} !important;
-        font-size: 2.05rem;
-        font-weight: 800;
-        margin: 0.02rem 0 0.08rem 0;
-        letter-spacing: 0.01em;
+        text-align: right !important;
+        direction: rtl !important;
+        background: linear-gradient(135deg, #6366f1 0%, #818cf8 50%, #38bdf8 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        background-clip: text !important;
+        font-size: 3.1rem;
+        font-weight: 900;
+        margin: 0;
+        letter-spacing: -0.03em;
+        line-height: 1.0;
     }}
     .app-sub-title {{
         text-align: {align} !important;
@@ -951,8 +985,10 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             border: 1px solid {hamburger_border} !important;
         }}
         /* ── Compact page title on mobile ── */
-        .app-main-title {{ font-size: 1.45rem !important; margin-bottom: 0.08rem !important; }}
-        .app-sub-title {{ font-size: 0.86rem !important; margin-bottom: 0.18rem !important; }}
+        .app-main-title {{ font-size: 1.9rem !important; margin-bottom: 0 !important; }}
+        .app-sub-title {{ font-size: 0.82rem !important; margin-bottom: 0.12rem !important; }}
+        .app-logo-icon svg {{ width: 34px !important; height: 34px !important; }}
+        .app-logo-badge {{ font-size: 0.6rem !important; padding: 1px 7px !important; }}
         /* ── Touch-optimized button height (Apple HIG: 44px min tap target) ── */
         button[data-testid="baseButton-secondary"],
         button[data-testid="baseButton-primary"],
@@ -5417,8 +5453,32 @@ def main() -> None:
     page = page_id_to_label.get(active_page_id, page_dashboard)
 
     st.markdown(
-        f"<div class='app-header-wrap'><h1 class='app-main-title'>{tr('Portfolio Manager OS', 'מערכת ניהול תיק')}</h1>"
-        f"<div class='app-sub-title'>{page}</div></div>",
+        f"""<div class='app-header-wrap'>
+  <div class='app-logo-row'>
+    <div class='app-logo-text'>
+      <h1 class='app-main-title'>{tr('Portfolio OS', 'מערכת ניהול תיק')}</h1>
+      <div class='app-logo-badge'>{tr('Smart Portfolio Management', 'ניהול השקעות חכם')}</div>
+    </div>
+    <div class='app-logo-icon'>
+      <svg width='48' height='48' viewBox='0 0 48 48' fill='none' xmlns='http://www.w3.org/2000/svg'>
+        <rect width='48' height='48' rx='13' fill='url(#logoGrad)'/>
+        <polyline points='9,33 17,22 24,27 32,14 39,19' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/>
+        <circle cx='39' cy='19' r='3' fill='white'/>
+        <rect x='9' y='35' width='6' height='6' rx='2' fill='rgba(255,255,255,0.65)'/>
+        <rect x='18' y='30' width='6' height='11' rx='2' fill='rgba(255,255,255,0.8)'/>
+        <rect x='27' y='25' width='6' height='16' rx='2' fill='white'/>
+        <defs>
+          <linearGradient id='logoGrad' x1='0' y1='0' x2='48' y2='48' gradientUnits='userSpaceOnUse'>
+            <stop offset='0%' stop-color='#6366f1'/>
+            <stop offset='60%' stop-color='#818cf8'/>
+            <stop offset='100%' stop-color='#38bdf8'/>
+          </linearGradient>
+        </defs>
+      </svg>
+    </div>
+  </div>
+  <div class='app-sub-title'>{page}</div>
+</div>""",
         unsafe_allow_html=True,
     )
 
@@ -5676,10 +5736,10 @@ def main() -> None:
 
         tab_overview_real, tab_allocation_real, tab_risk_real, tab_tx_real = st.tabs(
             [
-                tr("Overview", "סקירה"),
-                tr("Allocation", "הרכב"),
-                tr("Risk", "סיכון"),
-                tr("Transactions", "עסקאות"),
+                tr("Overview", "סקירה") if is_mobile else tr("Overview", "סקירה כללית"),
+                tr("Allocation", "הרכב") if is_mobile else tr("Portfolio Allocation", "הרכב התיק"),
+                tr("Risk", "סיכון") if is_mobile else tr("Risk & Analytics", "אנליזה וסיכונים"),
+                tr("Transactions", "עסקאות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
 
