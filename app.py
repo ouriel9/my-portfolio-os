@@ -2189,26 +2189,10 @@ def _render_dataframe_adaptive(
     force_same_render_path: bool = False,
     **kwargs,
 ) -> None:
-    """Render Styler on desktop, plain DataFrame on mobile for stability."""
-    if force_same_render_path:
-        st.dataframe(data, **kwargs)
-        return
-    if is_mobile:
-        if mobile_fallback is not None:
-            try:
-                st.dataframe(mobile_fallback, **kwargs)
-                return
-            except Exception:
-                if hasattr(mobile_fallback, "data"):
-                    raw_df = getattr(mobile_fallback, "data", None)
-                    if isinstance(raw_df, pd.DataFrame):
-                        st.dataframe(raw_df, **kwargs)
-                        return
-        if hasattr(data, "data"):
-            fallback = getattr(data, "data", None)
-            if isinstance(fallback, pd.DataFrame):
-                st.dataframe(fallback, **kwargs)
-                return
+    """Render Styler with formatting preserved on both desktop and mobile."""
+    # Always render the styled version so that percentage/number formatting
+    # is applied correctly on mobile too. The mobile_fallback path was stripping
+    # Styler formatting (e.g. {:.2%}), causing percentages to disappear.
     st.dataframe(data, **kwargs)
 
 
