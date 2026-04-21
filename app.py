@@ -680,12 +680,23 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
         footer {{display: none !important;}}
-        #MainMenu {{display: block !important; visibility: visible !important;}}
+        #MainMenu {{display: none !important;}}
         header, [data-testid="stHeader"] {{
+            height: 0 !important;
+            min-height: 0 !important;
+            max-height: 0 !important;
+            overflow: hidden !important;
+            padding: 0 !important;
+            margin: 0 !important;
             display: block !important;
             background: transparent !important;
             box-shadow: none !important;
             z-index: 100001 !important;
+        }}
+        [data-testid="stToolbar"],
+        [data-testid="stToolbarActions"],
+        [data-testid="stDecoration"] {{
+            display: none !important;
         }}
         /* Hide Deploy button and branding on mobile, but keep sidebar expand */
         [data-testid="stAppDeployButton"],
@@ -714,29 +725,35 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             -webkit-tap-highlight-color: transparent !important;
         }}
         .block-container {{
-            padding-top: 0.1rem !important;
+            padding-top: 0 !important;
             padding-bottom: 0.8rem !important;
             padding-left: 0.65rem !important;
             padding-right: 0.65rem !important;
         }}
-        /* ── Sticky header — cannot scroll above it on mobile ── */
+        /* ── App-level container: no overscroll above title ── */
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMainBlockContainer"] {{
+            overflow-anchor: none !important;
+        }}
+        body {{
+            overscroll-behavior-y: none !important;
+        }}
+        /* ── Sticky title — always at very top, no space above ── */
         .app-header-wrap {{
             position: sticky !important;
-            top: calc(3.8rem + env(safe-area-inset-top, 0px)) !important;
-            z-index: 9999 !important;
-            padding: 0.25rem 0.5rem 0.2rem 0.5rem !important;
-            margin: 0 !important;
+            top: 0 !important;
+            z-index: 10000 !important;
+            padding: 0.3rem 0.5rem 0.25rem 0.5rem !important;
+            margin: 0 0 0 0 !important;
         }}
-        /* ── Compact tabs on mobile: all fit in one line, no horizontal scroll ── */
-        [data-baseweb="tab-list"] {{
-            overflow-x: hidden !important;
+        /* ── Nav radio bar position: right below title ── */
+        [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
+            top: calc(3rem + env(safe-area-inset-top, 0px)) !important;
         }}
-        [data-baseweb="tab-list"] [data-baseweb="tab"] {{
-            flex: 1 1 0% !important;
-            min-width: 0 !important;
-            font-size: 0.7rem !important;
-            padding-left: 2px !important;
-            padding-right: 2px !important;
+        /* ── Compact mobile nav text — fit all 4 items without overflow ── */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] p {{
+            font-size: 10px !important;
         }}
         h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
@@ -1041,7 +1058,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             width: 50% !important;
         }}
         .block-container {{
-            padding-top: calc(4.4rem + env(safe-area-inset-top)) !important;
+            padding-top: calc(2.8rem + env(safe-area-inset-top, 0px)) !important;
         }}
         /* ══════════════════════════════════════════════════════════════════ */
     }}
@@ -1646,10 +1663,25 @@ def inject_client_fixes() -> None:
             // Re-bind on every run() call (Streamlit rerenders detach listeners)
             if (rootWin.__pmSwipeBound) return;
 
+            // Find the mobile nav radio group (4 items)
+            function getMobileNavRadios() {
+              const groups = Array.from(rootDoc.querySelectorAll('[role="radiogroup"]'));
+              for (const rg of groups) {
+                const items = Array.from(rg.querySelectorAll('[data-baseweb="radio"]'));
+                if (items.length === 4) return items;
+              }
+              return null;
+            }
+
+            function getActiveIndex(radios) {
+              return radios.findIndex(r => {
+                const inp = r.querySelector('input[type="radio"]');
+                return inp && inp.checked;
+              });
+            }
+
             const blockedSelector = [
-              'input',
-              'textarea',
-              'select',
+              'input', 'textarea', 'select',
               '.js-plotly-plot',
               '[data-testid="stDataFrame"]',
               '[data-testid="stTable"]',
@@ -1660,40 +1692,37 @@ def inject_client_fixes() -> None:
 
             let startX = 0;
             let startY = 0;
-            let shouldHandle = false;
+            let locked = false;
 
             rootDoc.addEventListener('touchstart', (e) => {
-              if (!findDashboardTabList()) return;
-              if (!e.touches || !e.touches.length) return;
-              if (e.touches.length > 1) return;
-              const target = e.target;
-              shouldHandle = !(target && target.closest && target.closest(blockedSelector));
-              if (!shouldHandle) return;
+              locked = false;
+              if (!e.touches || e.touches.length !== 1) return;
+              const tgt = e.target;
+              if (tgt && tgt.closest && tgt.closest(blockedSelector)) return;
               startX = e.touches[0].clientX;
               startY = e.touches[0].clientY;
+              locked = true;
             }, { passive: true });
 
             rootDoc.addEventListener('touchend', (e) => {
-              if (!shouldHandle) return;
+              if (!locked) return;
+              locked = false;
               if (!e.changedTouches || !e.changedTouches.length) return;
               const dx = e.changedTouches[0].clientX - startX;
               const dy = e.changedTouches[0].clientY - startY;
-              if (Math.abs(dx) < 38 || Math.abs(dx) < Math.abs(dy) * 1.1) return;
+              // Require horizontal swipe > 55px and more horizontal than vertical
+              if (Math.abs(dx) < 55 || Math.abs(dy) > Math.abs(dx) * 0.65) return;
 
-              const tabList = findDashboardTabList();
-              if (!tabList) return;
+              const radios = getMobileNavRadios();
+              if (!radios) return;
 
-              const currentTabs = Array.from(tabList.querySelectorAll(
-                '[data-baseweb="tab"], [role="tab"], button[data-testid="stTab"]'
-              ));
-              const active = currentTabs.findIndex((t) => t.getAttribute('aria-selected') === 'true');
+              const active = getActiveIndex(radios);
               if (active < 0) return;
 
-              // Swipe right should move to the tab on the left, swipe left to the right.
-              const next = dx > 0 ? active - 1 : active + 1;
-              if (next >= 0 && next < currentTabs.length) {
-                currentTabs[next].click();
-                currentTabs[next].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+              // RTL layout: swipe left (dx < 0) = next page; swipe right (dx > 0) = prev page
+              const next = dx < 0 ? active + 1 : active - 1;
+              if (next >= 0 && next < radios.length) {
+                radios[next].click();
               }
             }, { passive: true });
 
@@ -5286,7 +5315,8 @@ def main() -> None:
         pass
 
     _render_premium_sidebar_lottie(language)
-    _space(16)
+    if not _is_mobile_client():
+        _space(16)
 
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
