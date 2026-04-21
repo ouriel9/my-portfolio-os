@@ -5691,10 +5691,10 @@ def main() -> None:
 
         tab_overview_real, tab_allocation_real, tab_risk_real, tab_tx_real = st.tabs(
             [
-                tr("Overview", "סקירה"),
-                tr("Allocation", "הרכב"),
-                tr("Risk", "סיכון"),
-                tr("Transactions", "עסקאות"),
+                tr("Overview", "סקירה כללית"),
+                tr("Portfolio Allocation", "הרכב התיק"),
+                tr("Risk & Analytics", "אנליזה וסיכונים"),
+                tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
 
