@@ -730,30 +730,35 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             padding-left: 0.65rem !important;
             padding-right: 0.65rem !important;
         }}
-        /* ── App-level container: no overscroll above title ── */
-        [data-testid="stAppViewContainer"],
-        [data-testid="stMainBlockContainer"] {{
-            overflow-anchor: none !important;
-        }}
+        /* ── App-level: prevent overscroll bounce ── */
         body {{
             overscroll-behavior-y: none !important;
         }}
-        /* ── Sticky title — always at very top, no space above ── */
+        /* ── Title: sticky just below the sticky nav bar ── */
         .app-header-wrap {{
             position: sticky !important;
             top: 0 !important;
-            z-index: 10000 !important;
-            padding: 0.3rem 0.5rem 0.25rem 0.5rem !important;
-            margin: 0 0 0 0 !important;
+            z-index: 10001 !important;
+            padding: 0.3rem 0.5rem 0.2rem 0.5rem !important;
+            margin: 0 !important;
         }}
-        /* ── Nav radio bar position: right below title ── */
-        [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
-            top: calc(3rem + env(safe-area-inset-top, 0px)) !important;
-        }}
-        /* ── Compact mobile nav text — fit all 4 items without overflow ── */
+        /* ── Nav radio bar: compact text ── */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] p {{
             font-size: 10px !important;
+        }}
+        /* ── st.tabs: compact, no scroll, all fit in one line ── */
+        [data-baseweb="tab-list"] {{
+            overflow-x: hidden !important;
+            scrollbar-width: none !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+            flex: 1 1 0% !important;
+            min-width: 0 !important;
+            padding-left: 4px !important;
+            padding-right: 4px !important;
+            font-size: 0.68rem !important;
+            white-space: nowrap !important;
         }}
         h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
@@ -972,15 +977,21 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         ══════════════════════════════════════════════════════════════════ */
         /* Force the element container holding the page nav to full width */
         [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
-            position: fixed !important;
-            top: calc(0.55rem + env(safe-area-inset-top)) !important;
-            left: 50% !important;
-            right: auto !important;
-            transform: translateX(-50%) !important;
-            width: clamp(220px, 64vw, 340px) !important;
-            max-width: calc(100vw - 8.8rem) !important;
-            z-index: 100001 !important;
+            position: sticky !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            transform: none !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            z-index: 10002 !important;
             margin: 0 !important;
+            padding: 4px 8px !important;
+            background: {nav_bg} !important;
+            backdrop-filter: blur(8px) !important;
+            -webkit-backdrop-filter: blur(8px) !important;
+            border-bottom: 1px solid {nav_border} !important;
+            box-sizing: border-box !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
             background: {nav_bg} !important;
@@ -1057,9 +1068,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             max-width: 50% !important;
             width: 50% !important;
         }}
-        .block-container {{
-            padding-top: calc(2.8rem + env(safe-area-inset-top, 0px)) !important;
-        }}
+        /* padding-top handled above; no extra override needed */
         /* ══════════════════════════════════════════════════════════════════ */
     }}
 
@@ -1660,24 +1669,17 @@ def inject_client_fixes() -> None:
           }
 
           function setupTabSwipe() {
-            // Re-bind on every run() call (Streamlit rerenders detach listeners)
+            // Bind once per session — listeners survive Streamlit rerenders
             if (rootWin.__pmSwipeBound) return;
 
-            // Find the mobile nav radio group (4 items)
-            function getMobileNavRadios() {
-              const groups = Array.from(rootDoc.querySelectorAll('[role="radiogroup"]'));
-              for (const rg of groups) {
-                const items = Array.from(rg.querySelectorAll('[data-baseweb="radio"]'));
-                if (items.length === 4) return items;
+            // Find the main content tab-list (st.tabs with 3+ items)
+            function getContentTabList() {
+              const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
+              for (const list of lists) {
+                const tabs = Array.from(list.querySelectorAll('[data-baseweb="tab"]'));
+                if (tabs.length >= 3) return { list, tabs };
               }
               return null;
-            }
-
-            function getActiveIndex(radios) {
-              return radios.findIndex(r => {
-                const inp = r.querySelector('input[type="radio"]');
-                return inp && inp.checked;
-              });
             }
 
             const blockedSelector = [
@@ -1690,15 +1692,14 @@ def inject_client_fixes() -> None:
               '[data-no-swipe]'
             ].join(',');
 
-            let startX = 0;
-            let startY = 0;
-            let locked = false;
+            let startX = 0, startY = 0, locked = false;
 
             rootDoc.addEventListener('touchstart', (e) => {
               locked = false;
               if (!e.touches || e.touches.length !== 1) return;
               const tgt = e.target;
               if (tgt && tgt.closest && tgt.closest(blockedSelector)) return;
+              if (!getContentTabList()) return;
               startX = e.touches[0].clientX;
               startY = e.touches[0].clientY;
               locked = true;
@@ -1710,19 +1711,21 @@ def inject_client_fixes() -> None:
               if (!e.changedTouches || !e.changedTouches.length) return;
               const dx = e.changedTouches[0].clientX - startX;
               const dy = e.changedTouches[0].clientY - startY;
-              // Require horizontal swipe > 55px and more horizontal than vertical
+              // Must be >55px horizontal and more horizontal than vertical
               if (Math.abs(dx) < 55 || Math.abs(dy) > Math.abs(dx) * 0.65) return;
 
-              const radios = getMobileNavRadios();
-              if (!radios) return;
+              const found = getContentTabList();
+              if (!found) return;
+              const { tabs } = found;
 
-              const active = getActiveIndex(radios);
-              if (active < 0) return;
+              const activeIdx = tabs.findIndex(t => t.getAttribute('aria-selected') === 'true');
+              if (activeIdx < 0) return;
 
-              // RTL layout: swipe left (dx < 0) = next page; swipe right (dx > 0) = prev page
-              const next = dx < 0 ? active + 1 : active - 1;
-              if (next >= 0 && next < radios.length) {
-                radios[next].click();
+              // dx < 0 = swipe left = next tab; dx > 0 = swipe right = prev tab
+              const nextIdx = dx < 0 ? activeIdx + 1 : activeIdx - 1;
+              if (nextIdx >= 0 && nextIdx < tabs.length) {
+                tabs[nextIdx].click();
+                tabs[nextIdx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }
             }, { passive: true });
 
@@ -5688,10 +5691,10 @@ def main() -> None:
 
         tab_overview_real, tab_allocation_real, tab_risk_real, tab_tx_real = st.tabs(
             [
-                tr("Overview", "סקירה כללית"),
-                tr("Portfolio Allocation", "הרכב התיק"),
-                tr("Risk & Analytics", "אנליזה וסיכונים"),
-                tr("Transactions & Cash Flow", "תנועות ועסקאות"),
+                tr("Overview", "סקירה"),
+                tr("Allocation", "הרכב"),
+                tr("Risk", "סיכון"),
+                tr("Transactions", "עסקאות"),
             ]
         )
 
