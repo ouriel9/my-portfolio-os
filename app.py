@@ -336,10 +336,25 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
             plot_bgcolor="rgba(30,41,59,0.5)",
             font_color="#f1f5f9",
         )
+    # Always push legend below the chart to avoid overlapping the title
+    fig.update_layout(
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.18,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=11 if is_mobile else 12),
+        ),
+        margin=dict(
+            l=6 if is_mobile else 20,
+            r=6 if is_mobile else 20,
+            t=48,   # enough room for the title
+            b=80,   # enough room for the legend below
+        ),
+    )
     if is_mobile:
         fig.update_layout(
-            legend=dict(orientation="h", yanchor="bottom", y=-0.30, xanchor="center", x=0.5, font=dict(size=11)),
-            margin=dict(l=6, r=6, t=32, b=8),
             hoverlabel=dict(font=dict(size=13), bgcolor="rgba(30,30,30,0.85)", font_color="#fff"),
             title_font=dict(size=14),
             font=dict(size=11),
@@ -352,6 +367,9 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
         else:
             fig.update_xaxes(tickfont=dict(size=9))
             fig.update_yaxes(tickfont=dict(size=9))
+    else:
+        if is_bar:
+            fig.update_layout(showlegend=False)
     return fig
 
 
@@ -1898,13 +1916,15 @@ def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "
         st.info("No chart symbol")
         return
     tv_theme = "dark" if theme == "dark" else "light"
+    # Advanced TradingView chart: drawing tools (trend lines, channels), MA 150 & MA 50
     widget_html = f"""
-    <div class="tradingview-widget-container" style="height:{height - 24}px;width:100%">
-      <div id="tradingview_chart" style="height:100%;width:100%"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-        new TradingView.widget({{
-          "autosize": true,
+    <div class="tradingview-widget-container" style="height:{height}px;width:100%">
+      <div class="tradingview-widget-container__widget" style="height:{height}px;width:100%"></div>
+      <script type="text/javascript"
+        src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
+        {{
+          "width": "100%",
+          "height": "{height}",
           "symbol": "{symbol}",
           "interval": "D",
           "timezone": "Etc/UTC",
@@ -1912,12 +1932,51 @@ def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "
           "style": "1",
           "locale": "en",
           "allow_symbol_change": true,
-          "container_id": "tradingview_chart"
-        }});
+          "save_image": true,
+          "hide_side_toolbar": false,
+          "withdateranges": true,
+          "details": false,
+          "calendar": false,
+          "show_popup_button": true,
+          "popup_width": "1000",
+          "popup_height": "650",
+          "support_host": "https://www.tradingview.com",
+           "drawings_access": {{
+             "type": "all",
+             "tools": [
+               {{ "name": "Trend Line" }},
+               {{ "name": "Regression Trend" }},
+               {{ "name": "Parallel Channel" }}
+             ]
+           }},
+           "enabled_features": ["drawing_templates"],
+           "studies": [
+             {{
+               "id": "STD;SMA",
+               "inputs": {{
+                 "length": 150
+               }}
+             }},
+             {{
+               "id": "STD;SMA",
+               "inputs": {{
+                 "length": 50
+               }}
+             }}
+           ],
+           "studies_overrides": {{
+             "moving average.length": 150,
+             "moving average.plot.color": "#ff9800",
+             "moving average.plot.linewidth": 2,
+             "moving average#1.length": 50,
+             "moving average#1.plot.color": "#2196f3",
+             "moving average#1.plot.linewidth": 2
+           }}
+        }}
       </script>
     </div>
     """
-    components.html(widget_html, height=height, scrolling=False)
+    components.html(widget_html, height=height + 10, scrolling=False)
 
 
 def _clean(value: object) -> str:
@@ -4660,6 +4719,7 @@ def render_advanced_analytics(
 
     gc1, gc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
     with gc1:
+        # The [1, 2] split already caps gauge width on desktop; mobile stacks.
         st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), use_container_width=True)
     with gc2:
         kpi_row = st.columns(3)
@@ -4874,6 +4934,226 @@ def render_advanced_analytics(
 def main() -> None:
     st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="auto")
 
+    # ══════════════════════════════════════════════════════════════════════
+    # Premium CSS — Bug fixes, mobile-only enhancements, sidebar polish
+    # (Applied globally; mobile-specific rules wrapped in @media max-width 768px)
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown(
+        """
+        <style>
+        /* ── Keep Streamlit's top header VISIBLE (3-dots menu + sidebar toggle)
+             but remove its decorative divider & zero-out footer.            ── */
+        footer, [data-testid="stDecoration"] {
+            display: none !important; visibility: hidden !important; height: 0 !important;
+        }
+        /* Make the native top header a minimal transparent strip so that the
+           3-dots hamburger menu (MainMenu) and the sidebar expand/collapse
+           control remain fully clickable on desktop AND mobile. */
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+            height: 2.4rem !important;
+            min-height: 2.4rem !important;
+        }
+        /* Explicitly ensure the collapse/expand sidebar control stays visible
+           in all viewports (this was accidentally hidden before). */
+        [data-testid="collapsedControl"],
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapsedControl"],
+        button[aria-label*="sidebar"],
+        button[kind="header"],
+        #MainMenu {
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            z-index: 9999 !important;
+        }
+
+        /* ── Strict upper bound: title hugs top ── */
+        section.main > div.block-container,
+        [data-testid="stMainBlockContainer"],
+        .main .block-container,
+        .block-container {
+            padding-top: 0 !important;
+            margin-top: 0 !important;
+        }
+
+        /* ── Native LTR rendering for English tickers & numbers inside RTL ── */
+        .ltr, [data-ltr="1"], .ticker, .mono-num,
+        [data-testid="stMetricValue"], [data-testid="stMetricDelta"],
+        code, kbd, samp {
+            direction: ltr !important;
+            unicode-bidi: isolate !important;
+            font-variant-numeric: tabular-nums;
+        }
+        /* Table cells containing tickers/numbers: isolate LTR inside RTL doc */
+        [data-testid="stDataFrame"] td, [data-testid="stDataFrame"] th,
+        [data-testid="stTable"] td, [data-testid="stTable"] th {
+            unicode-bidi: plaintext;
+        }
+
+        /* ── Sidebar polish: hide hamburger/footer, RTL-friendly expander arrows ── */
+        [data-testid="stSidebarNav"], [data-testid="stSidebarUserContent"] + div footer {
+            display: none !important;
+        }
+        /* Expander arrows: force LTR so they align on the correct side in RTL layout */
+        [data-testid="stSidebar"] details[data-testid="stExpander"] > summary,
+        [data-testid="stSidebar"] div[data-testid="stExpander"] > details > summary {
+            direction: ltr !important;
+            display: flex !important;
+            flex-direction: row-reverse !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stExpander"] svg {
+            transition: transform 180ms ease;
+        }
+
+        /* ── Professional CTA-style buttons (all viewports — lifted on mobile) ── */
+        .stButton > button, .stDownloadButton > button,
+        [data-testid="stFormSubmitButton"] button {
+            border-radius: 12px !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.01em;
+            transition: transform 120ms ease, box-shadow 180ms ease, filter 180ms ease !important;
+            box-shadow: 0 2px 8px -2px rgba(15,23,42,0.18);
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover,
+        [data-testid="stFormSubmitButton"] button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px -4px rgba(79,70,229,0.35);
+            filter: brightness(1.04);
+        }
+        .stButton > button:active, .stDownloadButton > button:active {
+            transform: translateY(0);
+            filter: brightness(0.97);
+        }
+
+        /* ── Tab click reliability: guarantee first-click handling (no double-click) ── */
+        [data-baseweb="tab-list"] [data-baseweb="tab"],
+        [data-testid="stSidebar"] .nav-link,
+        [data-testid="stSidebar"] a.nav-link,
+        div[role="tablist"] [role="tab"],
+        [data-testid="stRadio"] [data-baseweb="radio"] {
+            cursor: pointer !important;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            pointer-events: auto !important;
+            user-select: none;
+        }
+        /* Disable any fade/transform that can eat the first click event */
+        [data-baseweb="tab-list"] [data-baseweb="tab"] *,
+        [data-testid="stSidebar"] .nav-link * {
+            pointer-events: none !important;
+        }
+
+        /* ── MOBILE-ONLY ENHANCEMENTS (≤768px) ─────────────────────────────── */
+        @media (max-width: 768px) {
+            /* Data tables: enforce min-width for columns + horizontal scroll */
+            [data-testid="stDataFrame"], [data-testid="stTable"] {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch;
+            }
+            [data-testid="stDataFrame"] table, [data-testid="stTable"] table {
+                min-width: 640px !important;
+            }
+            [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td,
+            [data-testid="stTable"] th, [data-testid="stTable"] td {
+                min-width: 88px !important;
+                white-space: nowrap !important;
+                padding: 8px 10px !important;
+            }
+            /* Scrollable wrapper around tables (class used below) */
+            .mobile-table-scroll {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch;
+                border-radius: 12px;
+            }
+            /* CTA buttons: thumb-friendly on mobile */
+            .stButton > button, .stDownloadButton > button,
+            [data-testid="stFormSubmitButton"] button {
+                min-height: 46px !important;
+                font-size: 15px !important;
+                padding: 10px 16px !important;
+                border-radius: 14px !important;
+                box-shadow: 0 4px 14px -4px rgba(79,70,229,0.35) !important;
+            }
+        }
+        </style>
+
+        <script>
+        // ══════════════════════════════════════════════════════════════════
+        // FIRST-CLICK NAVIGATION RELIABILITY FIX
+        // Eliminates the "need to click twice" bug on:
+        //   • st.tabs headers (Overview / Allocation / Risk / Transactions)
+        //   • streamlit-option-menu sidebar nav-links (Dashboard / Trades / …)
+        //   • mobile st.radio segmented control (top 4-way page switch)
+        // Strategy: optimistic ARIA hint on pointerdown + keyboard bindings +
+        //           MutationObserver so dynamically-added tabs are also covered.
+        // ══════════════════════════════════════════════════════════════════
+        (function () {
+            var NAV_SELECTOR = [
+                '[data-baseweb="tab"]',
+                '[role="tab"]',
+                '[data-testid="stSidebar"] .nav-link',
+                '[data-testid="stSidebar"] a.nav-link',
+                '[data-testid="stRadio"] [data-baseweb="radio"]'
+            ].join(',');
+
+            function harden(el) {
+                if (el.__ppHardened) return;
+                el.__ppHardened = true;
+                try { el.setAttribute('tabindex', '0'); } catch (e) {}
+
+                // Optimistic ARIA hint on pointerdown — removes the "dead first click"
+                // perception even before Streamlit finishes its rerender cycle.
+                el.addEventListener('pointerdown', function () {
+                    try {
+                        var list = el.closest('[data-baseweb="tab-list"], [role="tablist"], [data-testid="stRadio"], .nav');
+                        if (list) {
+                            list.querySelectorAll('[aria-selected="true"]').forEach(function (n) {
+                                if (n !== el) n.setAttribute('aria-selected', 'false');
+                            });
+                        }
+                        el.setAttribute('aria-selected', 'true');
+                    } catch (e) {}
+                }, { passive: true, capture: true });
+
+                // Keyboard: Space / Enter should trigger on first press.
+                el.addEventListener('keydown', function (ev) {
+                    if (ev.key === 'Enter' || ev.key === ' ') {
+                        ev.preventDefault();
+                        try { el.click(); } catch (e) {}
+                    }
+                });
+            }
+
+            function scan(root) {
+                (root || document).querySelectorAll(NAV_SELECTOR).forEach(harden);
+            }
+
+            scan();
+            try {
+                var mo = new MutationObserver(function (muts) {
+                    for (var i = 0; i < muts.length; i++) {
+                        var m = muts[i];
+                        if (!m.addedNodes) continue;
+                        for (var j = 0; j < m.addedNodes.length; j++) {
+                            var n = m.addedNodes[j];
+                            if (n.nodeType !== 1) continue;
+                            if (n.matches && n.matches(NAV_SELECTOR)) harden(n);
+                            if (n.querySelectorAll) scan(n);
+                        }
+                    }
+                });
+                mo.observe(document.documentElement, { childList: true, subtree: true });
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
     settings = load_local_settings()
     language_default = _clean(settings.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE
     if language_default not in {LANG_EN, LANG_HE}:
@@ -4984,12 +5264,17 @@ def main() -> None:
             if mobile_label_to_id.get(lbl) == active_page_id:
                 active_mobile_index = i
                 break
+        # Sync widget state BEFORE creating the widget so single-click works.
+        _mobile_nav_key = "mobile_page_nav_radio"
+        _expected_label = mobile_options[active_mobile_index]
+        if st.session_state.get(_mobile_nav_key) not in mobile_options:
+            st.session_state[_mobile_nav_key] = _expected_label
         page_choice = st.radio(
             tr("Page", "עמוד"),
             mobile_options,
             horizontal=True,
-            index=active_mobile_index,
             label_visibility="collapsed",
+            key=_mobile_nav_key,
         )
         active_page_id = mobile_label_to_id.get(page_choice, "dashboard")
     else:
@@ -5006,11 +5291,16 @@ def main() -> None:
             nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
             nav_selected_text = "#ffffff" if is_dark else "#0f172a"
             with st.sidebar:
+                # NOTE: streamlit-option-menu requires a stable `key` so the
+                # component's selected state persists across reruns. Without a
+                # key each rerun rebuilds the component from default_index and
+                # "swallows" the first click (classic double-click bug).
                 page = option_menu(
                     menu_title=None,
                     options=page_options,
                     icons=["house", "wallet", "shield-check", "database-check"],
                     default_index=active_page_index,
+                    key="main_nav_option_menu",
                     orientation="vertical",
                     styles={
                         "container": {
@@ -5308,17 +5598,36 @@ def main() -> None:
         perf_cols = {"Purchase_Date", "Cost_ILS", "Current_Value_ILS"}
         can_show_build_up = (not open_trades.empty) and perf_cols.issubset(open_trades.columns)
 
-        tab_overview, tab_allocation, tab_reports, tab_deposits, tab_transactions = st.tabs(
+        tab_overview_real, tab_allocation_real, tab_risk_real, tab_tx_real = st.tabs(
             [
-                tr("Overview", "סקירה"),
-                tr("Allocation", "חלוקה"),
-                tr("Reports", "דוחות"),
-                tr("Total Deposits", "סך הפקדות"),
-                tr("Transactions", "עסקאות"),
+                tr("Overview", "סקירה כללית"),
+                tr("Portfolio Allocation", "הרכב התיק"),
+                tr("Risk & Analytics", "אנליזה וסיכונים"),
+                tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
 
-        with tab_overview:
+        # ── Slot containers inside each tab guarantee the required visual order ──
+        with tab_overview_real:
+            _ov_equity_slot = st.container()   # Equity curve directly under KPIs
+            _ov_body_slot = st.container()     # Reserved for future Overview extras
+        with tab_allocation_real:
+            _alloc_charts_slot = st.container()    # Pie + Bar + Treemap (from old Overview)
+            _alloc_classes_slot = st.container()   # Class-allocation (from old Allocation)
+            _alloc_exposure_slot = st.container()  # Exposure table at VERY BOTTOM
+        with tab_tx_real:
+            _tx_deposits_slot = st.container()     # Manual deposits
+            _tx_transactions_slot = st.container() # Transactions table
+
+        # Re-map legacy variable names so existing `with tab_X:` blocks below route
+        # into the correct new slot without rewriting their bodies.
+        tab_overview = _ov_body_slot
+        tab_allocation = _alloc_classes_slot
+        tab_reports = tab_risk_real
+        tab_deposits = _tx_deposits_slot
+        tab_transactions = _tx_transactions_slot
+
+        with _alloc_charts_slot:
             col_a, col_b = st.columns(2)
             with col_a:
                 fig_pie = px.pie(
@@ -5367,6 +5676,10 @@ def main() -> None:
             if not summary.empty and float(summary["Value_ILS"].sum()) > 0:
                 tm_src = summary.copy()
                 tm_src["Yield_ILS_Pct"] = tm_src["Yield_ILS"] * 100.0
+                # Pre-compute label so NaN yield (parent node) shows "" not "NaN%"
+                tm_src["_pct_str"] = tm_src["Yield_ILS_Pct"].apply(
+                    lambda x: f"{x:.1f}%" if pd.notna(x) else ""
+                )
                 try:
                     fig_tree = px.treemap(
                         tm_src,
@@ -5378,10 +5691,11 @@ def main() -> None:
                         title=tr("Portfolio Treemap (size = value · color = yield)",
                                  "מפת חום של התיק (גודל = שווי · צבע = תשואה)"),
                         template=template,
+                        custom_data=["_pct_str"],
                         hover_data={"Value_ILS": ":,.0f", "Yield_ILS_Pct": ":.2f"},
                     )
                     fig_tree.update_traces(
-                        texttemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{color:.1f}%",
+                        texttemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{customdata[0]}",
                         textposition="middle center",
                     )
                     fig_tree.update_layout(margin=dict(l=10, r=10, t=50, b=10),
@@ -5522,7 +5836,7 @@ def main() -> None:
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
                         st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
-                    _render_tradingview_widget(active_ticker, height=380 if is_mobile else 560)
+                    _render_tradingview_widget(active_ticker, height=580 if is_mobile else 750)
                     if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
                         components.html(
                             f"""
@@ -5554,11 +5868,36 @@ def main() -> None:
                             live_summary = _build_summary_for_exposure(live_open_for_watchlist)
                         except Exception:
                             pass
-                    render_exposure_section(live_summary, widget_prefix="overview")
+                    with _alloc_exposure_slot:
+                        render_exposure_section(live_summary, widget_prefix="overview")
 
                 _exposure_fragment()
             else:
-                render_exposure_section(summary, widget_prefix="overview")
+                with _alloc_exposure_slot:
+                    render_exposure_section(summary, widget_prefix="overview")
+
+        # ── Mirror headline widgets into Overview tab (duplicates — do NOT remove from Allocation) ──
+        with _ov_body_slot:
+            if ("fig_pie" in locals()) and ("fig_bar" in locals()):
+                ov_col_a, ov_col_b = st.columns(2)
+                with ov_col_a:
+                    st.plotly_chart(
+                        _apply_plotly_theme(fig_pie, is_dark, is_mobile),
+                        use_container_width=True,
+                        key="ov_mirror_pie",
+                    )
+                with ov_col_b:
+                    st.plotly_chart(
+                        _apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True),
+                        use_container_width=True,
+                        key="ov_mirror_bar",
+                    )
+            # Exposure table mirrored into Overview too (uses distinct widget prefix
+            # so all internal Streamlit keys stay unique).
+            try:
+                render_exposure_section(summary, widget_prefix="overview_body")
+            except Exception:
+                pass
 
         # Compute once and share across both Allocation and Reports tabs.
         _shared_reports_payload = build_home_inspired_reports(open_trades)
@@ -5591,27 +5930,34 @@ def main() -> None:
 
             alloc_col1, alloc_col2 = st.columns(2)
             with alloc_col1:
-                if not summary.empty:
+                # ── Allocation pie by Asset CLASS (Crypto / ETF / Stocks) ──
+                # (The old by-ticker pie here was a duplicate of the one in the
+                #  charts slot above, so it was replaced with this class-level view.)
+                if not class_mix.empty:
                     st.caption(
                         f"{tr('Crypto share of portfolio', 'משקל קריפטו בתיק')}: "
                         f"{float(allocation_payload.get('crypto_share', 0.0)):.2%}"
                     )
-                    alloc_fig = px.pie(
-                        summary,
-                        names="Ticker",
-                        values="Value_ILS",
-                        title=tr("Allocation by Ticker", "חלוקה לפי טיקר"),
+                    class_pie_fig = px.pie(
+                        class_mix,
+                        names="Asset_Class",
+                        values="Current_Value_ILS",
+                        title=tr("Allocation by Asset Class", "חלוקה לפי סוג נכס"),
                         hole=0.45,
                         template=template,
                         color_discrete_sequence=_BRAND_PALETTE,
                     )
-                    alloc_fig.update_traces(
+                    class_pie_fig.update_traces(
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
                         textinfo="percent+label",
                     )
-                    st.plotly_chart(_apply_plotly_theme(alloc_fig, is_dark, is_mobile), use_container_width=True)
+                    st.plotly_chart(
+                        _apply_plotly_theme(class_pie_fig, is_dark, is_mobile),
+                        use_container_width=True,
+                        key="alloc_class_pie",
+                    )
                 else:
-                    st.info(tr("No allocation data", "אין נתוני חלוקה"))
+                    st.info(tr("No asset-class data", "אין נתוני סוגי נכסים"))
             with alloc_col2:
                 if not class_mix.empty:
                     class_order = class_mix["Asset_Class"].tolist()
@@ -5632,7 +5978,11 @@ def main() -> None:
                     type_fig.update_traces(
                         hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
                     )
-                    st.plotly_chart(_apply_plotly_theme(type_fig, is_dark, is_mobile), use_container_width=True)
+                    st.plotly_chart(
+                        _apply_plotly_theme(type_fig, is_dark, is_mobile),
+                        use_container_width=True,
+                        key="alloc_class_treemap",
+                    )
 
                     st.markdown(f"**{tr('Included assets by class', 'נכסים כלולים לפי סוג')}**")
                     for row in class_mix.itertuples(index=False):
@@ -5689,7 +6039,7 @@ def main() -> None:
                         report_styled = _apply_signed_color(report_styled, signed_cols)
                     _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
 
-        with tab_deposits:
+        with _ov_equity_slot:
             if can_show_build_up:
                 st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
                 perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
@@ -5719,6 +6069,8 @@ def main() -> None:
                 )
                 st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
 
+        with tab_deposits:
+            # (Equity curve moved to Overview tab — top section.)
             deposit_mode = "demo" if is_demo else "live"
             default_platforms = sorted({_clean(v) for v in trades.get("Platform", pd.Series(dtype=str)).tolist() if _clean(v)}) if "Platform" in trades.columns else []
             rows_state_key = f"manual_deposits_rows_{deposit_mode}"
