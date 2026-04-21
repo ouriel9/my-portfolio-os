@@ -432,7 +432,15 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     .app-header-wrap {{
         text-align: center !important;
         direction: inherit !important;
-        margin: 0.05rem 0 0.5rem 0;
+        margin: 0 0 0.5rem 0;
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 9999 !important;
+        background: {metric_bg} !important;
+        padding: 0.35rem 0.5rem 0.3rem 0.5rem !important;
+        border-bottom: 1px solid {metric_border} !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
     }}
     footer,
     footer *,
@@ -541,16 +549,21 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     }}
     [data-baseweb="tab-list"] {{
         display: flex !important;
-        overflow-x: auto;
+        overflow-x: hidden !important;
         -webkit-overflow-scrolling: touch;
-        scroll-snap-type: x mandatory;
-        touch-action: pan-x;
-        scrollbar-width: thin;
+        scrollbar-width: none;
         white-space: nowrap;
     }}
     [data-baseweb="tab-list"] [data-baseweb="tab"] {{
-        flex: 0 0 auto;
-        scroll-snap-align: start;
+        flex: 1 1 0% !important;
+        min-width: 0 !important;
+        text-align: center !important;
+        padding-left: 4px !important;
+        padding-right: 4px !important;
+        font-size: 0.78rem !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
     }}
     [data-testid="stMarkdownContainer"] p {{line-height: 1.35;}}
     /* ── Sidebar: always LEFT — spring animation ── */
@@ -701,10 +714,29 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             -webkit-tap-highlight-color: transparent !important;
         }}
         .block-container {{
-            padding-top: 0.45rem !important;
+            padding-top: 0.1rem !important;
             padding-bottom: 0.8rem !important;
             padding-left: 0.65rem !important;
             padding-right: 0.65rem !important;
+        }}
+        /* ── Sticky header — cannot scroll above it on mobile ── */
+        .app-header-wrap {{
+            position: sticky !important;
+            top: calc(3.8rem + env(safe-area-inset-top, 0px)) !important;
+            z-index: 9999 !important;
+            padding: 0.25rem 0.5rem 0.2rem 0.5rem !important;
+            margin: 0 !important;
+        }}
+        /* ── Compact tabs on mobile: all fit in one line, no horizontal scroll ── */
+        [data-baseweb="tab-list"] {{
+            overflow-x: hidden !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+            flex: 1 1 0% !important;
+            min-width: 0 !important;
+            font-size: 0.7rem !important;
+            padding-left: 2px !important;
+            padding-right: 2px !important;
         }}
         h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
