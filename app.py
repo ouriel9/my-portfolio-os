@@ -1852,6 +1852,49 @@ def inject_client_fixes() -> None:
             } catch (e) { /* cross-origin iframe – skip */ }
           }
 
+          function forceToolbarVisible() {
+            try {
+              // Inject a persistent style into parent doc to force toolbar/3-dot menu visible
+              let pmToolbar = rootDoc.getElementById('pm-toolbar-fix');
+              if (!pmToolbar) {
+                pmToolbar = rootDoc.createElement('style');
+                pmToolbar.id = 'pm-toolbar-fix';
+                rootDoc.head.appendChild(pmToolbar);
+              }
+              pmToolbar.textContent = `
+                [data-testid="stHeader"],
+                header[data-testid="stHeader"] {
+                  overflow: visible !important;
+                  display: block !important;
+                }
+                [data-testid="stToolbar"] {
+                  display: flex !important;
+                  visibility: visible !important;
+                  opacity: 1 !important;
+                  overflow: visible !important;
+                  z-index: 100010 !important;
+                  pointer-events: auto !important;
+                }
+                [data-testid="stToolbarActions"] {
+                  display: flex !important;
+                  visibility: visible !important;
+                  opacity: 1 !important;
+                  overflow: visible !important;
+                  z-index: 100010 !important;
+                  pointer-events: auto !important;
+                }
+                [data-testid="stMainMenuButton"],
+                [data-testid="stToolbarActions"] button,
+                [data-testid="stToolbar"] button {
+                  display: flex !important;
+                  visibility: visible !important;
+                  opacity: 1 !important;
+                  pointer-events: auto !important;
+                }
+              `;
+            } catch(e) {}
+          }
+
           function makeWatchlistExpandUp() {
             try {
               const markers = ['tradingview watchlist', 'רשימת מעקב tradingview'];
@@ -1878,6 +1921,7 @@ def inject_client_fixes() -> None:
             setupTabSwipe();
             fixSidebarLeft();
             makeWatchlistExpandUp();
+            forceToolbarVisible();
           }
 
           run();
@@ -1886,6 +1930,7 @@ def inject_client_fixes() -> None:
             obs.observe(rootDoc.body, { childList: true, subtree: true });
             rootWin._pmTimerBranding = rootWin.setInterval(removeBranding, 1200);
             rootWin._pmTimerSidebar = rootWin.setInterval(fixSidebarLeft, 800);
+            rootWin._pmTimerToolbar = rootWin.setInterval(forceToolbarVisible, 1500);
             rootWin._pmTimerHide = window.setInterval(function () {
               injectHideStyle(document);
               if (rootDoc !== document) injectHideStyle(rootDoc);
@@ -5763,7 +5808,7 @@ def main() -> None:
             [
                 tr("Overview", "סקירה") if is_mobile else tr("Overview", "סקירה כללית"),
                 tr("Allocation", "הרכב") if is_mobile else tr("Portfolio Allocation", "הרכב התיק"),
-                tr("Risk", "סיכון") if is_mobile else tr("Risk & Analytics", "אנליזה וסיכונים"),
+                tr("Risk", "דוחות") if is_mobile else tr("Risk & Analytics", "אנליזה וסיכונים"),
                 tr("Transactions", "עסקאות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
@@ -6165,40 +6210,44 @@ def main() -> None:
                 tr("Net Investment by Platform", "השקעה נטו לפי פלטפורמה"): "net_investment_table",
                 tr("Live Market Rates", "שערים חיים מהשוק"): "live_rates",
             }
-            selected_report = st.selectbox(tr("Report Type", "סוג דוח"), list(report_options.keys()), key="reports_type_select")
-            selected_key = report_options[selected_report]
 
-            if selected_key == "live_rates":
-                rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
-                if not rates:
-                    st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+            def _render_report_section(title: str, key: str) -> None:
+                st.markdown(f"### {title}")
+                if key == "live_rates":
+                    rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
+                    if not rates:
+                        st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+                    else:
+                        rates_df = pd.DataFrame(
+                            [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
+                        )
+                        rates_styled = rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"})
+                        _render_dataframe_adaptive(rates_styled, is_mobile, use_container_width=True, hide_index=True)
                 else:
-                    rates_df = pd.DataFrame(
-                        [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
-                    )
-                    rates_styled = rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"})
-                    _render_dataframe_adaptive(rates_styled, is_mobile, use_container_width=True, hide_index=True)
-            else:
-                report_df = reports_payload.get(selected_key, pd.DataFrame()) if isinstance(reports_payload, dict) else pd.DataFrame()
-                if not isinstance(report_df, pd.DataFrame) or report_df.empty:
-                    st.info(tr("No data available for this report.", "אין נתונים זמינים לדוח זה."))
-                else:
-                    localized_df = localize_dataframe_columns(report_df, language)
-                    fmt_map: Dict[str, str] = {}
-                    for col in localized_df.columns:
-                        if "Yield" in str(col) or "תשואה" in str(col):
-                            fmt_map[col] = "{:.2%}"
-                        elif "Qty" in str(col) or "כמות" in str(col):
-                            fmt_map[col] = "{:.8f}"
-                        elif any(token in str(col) for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
-                            fmt_map[col] = "{:,.0f}"
-                    report_styled = localized_df.style
-                    if fmt_map:
-                        report_styled = report_styled.format(fmt_map)
-                    signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "pnl", "תשואה", "רווח"])]
-                    if signed_cols:
-                        report_styled = _apply_signed_color(report_styled, signed_cols)
-                    _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
+                    report_df = reports_payload.get(key, pd.DataFrame()) if isinstance(reports_payload, dict) else pd.DataFrame()
+                    if not isinstance(report_df, pd.DataFrame) or report_df.empty:
+                        st.info(tr("No data available for this report.", "אין נתונים זמינים לדוח זה."))
+                    else:
+                        localized_df = localize_dataframe_columns(report_df, language)
+                        fmt_map: Dict[str, str] = {}
+                        for col in localized_df.columns:
+                            if "Yield" in str(col) or "תשואה" in str(col):
+                                fmt_map[col] = "{:.2%}"
+                            elif "Qty" in str(col) or "כמות" in str(col):
+                                fmt_map[col] = "{:.8f}"
+                            elif any(token in str(col) for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
+                                fmt_map[col] = "{:,.0f}"
+                        report_styled = localized_df.style
+                        if fmt_map:
+                            report_styled = report_styled.format(fmt_map)
+                        signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "pnl", "תשואה", "רווח"])]
+                        if signed_cols:
+                            report_styled = _apply_signed_color(report_styled, signed_cols)
+                        _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
+                st.divider()
+
+            for _rep_title, _rep_key in report_options.items():
+                _render_report_section(_rep_title, _rep_key)
 
         with _ov_equity_slot:
             if can_show_build_up:
