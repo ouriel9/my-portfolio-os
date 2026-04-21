@@ -359,6 +359,8 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
             title_font=dict(size=14),
             font=dict(size=11),
             autosize=True,
+            height=320,          # minimum readable height on mobile
+            minreducedheight=280,
         )
         if is_bar:
             fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
@@ -810,6 +812,91 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
+
+        /* ══ ANTI-SQUISH TABLES ══════════════════════════════════════════════
+           Enforce nowrap + horizontal scroll so cells never wrap on mobile.   */
+        [data-testid="stDataFrame"] {{
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            max-width: 100% !important;
+        }}
+        [data-testid="stDataFrame"] table {{
+            min-width: 500px !important;
+            width: max-content !important;
+            border-collapse: collapse !important;
+        }}
+        [data-testid="stDataFrame"] th,
+        [data-testid="stDataFrame"] td {{
+            white-space: nowrap !important;
+            min-width: 72px !important;
+            padding: 4px 8px !important;
+            font-size: 11px !important;
+        }}
+        /* Glide-data-grid (canvas-based dataframe) wrapper */
+        [data-testid="stDataFrame"] > div {{
+            overflow-x: auto !important;
+            min-width: 0 !important;
+        }}
+        /* ══ CHART MIN-SIZE: prevent microscopic charts on mobile ═════════ */
+        [data-testid="stPlotlyChart"] {{
+            min-width: 300px !important;
+            overflow-x: auto !important;
+        }}
+        [data-testid="stPlotlyChart"] > div {{
+            min-width: 300px !important;
+        }}
+        /* ══ KPI CARDS: bigger value, muted label ════════════════════════ */
+        [data-testid="stMetricValue"] {{
+            font-size: 1.25rem !important;
+            font-weight: 700 !important;
+            line-height: 1.15 !important;
+        }}
+        [data-testid="stMetricLabel"] {{
+            font-size: 0.7rem !important;
+            color: #6b7280 !important;
+            line-height: 1.2 !important;
+        }}
+        [data-testid="stMetricDelta"] {{
+            font-size: 0.65rem !important;
+        }}
+        /* ══ FORM RADIO → HORIZONTAL PILLS ══════════════════════════════ */
+        [data-testid="stRadio"] > div[role="radiogroup"] {{
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: wrap !important;
+            gap: 4px !important;
+        }}
+        [data-testid="stRadio"] > div[role="radiogroup"] > label {{
+            flex: 1 1 auto !important;
+            text-align: center !important;
+            padding: 6px 8px !important;
+            border-radius: 8px !important;
+            border: 1px solid #e2e8f0 !important;
+            font-size: 0.75rem !important;
+            cursor: pointer !important;
+        }}
+        /* ══ REDUCE FORM VERTICAL SPACING ═══════════════════════════════ */
+        [data-testid="stTextInput"],
+        [data-testid="stNumberInput"],
+        [data-testid="stSelectbox"],
+        [data-testid="stDateInput"] {{
+            margin-bottom: 0.3rem !important;
+        }}
+        [data-testid="stTextInput"] > div,
+        [data-testid="stNumberInput"] > div,
+        [data-testid="stSelectbox"] > div {{
+            min-height: 38px !important;
+        }}
+        /* ══ PREMIUM PnL COLORS ══════════════════════════════════════════ */
+        [data-testid="stMetricDelta"][data-testid*="positive"],
+        [data-testid="stMetricDelta"] svg[style*="color: rgb(9, 171, 59)"],
+        [data-testid="stMetricDelta"] [style*="color: rgb(9, 171, 59)"] {{
+            color: #10b981 !important;
+        }}
+        [data-testid="stMetricDelta"] svg[style*="color: rgb(255"],
+        [data-testid="stMetricDelta"] [style*="color: rgb(255"] {{
+            color: #ef4444 !important;
+        }}
 
         [data-testid="stSidebar"] {{
             background: {sidebar_bg} !important;
