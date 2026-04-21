@@ -680,23 +680,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif !important;
         }}
         footer {{display: none !important;}}
-        #MainMenu {{display: none !important;}}
+        #MainMenu {{display: block !important; visibility: visible !important;}}
         header, [data-testid="stHeader"] {{
-            height: 0 !important;
-            min-height: 0 !important;
-            max-height: 0 !important;
-            overflow: hidden !important;
-            padding: 0 !important;
-            margin: 0 !important;
             display: block !important;
             background: transparent !important;
             box-shadow: none !important;
             z-index: 100001 !important;
-        }}
-        [data-testid="stToolbar"],
-        [data-testid="stToolbarActions"],
-        [data-testid="stDecoration"] {{
-            display: none !important;
         }}
         /* Hide Deploy button and branding on mobile, but keep sidebar expand */
         [data-testid="stAppDeployButton"],
