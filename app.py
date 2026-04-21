@@ -4625,7 +4625,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
           try {{
             if (id === 'nav-dashboard') clickByText(['דשבורד','Dashboard','סקירה','Overview']);
             else if (id === 'nav-manage') clickByText(['ניהול עסקאות','Trade','עסקאות','Trades']);
-            else if (id === 'nav-risk') clickByText(['סיכונים','Risk','סיכון']);
+            else if (id === 'nav-risk') clickByText(['סיכונים','Risk','סיכון','Reports','דוחות']);
             else if (id === 'nav-quality') clickByText(['בקרת נתונים','Data Quality','נתונים','Data']);
             else if (id === 'toggle-theme') {{
               var b = doc.querySelector('header button[kind="header"]'); if (b) b.click();
@@ -5101,8 +5101,8 @@ def render_advanced_analytics(
                         template=template,
                         margin=dict(l=10, r=10, t=50, b=20),
                         coloraxis_colorbar=dict(title=""),
-                        width=heat_min_px if is_mobile else None,
-                        height=heat_min_px if is_mobile else None,
+                        width=700 if is_mobile else None,
+                        height=500 if is_mobile else None,
                     )
                     if is_mobile:
                         st.markdown(
@@ -5516,7 +5516,7 @@ def main() -> None:
         mobile_label_to_id = {
             tr("📊 Overview", "📊 סקירה"): "dashboard",
             tr("💼 Trades", "💼 עסקאות"): "manage",
-            tr("🛡 Risk", "🛡 סיכון"): "risk",
+            tr("🛡 Reports", "🛡 דוחות"): "risk",
             tr("📋 Data", "📋 נתונים"): "quality",
         }
         mobile_options = list(mobile_label_to_id.keys())
@@ -5888,7 +5888,7 @@ def main() -> None:
             [
                 tr("Overview", "סקירה") if is_mobile else tr("Overview", "סקירה כללית"),
                 tr("Allocation", "הרכב") if is_mobile else tr("Portfolio Allocation", "הרכב התיק"),
-                tr("Risk", "דוחות") if is_mobile else tr("Risk & Analytics", "אנליזה וסיכונים"),
+                tr("Reports", "דוחות") if is_mobile else tr("Reports & Analytics", "אנליזה וסיכונים"),
                 tr("Transactions", "עסקאות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
@@ -7482,7 +7482,8 @@ def main() -> None:
                 fig_cc.update_layout(
                     xaxis_tickformat=".0%",
                     yaxis_title="",
-                    margin=dict(l=10, r=10, t=50, b=20),
+                    yaxis=dict(automargin=True),
+                    margin=dict(l=150, r=10, t=50, b=20),
                     coloraxis_showscale=False,
                     height=max(320, 22 * len(col_df) + 80),
                 )
