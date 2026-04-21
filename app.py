@@ -673,6 +673,19 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             direction: {direction} !important;
             text-align: {align} !important;
         }}
+        /* ── Remove top whitespace on desktop: push title to top ── */
+        section.main > div.block-container,
+        [data-testid="stMainBlockContainer"],
+        .main .block-container,
+        .block-container {{
+            padding-top: 0rem !important;
+            margin-top: 0rem !important;
+        }}
+        header[data-testid="stHeader"] {{
+            height: 2.4rem !important;
+            min-height: 2.4rem !important;
+            background: transparent !important;
+        }}
         h1, h2, h3, h4, h5, h6 {{
             direction: {direction} !important;
             text-align: {align} !important;
@@ -814,26 +827,32 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
 
         /* ══ ANTI-SQUISH TABLES ══════════════════════════════════════════════
-           Enforce nowrap + horizontal scroll so cells never wrap on mobile.   */
-        [data-testid="stDataFrame"] {{
+           CRITICAL: enforce nowrap + horizontal scroll so cells NEVER wrap.   */
+        [data-testid="stDataFrame"],
+        [data-testid="stTable"] {{
             overflow-x: auto !important;
             -webkit-overflow-scrolling: touch !important;
-            max-width: 100% !important;
+            max-width: 100vw !important;
+            display: block !important;
         }}
-        [data-testid="stDataFrame"] table {{
-            min-width: 500px !important;
+        [data-testid="stDataFrame"] table,
+        [data-testid="stTable"] table {{
+            min-width: 600px !important;
             width: max-content !important;
             border-collapse: collapse !important;
         }}
         [data-testid="stDataFrame"] th,
-        [data-testid="stDataFrame"] td {{
+        [data-testid="stDataFrame"] td,
+        [data-testid="stTable"] th,
+        [data-testid="stTable"] td {{
             white-space: nowrap !important;
-            min-width: 72px !important;
+            min-width: 120px !important;
             padding: 4px 8px !important;
             font-size: 11px !important;
         }}
         /* Glide-data-grid (canvas-based dataframe) wrapper */
-        [data-testid="stDataFrame"] > div {{
+        [data-testid="stDataFrame"] > div,
+        [data-testid="stDataFrame"] > div > div {{
             overflow-x: auto !important;
             min-width: 0 !important;
         }}
@@ -846,13 +865,15 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             min-width: 300px !important;
         }}
         /* ══ KPI CARDS: bigger value, muted label ════════════════════════ */
-        [data-testid="stMetricValue"] {{
-            font-size: 1.25rem !important;
-            font-weight: 700 !important;
+        [data-testid="stMetricValue"],
+        [data-testid="stMetric"] [data-testid="stMetricValue"] {{
+            font-size: 1.5rem !important;
+            font-weight: bold !important;
             line-height: 1.15 !important;
         }}
-        [data-testid="stMetricLabel"] {{
-            font-size: 0.7rem !important;
+        [data-testid="stMetricLabel"],
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] {{
+            font-size: 0.875rem !important;
             color: #6b7280 !important;
             line-height: 1.2 !important;
         }}
@@ -4568,6 +4589,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
         if (doc.getElementById('pp-cmdk-overlay')) return;
         var overlay = doc.createElement('div');
         overlay.id = 'pp-cmdk-overlay';
+        overlay.style.display = 'none';   // ALWAYS start hidden — prevents "undefined" flash
         overlay.innerHTML = `
           <div id="pp-cmdk" role="dialog" aria-modal="true">
             <input id="pp-cmdk-input" type="text" placeholder="{placeholder}" autocomplete="off"/>
@@ -4576,6 +4598,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
         doc.body.appendChild(overlay);
         var toast = doc.createElement('div');
         toast.id = 'pp-toast';
+        toast.style.display = 'none';     // start hidden — avoid "undefined" artefact
         doc.body.appendChild(toast);
         var CMDS = {cmds_json};
         var listEl = doc.getElementById('pp-cmdk-list');
@@ -4583,9 +4606,10 @@ def _pp_inject_productivity_layer(language: str) -> None:
         var selected = 0;
         function showToast(msg) {{
           toast.textContent = msg;
+          toast.style.display = 'block';
           toast.classList.add('show');
           clearTimeout(toast._t);
-          toast._t = setTimeout(function() {{ toast.classList.remove('show'); }}, 1600);
+          toast._t = setTimeout(function() {{ toast.classList.remove('show'); toast.style.display = 'none'; }}, 1600);
         }}
         window.ppToast = showToast;
         function render(filter) {{
@@ -4955,7 +4979,7 @@ def render_advanced_analytics(
     gc1, gc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
     with gc1:
         # The [1, 2] split already caps gauge width on desktop; mobile stacks.
-        st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
     with gc2:
         kpi_row = st.columns(3)
         kpi_row[0].metric(tr("Daily VaR 95%", "VaR יומי 95%"), f"{var_95:.2%}",
@@ -4995,7 +5019,7 @@ def render_advanced_analytics(
             margin=dict(l=10, r=10, t=50, b=30),
             hovermode="x unified",
         )
-        st.plotly_chart(_apply_plotly_theme(dd_fig, is_dark, is_mobile), use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(dd_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
     # Returns distribution with VaR / CVaR markers
     with row_a[1]:
@@ -5018,7 +5042,7 @@ def render_advanced_analytics(
             margin=dict(l=10, r=10, t=50, b=30),
             showlegend=False, bargap=0.04,
         )
-        st.plotly_chart(_apply_plotly_theme(hist_fig, is_dark, is_mobile), use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(hist_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
     # Rolling 30-day annualized volatility
     row_b = st.columns(2) if not is_mobile else [st.container(), st.container()]
@@ -5040,7 +5064,7 @@ def render_advanced_analytics(
                 yaxis_title="%", xaxis_title=tr("Date", "תאריך"),
                 margin=dict(l=10, r=10, t=50, b=30), hovermode="x unified",
             )
-            st.plotly_chart(_apply_plotly_theme(vol_fig, is_dark, is_mobile), use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(vol_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
         else:
             st.info(tr("Not enough data for rolling volatility.", "אין מספיק נתונים לתנודתיות מתגלגלת."))
 
@@ -5065,7 +5089,7 @@ def render_advanced_analytics(
                     margin=dict(l=10, r=10, t=50, b=30), hovermode="x unified",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                 )
-                st.plotly_chart(_apply_plotly_theme(bm_fig, is_dark, is_mobile), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(bm_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
             else:
                 st.info(tr("Benchmark history unavailable.", "אין מספיק היסטוריית בנצ'מרק."))
         else:
@@ -5116,11 +5140,13 @@ def render_advanced_analytics(
                             st.plotly_chart(
                                 _apply_plotly_theme(heat_fig, is_dark, is_mobile),
                                 use_container_width=True,
+                                theme="streamlit",
                             )
                     else:
                         st.plotly_chart(
                             _apply_plotly_theme(heat_fig, is_dark, is_mobile),
                             use_container_width=False,
+                            theme="streamlit",
                         )
                         st.markdown("</div>", unsafe_allow_html=True)
             except Exception:
@@ -5159,7 +5185,7 @@ def render_advanced_analytics(
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         )
-        st.plotly_chart(_apply_plotly_theme(mc_fig, is_dark, is_mobile), use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(mc_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
         final_row = mc.iloc[-1]
         mc_cols = st.columns(3)
@@ -5307,27 +5333,57 @@ def main() -> None:
             pointer-events: none !important;
         }
 
-        /* ── MOBILE-ONLY ENHANCEMENTS (≤768px) ─────────────────────────────── */
-        @media (max-width: 768px) {
-            /* Data tables: enforce min-width for columns + horizontal scroll */
-            [data-testid="stDataFrame"], [data-testid="stTable"] {
+        /* ── MOBILE-ONLY ENHANCEMENTS (≤767px) ─────────────────────────────── */
+        @media (max-width: 767px) {
+            /* ══ CRITICAL: Force horizontal scroll on ALL tables — no cell wrapping ══ */
+            [data-testid="stDataFrame"],
+            [data-testid="stTable"] {
                 overflow-x: auto !important;
-                -webkit-overflow-scrolling: touch;
+                -webkit-overflow-scrolling: touch !important;
+                display: block !important;
+                max-width: 100vw !important;
+                width: 100% !important;
             }
-            [data-testid="stDataFrame"] table, [data-testid="stTable"] table {
+            [data-testid="stDataFrame"] table,
+            [data-testid="stTable"] table {
                 min-width: 640px !important;
+                width: max-content !important;
             }
-            [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td,
-            [data-testid="stTable"] th, [data-testid="stTable"] td {
-                min-width: 88px !important;
+            [data-testid="stDataFrame"] th,
+            [data-testid="stDataFrame"] td,
+            [data-testid="stTable"] th,
+            [data-testid="stTable"] td {
                 white-space: nowrap !important;
-                padding: 8px 10px !important;
+                min-width: 120px !important;
+                padding: 6px 10px !important;
+                overflow: visible !important;
             }
-            /* Scrollable wrapper around tables (class used below) */
+            [data-testid="stDataFrame"] > div,
+            [data-testid="stDataFrame"] > div > div {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+            /* Scrollable wrapper around tables */
             .mobile-table-scroll {
                 overflow-x: auto !important;
                 -webkit-overflow-scrolling: touch;
                 border-radius: 12px;
+            }
+            /* ══ KPI: Large values, muted labels ══ */
+            [data-testid="stMetricValue"],
+            [data-testid="stMetric"] [data-testid="stMetricValue"] {
+                font-size: 1.5rem !important;
+                font-weight: bold !important;
+            }
+            [data-testid="stMetricLabel"],
+            [data-testid="stMetric"] [data-testid="stMetricLabel"] {
+                font-size: 0.875rem !important;
+                color: #6b7280 !important;
+            }
+            /* ══ Scrollable chart wrappers ══ */
+            [data-testid="stPlotlyChart"] {
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch !important;
             }
             /* CTA buttons: thumb-friendly on mobile */
             .stButton > button, .stDownloadButton > button,
@@ -5337,6 +5393,21 @@ def main() -> None:
                 padding: 10px 16px !important;
                 border-radius: 14px !important;
                 box-shadow: 0 4px 14px -4px rgba(79,70,229,0.35) !important;
+            }
+        }
+        /* ── DESKTOP-ONLY ENHANCEMENTS (≥768px) ─────────────────────────────── */
+        @media (min-width: 768px) {
+            /* Remove Streamlit's default top whitespace — push title to top */
+            section.main > div.block-container,
+            [data-testid="stMainBlockContainer"],
+            .main .block-container,
+            .block-container {
+                padding-top: 0rem !important;
+                margin-top: 0rem !important;
+            }
+            header[data-testid="stHeader"] {
+                height: 2.4rem !important;
+                min-height: 2.4rem !important;
             }
         }
         </style>
@@ -5494,7 +5565,7 @@ def main() -> None:
 
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
-    page_risk = tr("Risk & FIFO", "סיכונים ופיפו")
+    page_risk = tr("Reports", "דוחות")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_id_to_label = {
         "dashboard": page_dashboard,
@@ -5933,7 +6004,7 @@ def main() -> None:
                     hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
                     textinfo="percent+label",
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), theme="streamlit", use_container_width=True)
             with col_b:
                 bar_df = pnl_by_asset if not pnl_by_asset.empty else summary[["Ticker", "Net_PnL_ILS"]].copy()
                 _bar_src = bar_df.sort_values("Net_PnL_ILS", ascending=False).copy()
@@ -5956,7 +6027,7 @@ def main() -> None:
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True), theme="streamlit", use_container_width=True)
 
             # ── Treemap: at-a-glance allocation + P/L color overlay ──
             if not summary.empty and float(summary["Value_ILS"].sum()) > 0:
@@ -5986,8 +6057,7 @@ def main() -> None:
                     )
                     fig_tree.update_layout(margin=dict(l=10, r=10, t=50, b=10),
                                            coloraxis_colorbar=dict(title="%"))
-                    st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile),
-                                    use_container_width=True)
+                    st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", use_container_width=True)
                 except Exception:
                     pass
 
@@ -6170,12 +6240,14 @@ def main() -> None:
                     st.plotly_chart(
                         _apply_plotly_theme(fig_pie, is_dark, is_mobile),
                         use_container_width=True,
+                        theme="streamlit",
                         key="ov_mirror_pie",
                     )
                 with ov_col_b:
                     st.plotly_chart(
                         _apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True),
                         use_container_width=True,
+                        theme="streamlit",
                         key="ov_mirror_bar",
                     )
             # Exposure table mirrored into Overview too (uses distinct widget prefix
@@ -6240,6 +6312,7 @@ def main() -> None:
                     st.plotly_chart(
                         _apply_plotly_theme(class_pie_fig, is_dark, is_mobile),
                         use_container_width=True,
+                        theme="streamlit",
                         key="alloc_class_pie",
                     )
                 else:
@@ -6267,6 +6340,7 @@ def main() -> None:
                     st.plotly_chart(
                         _apply_plotly_theme(type_fig, is_dark, is_mobile),
                         use_container_width=True,
+                        theme="streamlit",
                         key="alloc_class_treemap",
                     )
 
@@ -6357,7 +6431,7 @@ def main() -> None:
                     hovermode="x unified",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
         with tab_deposits:
             # (Equity curve moved to Overview tab — top section.)
@@ -6832,7 +6906,7 @@ def main() -> None:
                 except Exception:
                     pass
                 st.session_state["risk_page_last_refresh_ts"] = now_ts
-        st.markdown(f"### {tr('Risk, Performance and FIFO', 'סיכונים, ביצועים ועלות פיפו')}")
+        st.markdown(f"### {tr('Reports: Risk, Performance and FIFO', 'דוחות: סיכונים, ביצועים ועלות פיפו')}")
         fifo_df = fifo_metrics(trades)
         st.subheader(tr("FIFO Engine", "מנוע פיפו"))
         if fifo_df.empty:
@@ -6902,7 +6976,7 @@ def main() -> None:
                 yaxis_tickformat=",.0f",
                 hovermode="x unified",
             )
-            st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
         if total_value > 0:
             st.markdown(f"#### {tr('Scenario Lab', 'מעבדת תרחישים')}")
@@ -7113,12 +7187,28 @@ def main() -> None:
             is_sell_side = selected_side == "SELL"
 
             with st.form("add_form"):
+                # ── Row 1: Location / Platform / Type ──
+                _fc1, _fc2, _fc3 = st.columns(3) if not is_mobile else (st.container(), st.container(), st.container())
+                with _fc1:
+                    _field_loc = _select_or_type(tr("Current location", "מיקום נוכחי"), locations, "", "add_location", tr, help_text=field_help["Current_Location"])
+                with _fc2:
+                    _field_plat = _select_or_type(tr("Platform", "פלטפורמה"), platforms, "Bit2C", "add_platform", tr, help_text=field_help["Platform"])
+                with _fc3:
+                    _field_type = _select_or_type(tr("Asset type", "סוג נכס"), types, "קריפטו", "add_type", tr, help_text=field_help["Type"])
+                # ── Row 2: Ticker / Currency ──
+                _fc4, _fc5, _fc6 = st.columns([2, 1, 1]) if not is_mobile else (st.container(), st.container(), st.container())
+                with _fc4:
+                    _field_ticker = _select_or_type(tr("Ticker", "טיקר"), tickers, "BTC", "add_ticker", tr, help_text=field_help["Ticker"]).upper()
+                with _fc5:
+                    _field_currency = _select_or_type(tr("Origin currency", "מטבע מקור"), currencies, "USD", "add_currency", tr, help_text=field_help["Origin_Currency"]).upper()
+                with _fc6:
+                    pass  # spacer
                 new_row = {
-                    "Current_Location": _select_or_type(tr("Current location", "מיקום נוכחי"), locations, "", "add_location", tr, help_text=field_help["Current_Location"]),
-                    "Platform": _select_or_type(tr("Platform", "פלטפורמה"), platforms, "Bit2C", "add_platform", tr, help_text=field_help["Platform"]),
-                    "Type": _select_or_type(tr("Asset type", "סוג נכס"), types, "קריפטו", "add_type", tr, help_text=field_help["Type"]),
-                    "Ticker": _select_or_type(tr("Ticker", "טיקר"), tickers, "BTC", "add_ticker", tr, help_text=field_help["Ticker"]).upper(),
-                    "Origin_Currency": _select_or_type(tr("Origin currency", "מטבע מקור"), currencies, "USD", "add_currency", tr, help_text=field_help["Origin_Currency"]).upper(),
+                    "Current_Location": _field_loc,
+                    "Platform": _field_plat,
+                    "Type": _field_type,
+                    "Ticker": _field_ticker,
+                    "Origin_Currency": _field_currency,
                     "Action": selected_side,
                     "Event_Type": "TRADE",
                     "Sell_Price_Origin": 0.0,
@@ -7227,15 +7317,26 @@ def main() -> None:
                             )
                         )
                     else:
+                        # ── SELL manual form: multi-column grid on desktop ──
+                        _sc1, _sc2, _sc3 = st.columns(3) if not is_mobile else (st.container(), st.container(), st.container())
+                        with _sc1:
+                            _sell_buy_date = st.date_input(tr("Original purchase date", "תאריך קנייה מקורי"), value=datetime.now(), help=field_help["Purchase_Date"]).strftime("%Y-%m-%d")
+                            _sell_qty = st.number_input(tr("Sell quantity", "כמות למכירה"), value=0.0, format="%.8f", help=field_help["Quantity"])
+                        with _sc2:
+                            _sell_buy_price = st.number_input(tr("Buy price", "שער קנייה"), value=0.0, help=field_help["Origin_Buy_Price"])
+                            _sell_cost = st.number_input(tr("Origin cost", "עלות מקור"), value=0.0, help=field_help["Cost_Origin"])
+                        with _sc3:
+                            _sell_comm = st.number_input(tr("Commission", "עמלה"), value=0.0, help=field_help["Commission"])
+                            _sell_date_manual = st.date_input(tr("Sell date", "תאריך מכירה"), value=datetime.now(), key="add_sell_date_manual", help=field_help["Sell_Date"]).strftime("%Y-%m-%d")
                         new_row.update(
                             {
-                                "Purchase_Date": st.date_input(tr("Original purchase date", "תאריך קנייה מקורי"), value=datetime.now(), help=field_help["Purchase_Date"]).strftime("%Y-%m-%d"),
-                                "Quantity": st.number_input(tr("Sell quantity", "כמות למכירה"), value=0.0, format="%.8f", help=field_help["Quantity"]),
-                                "Origin_Buy_Price": st.number_input(tr("Buy price", "שער קנייה"), value=0.0, help=field_help["Origin_Buy_Price"]),
-                                "Cost_Origin": st.number_input(tr("Origin cost", "עלות מקור"), value=0.0, help=field_help["Cost_Origin"]),
-                                "Commission": st.number_input(tr("Commission", "עמלה"), value=0.0, help=field_help["Commission"]),
+                                "Purchase_Date": _sell_buy_date,
+                                "Quantity": _sell_qty,
+                                "Origin_Buy_Price": _sell_buy_price,
+                                "Cost_Origin": _sell_cost,
+                                "Commission": _sell_comm,
                                 "Status": "סגור",
-                                "Sell_Date": st.date_input(tr("Sell date", "תאריך מכירה"), value=datetime.now(), key="add_sell_date_manual", help=field_help["Sell_Date"]).strftime("%Y-%m-%d"),
+                                "Sell_Date": _sell_date_manual,
                             }
                         )
                         sell_price_origin = st.number_input(tr("Sell price", "מחיר מכירה"), value=0.0, help=field_help["Sell_Price_Origin"])
@@ -7247,13 +7348,23 @@ def main() -> None:
                     if float(_num(new_row.get("Cost_Origin", 0.0))) <= 0 and float(_num(new_row.get("Quantity", 0.0))) > 0 and float(_num(new_row.get("Origin_Buy_Price", 0.0))) > 0:
                         new_row["Cost_Origin"] = float(_num(new_row.get("Quantity", 0.0)) * _num(new_row.get("Origin_Buy_Price", 0.0)))
                 else:
+                    # ── BUY form: multi-column grid layout on desktop ──
+                    _bc1, _bc2, _bc3 = st.columns(3) if not is_mobile else (st.container(), st.container(), st.container())
+                    with _bc1:
+                        _buy_date = st.date_input(tr("Purchase date", "תאריך רכישה"), value=datetime.now(), help=field_help["Purchase_Date"]).strftime("%Y-%m-%d")
+                        _buy_qty = st.number_input(tr("Quantity", "כמות"), value=0.0, format="%.8f", help=field_help["Quantity"])
+                    with _bc2:
+                        _buy_price = st.number_input(tr("Buy price", "שער קנייה"), value=0.0, help=field_help["Origin_Buy_Price"])
+                        _buy_cost = st.number_input(tr("Origin cost", "עלות מקור"), value=0.0, help=field_help["Cost_Origin"])
+                    with _bc3:
+                        _buy_comm = st.number_input(tr("Commission", "עמלה"), value=0.0, help=field_help["Commission"])
                     new_row.update(
                         {
-                            "Purchase_Date": st.date_input(tr("Purchase date", "תאריך רכישה"), value=datetime.now(), help=field_help["Purchase_Date"]).strftime("%Y-%m-%d"),
-                            "Quantity": st.number_input(tr("Quantity", "כמות"), value=0.0, format="%.8f", help=field_help["Quantity"]),
-                            "Origin_Buy_Price": st.number_input(tr("Buy price", "שער קנייה"), value=0.0, help=field_help["Origin_Buy_Price"]),
-                            "Cost_Origin": st.number_input(tr("Origin cost", "עלות מקור"), value=0.0, help=field_help["Cost_Origin"]),
-                            "Commission": st.number_input(tr("Commission", "עמלה"), value=0.0, help=field_help["Commission"]),
+                            "Purchase_Date": _buy_date,
+                            "Quantity": _buy_qty,
+                            "Origin_Buy_Price": _buy_price,
+                            "Cost_Origin": _buy_cost,
+                            "Commission": _buy_comm,
                             "Status": "פתוח",
                             "Sell_Date": "",
                             "Current_Value_ILS": 0.0,
@@ -7487,8 +7598,7 @@ def main() -> None:
                     coloraxis_showscale=False,
                     height=max(320, 22 * len(col_df) + 80),
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True),
-                                use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True), theme="streamlit", use_container_width=True)
             except Exception:
                 pass
 
@@ -7546,7 +7656,7 @@ def main() -> None:
         status_counts_view = status_counts_view.rename(columns={"Status": SNAPSHOT_HEADERS["Status"][language], "count": tr("Count", "כמות")})
         st.dataframe(status_counts_view)
         fig = px.pie(status_counts, names="Status", values="count", title=tr("Trade Status Distribution", "פיזור סטטוסי עסקאות"), template=template)
-        st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
         _render_recent_data_table(df)
