@@ -720,6 +720,31 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             background: transparent !important;
             box-shadow: none !important;
             z-index: 100001 !important;
+            overflow: visible !important;
+        }}
+        /* Force toolbar + 3-dot menu visible on mobile */
+        [data-testid="stToolbar"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            overflow: visible !important;
+            z-index: 100005 !important;
+        }}
+        [data-testid="stToolbarActions"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            overflow: visible !important;
+            z-index: 100005 !important;
+            position: relative !important;
+        }}
+        [data-testid="stMainMenuButton"],
+        [data-testid="stToolbar"] button,
+        [data-testid="stToolbarActions"] button {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
         }}
         /* Hide Deploy button and branding on mobile, but keep sidebar expand and 3-dot menu */
         [data-testid="stAppDeployButton"],
