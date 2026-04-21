@@ -687,9 +687,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             box-shadow: none !important;
             z-index: 100001 !important;
         }}
-        /* Hide Deploy button and branding on mobile, but keep sidebar expand */
+        /* Hide Deploy button and branding on mobile, but keep sidebar expand and 3-dot menu */
         [data-testid="stAppDeployButton"],
-        [data-testid="stBaseButton-header"],
         [data-testid="stStatusWidget"] {{
             display: none !important;
         }}
