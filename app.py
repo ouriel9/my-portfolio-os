@@ -725,7 +725,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             -webkit-tap-highlight-color: transparent !important;
         }}
         .block-container {{
-            padding-top: 0 !important;
+            padding-top: 0.45rem !important;
             padding-bottom: 0.8rem !important;
             padding-left: 0.65rem !important;
             padding-right: 0.65rem !important;
@@ -734,7 +734,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         body {{
             overscroll-behavior-y: none !important;
         }}
-        /* ── Title: sticky just below the sticky nav bar ── */
+        /* ── Title: sticky at top ── */
         .app-header-wrap {{
             position: sticky !important;
             top: 0 !important;
@@ -977,21 +977,15 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         ══════════════════════════════════════════════════════════════════ */
         /* Force the element container holding the page nav to full width */
         [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
-            position: sticky !important;
-            top: 0 !important;
-            left: 0 !important;
-            right: 0 !important;
-            transform: none !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            z-index: 10002 !important;
+            position: fixed !important;
+            top: calc(0.55rem + env(safe-area-inset-top)) !important;
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+            width: clamp(220px, 64vw, 340px) !important;
+            max-width: calc(100vw - 8.8rem) !important;
+            z-index: 100001 !important;
             margin: 0 !important;
-            padding: 4px 8px !important;
-            background: {nav_bg} !important;
-            backdrop-filter: blur(8px) !important;
-            -webkit-backdrop-filter: blur(8px) !important;
-            border-bottom: 1px solid {nav_border} !important;
-            box-sizing: border-box !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
             background: {nav_bg} !important;
@@ -1069,6 +1063,9 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             width: 50% !important;
         }}
         /* padding-top handled above; no extra override needed */
+        .block-container {{
+            padding-top: calc(4.4rem + env(safe-area-inset-top)) !important;
+        }}
         /* ══════════════════════════════════════════════════════════════════ */
     }}
 
@@ -5691,10 +5688,10 @@ def main() -> None:
 
         tab_overview_real, tab_allocation_real, tab_risk_real, tab_tx_real = st.tabs(
             [
-                tr("Overview", "סקירה כללית"),
-                tr("Portfolio Allocation", "הרכב התיק"),
-                tr("Risk & Analytics", "אנליזה וסיכונים"),
-                tr("Transactions & Cash Flow", "תנועות ועסקאות"),
+                tr("Overview", "סקירה"),
+                tr("Allocation", "הרכב"),
+                tr("Risk", "סיכון"),
+                tr("Transactions", "עסקאות"),
             ]
         )
 
