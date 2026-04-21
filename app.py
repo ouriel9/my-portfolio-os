@@ -839,13 +839,33 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
 
         /* ══ ANTI-SQUISH TABLES ══════════════════════════════════════════════
-           CRITICAL: enforce nowrap + horizontal scroll so cells NEVER wrap.   */
+           CRITICAL: enforce nowrap + horizontal scroll so cells NEVER wrap.
+           Also force ALL parent containers to allow overflow-x so the right
+           side is never clipped.                                              */
         [data-testid="stDataFrame"],
         [data-testid="stTable"] {{
             overflow-x: auto !important;
             -webkit-overflow-scrolling: touch !important;
-            max-width: 100vw !important;
+            max-width: 100% !important;
+            width: 100% !important;
             display: block !important;
+        }}
+        /* Every ancestor of stDataFrame must NOT clip horizontal overflow */
+        .element-container, .stElementContainer,
+        [data-testid="stElementContainer"],
+        [data-testid="stVerticalBlockBorderWrapper"],
+        [data-testid="stVerticalBlock"],
+        [data-testid="stColumn"],
+        [data-testid="stHorizontalBlock"] {{
+            overflow-x: auto !important;
+            max-width: 100% !important;
+        }}
+        /* The glide-data-grid canvas wrapper */
+        [data-testid="stDataFrame"] > div,
+        [data-testid="stDataFrame"] > div > div,
+        [data-testid="stDataFrame"] > div > div > div {{
+            overflow-x: auto !important;
+            max-width: 100% !important;
         }}
         [data-testid="stDataFrame"] table,
         [data-testid="stTable"] table {{
@@ -858,15 +878,9 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stTable"] th,
         [data-testid="stTable"] td {{
             white-space: nowrap !important;
-            min-width: 120px !important;
+            min-width: 100px !important;
             padding: 4px 8px !important;
             font-size: 11px !important;
-        }}
-        /* Glide-data-grid (canvas-based dataframe) wrapper */
-        [data-testid="stDataFrame"] > div,
-        [data-testid="stDataFrame"] > div > div {{
-            overflow-x: auto !important;
-            min-width: 0 !important;
         }}
         /* ══ CHART MIN-SIZE: prevent microscopic charts on mobile ═════════ */
         [data-testid="stPlotlyChart"] {{
@@ -2179,10 +2193,31 @@ def inject_client_fixes() -> None:
                 rootDoc.head.appendChild(pmToolbar);
               }
               pmToolbar.textContent = `
-                [data-testid="stHeader"],
-                header[data-testid="stHeader"] {
-                  overflow: visible !important;
-                  display: block !important;
+                /* Mobile: keep header visible (toolbar/hamburger needed) */
+                @media (max-width: 767px) {
+                  [data-testid="stHeader"],
+                  header[data-testid="stHeader"] {
+                    overflow: visible !important;
+                    display: block !important;
+                    height: auto !important;
+                  }
+                }
+                /* Desktop: hide header completely — title is the strict top boundary */
+                @media (min-width: 768px) {
+                  [data-testid="stHeader"],
+                  header[data-testid="stHeader"] {
+                    display: none !important;
+                    height: 0 !important;
+                    min-height: 0 !important;
+                    overflow: hidden !important;
+                  }
+                  section.main > div.block-container,
+                  [data-testid="stMainBlockContainer"],
+                  .main .block-container,
+                  .block-container {
+                    padding-top: 0 !important;
+                    margin-top: 0 !important;
+                  }
                 }
                 [data-testid="stToolbar"] {
                   display: flex !important;
