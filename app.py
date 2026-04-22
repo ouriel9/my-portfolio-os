@@ -900,21 +900,35 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stPlotlyChart"] > div {{
             min-width: 300px !important;
         }}
-        /* ══ KPI CARDS: bigger value, muted label ════════════════════════ */
+        /* ══ KPI CARDS: bigger value, muted label, no clipping on mobile ══ */
+        [data-testid="stMetric"] {{
+            overflow: visible !important;
+            min-height: unset !important;
+            height: auto !important;
+            padding-bottom: 6px !important;
+        }}
         [data-testid="stMetricValue"],
         [data-testid="stMetric"] [data-testid="stMetricValue"] {{
-            font-size: 1.5rem !important;
+            font-size: 1.35rem !important;
             font-weight: bold !important;
-            line-height: 1.15 !important;
+            line-height: 1.2 !important;
+            overflow: visible !important;
+            white-space: normal !important;
+            word-break: break-word !important;
         }}
         [data-testid="stMetricLabel"],
         [data-testid="stMetric"] [data-testid="stMetricLabel"] {{
-            font-size: 0.875rem !important;
+            font-size: 0.78rem !important;
             color: #6b7280 !important;
-            line-height: 1.2 !important;
+            line-height: 1.3 !important;
+            overflow: visible !important;
+            white-space: normal !important;
+            word-break: break-word !important;
         }}
         [data-testid="stMetricDelta"] {{
-            font-size: 0.65rem !important;
+            font-size: 0.62rem !important;
+            white-space: normal !important;
+            line-height: 1.3 !important;
         }}
         /* ══ FORM RADIO → HORIZONTAL PILLS ══════════════════════════════ */
         [data-testid="stRadio"] > div[role="radiogroup"] {{
@@ -5167,6 +5181,18 @@ def pp_portfolio_health_score(metrics: Dict[str, float],
     return score, "Fragile", "#ef4444"
 
 
+def _chart_help(en: str, he: str, language: str) -> None:
+    """Renders a small ❓ badge (hover = tooltip text, tap on mobile = tooltip)."""
+    text = (he if language == "he" else en).replace('"', "'")
+    st.markdown(
+        f'<div style="text-align:right;margin-bottom:-6px">'
+        f'<span title="{text}" style="cursor:help;font-size:0.72rem;color:#94a3b8;'
+        f'border:1px solid #94a3b8;border-radius:50%;padding:1px 6px;'
+        f'user-select:none;line-height:1.4">?</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_advanced_analytics(
     open_trades: pd.DataFrame,
     value_series: pd.Series,
@@ -5260,21 +5286,46 @@ def render_advanced_analytics(
 
     gc1, gc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
     with gc1:
-        # The [1, 2] split already caps gauge width on desktop; mobile stacks.
+        _chart_help("Portfolio Health Score: a composite 0-100 score based on Sharpe, drawdown, volatility, CAGR, diversification (HHI) and VaR.",
+                    "ציון בריאות התיק: ציון מורכב 0-100 המבוסס על שארפ, עומק משיכה, תנודתיות, CAGR, פיזור (HHI) ו-VaR.", language)
         st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
     with gc2:
         kpi_row = st.columns(3)
-        kpi_row[0].metric(tr("Daily VaR 95%", "VaR יומי 95%"), f"{var_95:.2%}",
-                          tr("Potential loss / day", "הפסד פוטנציאלי ליום"))
-        kpi_row[1].metric(tr("Daily CVaR 95%", "CVaR יומי 95%"), f"{cvar_95:.2%}",
-                          tr("Expected tail loss", "הפסד ממוצע בזנב"))
-        kpi_row[2].metric(tr("Sortino", "סורטינו"), f"{sortino:.2f}")
+        kpi_row[0].metric(
+            tr("Daily VaR 95%", "VaR יומי 95%"), f"{var_95:.2%}",
+            tr("Potential loss / day", "הפסד פוטנציאלי ליום"),
+            help=tr("Value at Risk: the maximum daily loss expected with 95% confidence based on 1-year history.",
+                    "ה-VaR: ההפסד היומי המרבי הצפוי ברמת ביטחון של 95% על בסיס היסטוריה של שנה."),
+        )
+        kpi_row[1].metric(
+            tr("Daily CVaR 95%", "CVaR יומי 95%"), f"{cvar_95:.2%}",
+            tr("Expected tail loss", "הפסד ממוצע בזנב"),
+            help=tr("Conditional VaR (Expected Shortfall): the average loss on the worst 5% of days.",
+                    "CVaR: ממוצע ההפסדים ב-5% הימים הגרועים ביותר. מדד שמרני יותר מ-VaR."),
+        )
+        kpi_row[2].metric(
+            tr("Sortino", "סורטינו"), f"{sortino:.2f}",
+            help=tr("Sortino Ratio: return per unit of downside risk. Higher = better risk-adjusted return.",
+                    "יחס סורטינו: תשואה ביחס לסיכון ירידה בלבד. גבוה יותר = תשואה טובה יותר לסיכון."),
+        )
         kpi_row2 = st.columns(3)
-        kpi_row2[0].metric(tr("Calmar", "קלמאר"), f"{calmar:.2f}")
-        kpi_row2[1].metric(tr("Concentration (HHI)", "ריכוזיות (HHI)"), f"{hhi:.2f}",
-                           tr("0=diversified · 1=single-name", "0=מפוזר · 1=נכס יחיד"))
-        kpi_row2[2].metric(tr("Beta vs S&P 500", "ביטא מול S&P 500"),
-                           ("—" if not np.isfinite(beta_val) else f"{beta_val:.2f}"))
+        kpi_row2[0].metric(
+            tr("Calmar", "קלמאר"), f"{calmar:.2f}",
+            help=tr("Calmar Ratio: annualized return divided by maximum drawdown. Higher = better recovery.",
+                    "יחס קלמאר: תשואה שנתית חלקי הירידה המקסימלית. גבוה יותר = התאוששות טובה יותר."),
+        )
+        kpi_row2[1].metric(
+            tr("Concentration (HHI)", "ריכוזיות (HHI)"), f"{hhi:.2f}",
+            tr("0=diversified · 1=single-name", "0=מפוזר · 1=נכס יחיד"),
+            help=tr("Herfindahl-Hirschman Index: measures portfolio concentration. 0 = fully diversified, 1 = single asset.",
+                    "מדד הירפינדאל-הירשמן: מודד ריכוזיות התיק. 0 = פיזור מלא, 1 = נכס יחיד בלבד."),
+        )
+        kpi_row2[2].metric(
+            tr("Beta vs S&P 500", "ביטא מול S&P 500"),
+            ("—" if not np.isfinite(beta_val) else f"{beta_val:.2f}"),
+            help=tr("Beta: sensitivity of the portfolio to S&P 500 moves. Beta=1 means it moves with the market; <1 = less volatile.",
+                    "ביטא: רגישות התיק לתנועות ה-S&P 500. ביטא=1 מתנהג כמו השוק; <1 = פחות תנודתי."),
+        )
     try:
         style_metric_cards(border_left_color=score_color, border_radius_px=12, box_shadow=True)
     except Exception:
@@ -5285,6 +5336,8 @@ def render_advanced_analytics(
     # Drawdown (underwater) chart
     row_a = st.columns(2) if not is_mobile else [st.container(), st.container()]
     with row_a[0]:
+        _chart_help("Drawdown: how far the portfolio fell from its peak at any point in time.",
+                    "עומק משיכה: עד כמה התיק ירד מהשיא שלו בכל נקודת זמן.", language)
         dd_fig = go.Figure()
         dd_fig.add_trace(go.Scatter(
             x=drawdown.index, y=drawdown.values * 100.0,
@@ -5305,6 +5358,8 @@ def render_advanced_analytics(
 
     # Returns distribution with VaR / CVaR markers
     with row_a[1]:
+        _chart_help("Distribution of daily returns. Dashed lines mark VaR and CVaR loss thresholds.",
+                    "פיזור התשואות היומיות. הקווים המקווקווים מסמנים את סף ההפסד של VaR ו-CVaR.", language)
         hist_fig = go.Figure()
         hist_fig.add_trace(go.Histogram(
             x=daily_ret.values * 100.0,
@@ -5329,6 +5384,8 @@ def render_advanced_analytics(
     # Rolling 30-day annualized volatility
     row_b = st.columns(2) if not is_mobile else [st.container(), st.container()]
     with row_b[0]:
+        _chart_help("Rolling 30-day volatility annualized: how 'noisy' the portfolio has been over recent months.",
+                    "תנודתיות מתגלגלת 30 יום (שנתית): כמה 'רועשת' הייתה התשואה בחודשים האחרונים.", language)
         roll_vol = daily_ret.rolling(30).std() * np.sqrt(252) * 100.0
         roll_vol = roll_vol.dropna()
         if not roll_vol.empty:
@@ -5352,6 +5409,8 @@ def render_advanced_analytics(
 
     # Benchmark comparison (normalized)
     with row_b[1]:
+        _chart_help("Portfolio vs S&P 500 normalized to 100: compares growth rates from the same starting point.",
+                    "תיק מול S&P 500 מנורמל ל-100: השוואת קצבי צמיחה מנקודת פתיחה זהה.", language)
         if not bench_close.empty:
             joined = pd.concat([vs.rename("pf"), bench_close.rename("spy")], axis=1).dropna()
             if len(joined) >= 5:
@@ -5382,6 +5441,8 @@ def render_advanced_analytics(
     if not open_trades.empty and "Ticker" in open_trades.columns:
         held = sorted({_clean(t).upper() for t in open_trades["Ticker"].tolist() if _clean(t)})
         if 2 <= len(held) <= 25:
+            _chart_help("Correlation heatmap: values near +1 = assets move together, near -1 = opposite, near 0 = independent.",
+                        "מפת מתאמים: ערכים קרובים ל-+1 = נכסים נעים יחד, ל-1- = הפוכים, ל-0 = בלתי תלויים.", language)
             try:
                 symbols = tuple(_market_symbol(t) for t in held)
                 close_mx = _download_close_matrix(symbols, days=252)
@@ -5459,6 +5520,8 @@ def render_advanced_analytics(
                 st.caption(f"⚠️ Heatmap error: {_hm_exc}")
 
     # Monte Carlo projection (1 year)
+    _chart_help("Monte Carlo simulation: 1,000 random paths based on historical daily returns. Shows the range of possible portfolio values in 1 year.",
+                "סימולציית מונטה-קרלו: 1,000 מסלולים אקראיים על בסיס תשואות יומיות היסטוריות. טווח שווי אפשרי לתיק בעוד שנה.", language)
     try:
         mc = pp_monte_carlo_projection(
             start_value=float(vs.iloc[-1]) if len(vs) else float(total_value),
@@ -5495,12 +5558,24 @@ def render_advanced_analytics(
 
         final_row = mc.iloc[-1]
         mc_cols = st.columns(3)
-        mc_cols[0].metric(tr("1Y P10 (pessimistic)", "P10 לשנה (פסימי)"),
-                          f"₪{float(final_row['p10']):,.0f}")
-        mc_cols[1].metric(tr("1Y Median", "חציון לשנה"),
-                          f"₪{float(final_row['p50']):,.0f}")
-        mc_cols[2].metric(tr("1Y P90 (optimistic)", "P90 לשנה (אופטימי)"),
-                          f"₪{float(final_row['p90']):,.0f}")
+        mc_cols[0].metric(
+            tr("1Y P10 (pessimistic)", "P10 לשנה (פסימי)"),
+            f"₪{float(final_row['p10']):,.0f}",
+            help=tr("10th percentile outcome: 90% of simulated paths ended above this value.",
+                    "אחוזון 10: ב-90% מהסימולציות, שווי התיק היה גבוה מזה. תרחיש פסימי."),
+        )
+        mc_cols[1].metric(
+            tr("1Y Median", "חציון לשנה"),
+            f"₪{float(final_row['p50']):,.0f}",
+            help=tr("Median outcome: half of simulated paths ended above and half below this value.",
+                    "חציון: מחצית מהסימולציות הסתיימו מעל ומחצית מתחת לערך זה."),
+        )
+        mc_cols[2].metric(
+            tr("1Y P90 (optimistic)", "P90 לשנה (אופטימי)"),
+            f"₪{float(final_row['p90']):,.0f}",
+            help=tr("90th percentile outcome: only 10% of simulated paths ended above this value.",
+                    "אחוזון 90: רק 10% מהסימולציות הסתיימו מעל לערך זה. תרחיש אופטימי."),
+        )
 
     # Export bar for analytics summary
     analytics_summary = pd.DataFrame([
@@ -6269,7 +6344,7 @@ def main() -> None:
             [
                 tr("Overview", "סקירה") if is_mobile else tr("Overview", "סקירה כללית"),
                 tr("Allocation", "הרכב") if is_mobile else tr("Portfolio Allocation", "הרכב התיק"),
-                tr("Reports", "דוחות") if is_mobile else tr("Reports & Analytics", "אנליזה וסיכונים"),
+                tr("Reports", "דוחות") if is_mobile else tr("Reports & Analytics", "דוחות ואנליזה"),
                 tr("Transactions", "עסקאות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
@@ -7275,13 +7350,23 @@ def main() -> None:
         metrics = risk_metrics(value_series)
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Sharpe", f"{metrics['sharpe']:.2f}")
-        c2.metric(tr("Annual Volatility", "תנודתיות שנתית"), f"{metrics['vol']:.2%}")
-        c3.metric(tr("Max Drawdown", "משיכה מקסימלית"), f"{metrics['mdd']:.2%}")
-        c4.metric("CAGR", f"{metrics['cagr']:.2%}")
+        c1.metric("Sharpe", f"{metrics['sharpe']:.2f}",
+                  help=tr("Sharpe Ratio: return per unit of total risk. Above 1 is good, above 2 is excellent.",
+                          "יחס שארפ: תשואה ביחס לסיכון הכולל. מעל 1 טוב, מעל 2 מעולה."))
+        c2.metric(tr("Annual Volatility", "תנודתיות שנתית"), f"{metrics['vol']:.2%}",
+                  help=tr("Annualized standard deviation of daily returns. Lower = more stable portfolio.",
+                          "סטיית תקן שנתית של תשואות יומיות. נמוכה יותר = תיק יציב יותר."))
+        c3.metric(tr("Max Drawdown", "משיכה מקסימלית"), f"{metrics['mdd']:.2%}",
+                  help=tr("Largest peak-to-trough decline in portfolio value. Indicates worst historical loss.",
+                          "הירידה הגדולה ביותר מהשיא לשפל. מציינת את ההפסד ההיסטורי הגרוע ביותר."))
+        c4.metric("CAGR", f"{metrics['cagr']:.2%}",
+                  help=tr("Compound Annual Growth Rate: the annualized return assuming reinvestment.",
+                          "שיעור צמיחה שנתי מורכב: התשואה השנתית מחושבת בהנחת השקעה מחדש."))
 
         if not value_series.empty:
             _hist_color = "#4f46e5"
+            _chart_help("Historical portfolio value estimated from market prices. Uses current holdings * historical closing prices.",
+                        "שווי התיק ההיסטורי מוערך לפי מחירי שוק. מחשב את האחזקות הנוכחיות לפי מחירי הסגירה ההיסטוריים.", language)
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=value_series.index,
@@ -7305,6 +7390,8 @@ def main() -> None:
 
         if total_value > 0:
             st.markdown(f"#### {tr('Scenario Lab', 'מעבדת תרחישים')}")
+            _chart_help("Scenario Lab: simulates portfolio value and P/L under various market shock levels applied uniformly to all holdings.",
+                        "מעבדת תרחישים: מדמה את שווי התיק ורווח/הפסד תחת רמות הלם שוק שונות המופעלות באחידות על כל האחזקות.", language)
             scenario_df = pd.DataFrame(
                 [
                     {"Scenario": tr("Calm market", "שוק רגוע"), "Shock": -0.03},
