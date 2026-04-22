@@ -430,7 +430,22 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     [data-testid="stApp"] {{
         direction: ltr !important;
     }}
-    .block-container {{padding-top: 0.1rem;}}
+    /* ── Zero top gap: no scrollable space above title ── */
+    .block-container {{
+        padding-top: 0 !important;
+        margin-top: 0 !important;
+    }}
+    section.main, .main {{
+        padding-top: 0 !important;
+    }}
+    /* ── Suppress 0-height component iframe wrappers (prevents "undefined" flash) ── */
+    .element-container:has(> div > iframe[height="0"]),
+    [data-testid="stElementContainer"]:has(> div > iframe[height="0"]) {{
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }}
     .app-header-wrap {{
         text-align: center !important;
         direction: inherit !important;
@@ -839,33 +854,29 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
 
         /* ══ ANTI-SQUISH TABLES ══════════════════════════════════════════════
-           CRITICAL: enforce nowrap + horizontal scroll so cells NEVER wrap.
-           Also force ALL parent containers to allow overflow-x so the right
-           side is never clipped.                                              */
+           Scoped with :has() so overflow-x:auto only applies to containers
+           that actually hold a dataframe — NOT headings or other elements.  */
         [data-testid="stDataFrame"],
         [data-testid="stTable"] {{
             overflow-x: auto !important;
             -webkit-overflow-scrolling: touch !important;
-            max-width: 100% !important;
-            width: 100% !important;
+            max-width: 100vw !important;
             display: block !important;
         }}
-        /* Every ancestor of stDataFrame must NOT clip horizontal overflow */
-        .element-container, .stElementContainer,
-        [data-testid="stElementContainer"],
-        [data-testid="stVerticalBlockBorderWrapper"],
-        [data-testid="stVerticalBlock"],
-        [data-testid="stColumn"],
-        [data-testid="stHorizontalBlock"] {{
+        /* Only the direct container of a dataframe gets the scroll wrapper */
+        .element-container:has([data-testid="stDataFrame"]),
+        .stElementContainer:has([data-testid="stDataFrame"]),
+        [data-testid="stElementContainer"]:has([data-testid="stDataFrame"]) {{
             overflow-x: auto !important;
-            max-width: 100% !important;
+            -webkit-overflow-scrolling: touch !important;
+            max-width: 100vw !important;
         }}
-        /* The glide-data-grid canvas wrapper */
+        /* The glide-data-grid canvas wrapper — allow scroll inward */
         [data-testid="stDataFrame"] > div,
         [data-testid="stDataFrame"] > div > div,
         [data-testid="stDataFrame"] > div > div > div {{
             overflow-x: auto !important;
-            max-width: 100% !important;
+            max-width: 100vw !important;
         }}
         [data-testid="stDataFrame"] table,
         [data-testid="stTable"] table {{
@@ -2268,12 +2279,37 @@ def inject_client_fixes() -> None:
             }
           }
 
+          // ═══════════════════════════════════════════════════════════
+          // UNDEFINED TEXT CLEANER
+          // Removes any bare "undefined" text nodes that may appear as
+          // artefacts from 0-height component iframes or JS timing.
+          // ═══════════════════════════════════════════════════════════
+          function removeUndefinedText() {
+            try {
+              var walker = rootDoc.createTreeWalker(
+                rootDoc.body,
+                NodeFilter.SHOW_TEXT,
+                null,
+                false
+              );
+              var toBlank = [];
+              var node;
+              while ((node = walker.nextNode())) {
+                if (node.nodeValue && node.nodeValue.trim() === 'undefined') {
+                  toBlank.push(node);
+                }
+              }
+              toBlank.forEach(function(n) { n.nodeValue = ''; });
+            } catch(e) {}
+          }
+
           function run() {
             removeBranding();
             setupTabSwipe();
             fixSidebarLeft();
             makeWatchlistExpandUp();
             forceToolbarVisible();
+            removeUndefinedText();
           }
 
           run();
@@ -2283,6 +2319,7 @@ def inject_client_fixes() -> None:
             rootWin._pmTimerBranding = rootWin.setInterval(removeBranding, 1200);
             rootWin._pmTimerSidebar = rootWin.setInterval(fixSidebarLeft, 800);
             rootWin._pmTimerToolbar = rootWin.setInterval(forceToolbarVisible, 1500);
+            rootWin._pmTimerUndef = rootWin.setInterval(removeUndefinedText, 600);
             rootWin._pmTimerHide = window.setInterval(function () {
               injectHideStyle(document);
               if (rootDoc !== document) injectHideStyle(rootDoc);
@@ -5362,23 +5399,18 @@ def render_advanced_analytics(
                         title=tr("Return Correlation Heatmap (1Y daily)",
                                  "מפת מתאמים של תשואות (יומי, שנה)"),
                     )
-                    # On mobile: set a fixed min-width so the matrix is
-                    # readable and horizontally scrollable inside its container.
+                    # On mobile: fixed large size so cells are readable; container scrolls.
                     n_assets = len(corr.columns)
-                    cell_px = 52 if is_mobile else 60
-                    heat_min_px = max(300, n_assets * cell_px)
+                    cell_px = 70 if is_mobile else 60
+                    heat_w = max(600, n_assets * cell_px + 80) if is_mobile else None
+                    heat_h = max(500, n_assets * cell_px + 100) if is_mobile else None
                     heat_fig.update_layout(
                         template=template,
-                        margin=dict(l=10, r=10, t=50, b=20),
+                        margin=dict(l=60, r=20, t=60, b=20),
                         coloraxis_colorbar=dict(title=""),
-                        width=800 if is_mobile else None,
-                        height=600 if is_mobile else None,
+                        width=heat_w,
+                        height=heat_h,
                     )
-                    if is_mobile:
-                        st.markdown(
-                            f"<div style='overflow-x:auto;-webkit-overflow-scrolling:touch;'>",
-                            unsafe_allow_html=True,
-                        )
                     # Desktop: constrain to 80% viewport using column spacers
                     if not is_mobile:
                         _, hm_col, _ = st.columns([1, 4, 1])
@@ -5389,6 +5421,12 @@ def render_advanced_analytics(
                                 theme="streamlit",
                             )
                     else:
+                        # Wrap in a scrollable container so the full chart is accessible
+                        st.markdown(
+                            f"<div style='overflow-x:auto;overflow-y:hidden;"
+                            f"-webkit-overflow-scrolling:touch;width:100%;'>",
+                            unsafe_allow_html=True,
+                        )
                         st.plotly_chart(
                             _apply_plotly_theme(heat_fig, is_dark, is_mobile),
                             use_container_width=False,
