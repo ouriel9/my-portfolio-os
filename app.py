@@ -5455,8 +5455,8 @@ def render_advanced_analytics(
                             theme="streamlit",
                         )
                         st.markdown("</div>", unsafe_allow_html=True)
-            except Exception:
-                pass
+            except Exception as _hm_exc:
+                st.caption(f"⚠️ Heatmap error: {_hm_exc}")
 
     # Monte Carlo projection (1 year)
     try:
@@ -6342,9 +6342,10 @@ def main() -> None:
             # ── Treemap: at-a-glance allocation + P/L color overlay ──
             if not summary.empty and float(summary["Value_ILS"].sum()) > 0:
                 tm_src = summary.copy()
-                tm_src["Yield_ILS_Pct"] = tm_src["Yield_ILS"] * 100.0
+                # Use origin-currency yield (not ILS-converted) for the color axis
+                tm_src["Yield_Origin_Pct"] = tm_src["Yield_Origin"] * 100.0
                 # Pre-compute label so NaN yield (parent node) shows "" not "NaN%"
-                tm_src["_pct_str"] = tm_src["Yield_ILS_Pct"].apply(
+                tm_src["_pct_str"] = tm_src["Yield_Origin_Pct"].apply(
                     lambda x: f"{x:.1f}%" if pd.notna(x) else ""
                 )
                 try:
@@ -6352,21 +6353,35 @@ def main() -> None:
                         tm_src,
                         path=[px.Constant(tr("Portfolio", "תיק")), "Ticker"],
                         values="Value_ILS",
-                        color="Yield_ILS_Pct",
+                        color="Yield_Origin_Pct",
                         color_continuous_scale=["#dc2626", "#f59e0b", "#16a34a"],
                         color_continuous_midpoint=0,
-                        title=tr("Portfolio Treemap (size = value · color = yield)",
-                                 "מפת חום של התיק (גודל = שווי · צבע = תשואה)"),
+                        title=tr("Portfolio Treemap (size = value · color = origin yield)",
+                                 "מפת חום של התיק (גודל = שווי · צבע = תשואה במטבע מקור)"),
                         template=template,
                         custom_data=["_pct_str"],
-                        hover_data={"Value_ILS": ":,.0f", "Yield_ILS_Pct": ":.2f"},
+                        hover_data={"Value_ILS": ":,.0f", "Yield_Origin_Pct": ":.2f"},
                     )
                     fig_tree.update_traces(
                         texttemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{customdata[0]}",
                         textposition="middle center",
                     )
-                    fig_tree.update_layout(margin=dict(l=10, r=10, t=50, b=10),
-                                           coloraxis_colorbar=dict(title="%"))
+                    # On mobile: move colorbar below the chart to free horizontal space
+                    if is_mobile:
+                        tree_colorbar = dict(
+                            orientation="h", x=0.5, y=-0.08,
+                            xanchor="center", yanchor="top",
+                            title=dict(text="%", side="bottom"),
+                            thickness=12, len=0.75,
+                        )
+                        tree_margin = dict(l=10, r=10, t=50, b=70)
+                    else:
+                        tree_colorbar = dict(title="%")
+                        tree_margin = dict(l=10, r=10, t=50, b=10)
+                    fig_tree.update_layout(
+                        margin=tree_margin,
+                        coloraxis_colorbar=tree_colorbar,
+                    )
                     st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", use_container_width=True)
                 except Exception:
                     pass
