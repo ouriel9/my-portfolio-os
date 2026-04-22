@@ -854,33 +854,32 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         h3 {{font-size: 1.1rem !important; margin: 0.16rem 0 0.28rem !important; line-height: 1.2 !important;}}
 
         /* ══ ANTI-SQUISH TABLES ══════════════════════════════════════════════
-           Scoped with :has() so overflow-x:auto only applies to containers
-           that actually hold a dataframe — NOT headings or other elements.  */
+           Scroll is ONLY on the dataframe element itself.
+           Parent containers get overflow-x:visible so they don't clip the
+           table without creating their own competing scroll region.          */
         [data-testid="stDataFrame"],
         [data-testid="stTable"] {{
             overflow-x: auto !important;
             -webkit-overflow-scrolling: touch !important;
-            max-width: 100vw !important;
             display: block !important;
         }}
-        /* Only the direct container of a dataframe gets the scroll wrapper */
-        .element-container:has([data-testid="stDataFrame"]),
-        .stElementContainer:has([data-testid="stDataFrame"]),
-        [data-testid="stElementContainer"]:has([data-testid="stDataFrame"]) {{
-            overflow-x: auto !important;
-            -webkit-overflow-scrolling: touch !important;
-            max-width: 100vw !important;
+        /* Prevent parent containers from clipping the table — NO overflow:auto here */
+        .element-container,
+        [data-testid="stElementContainer"],
+        [data-testid="stVerticalBlock"],
+        [data-testid="stVerticalBlockBorderWrapper"] {{
+            overflow-x: visible !important;
         }}
         /* The glide-data-grid canvas wrapper — allow scroll inward */
         [data-testid="stDataFrame"] > div,
         [data-testid="stDataFrame"] > div > div,
         [data-testid="stDataFrame"] > div > div > div {{
             overflow-x: auto !important;
-            max-width: 100vw !important;
+            -webkit-overflow-scrolling: touch !important;
         }}
         [data-testid="stDataFrame"] table,
         [data-testid="stTable"] table {{
-            min-width: 600px !important;
+            min-width: 550px !important;
             width: max-content !important;
             border-collapse: collapse !important;
         }}
@@ -889,7 +888,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stTable"] th,
         [data-testid="stTable"] td {{
             white-space: nowrap !important;
-            min-width: 100px !important;
+            min-width: 90px !important;
             padding: 4px 8px !important;
             font-size: 11px !important;
         }}
@@ -4853,7 +4852,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
     cmds = [
         {"id": "nav-dashboard", "label": "דשבורד" if is_he else "Dashboard", "hint": "g d"},
         {"id": "nav-manage",    "label": "ניהול עסקאות" if is_he else "Trade Management", "hint": "g t"},
-        {"id": "nav-risk",      "label": "סיכונים" if is_he else "Risk", "hint": "g r"},
+        {"id": "nav-risk",      "label": "סיכונים ופיפו" if is_he else "Risk & FIFO", "hint": "g r"},
         {"id": "nav-quality",   "label": "בקרת נתונים" if is_he else "Data Quality", "hint": "g q"},
         {"id": "toggle-theme",  "label": "החלפת ערכת נושא" if is_he else "Toggle theme", "hint": "t"},
         {"id": "focus-search",  "label": "חיפוש" if is_he else "Focus search", "hint": "/"},
@@ -5402,15 +5401,33 @@ def render_advanced_analytics(
                     # On mobile: fixed large size so cells are readable; container scrolls.
                     n_assets = len(corr.columns)
                     cell_px = 70 if is_mobile else 60
-                    heat_w = max(600, n_assets * cell_px + 80) if is_mobile else None
-                    heat_h = max(500, n_assets * cell_px + 100) if is_mobile else None
-                    heat_fig.update_layout(
+                    heat_w = max(320, n_assets * cell_px + 40) if is_mobile else None
+                    # Extra height on mobile for colorbar below chart
+                    heat_h = max(320, n_assets * cell_px + (120 if is_mobile else 80)) if is_mobile else None
+
+                    # Base layout
+                    heat_layout = dict(
                         template=template,
-                        margin=dict(l=60, r=20, t=60, b=20),
-                        coloraxis_colorbar=dict(title=""),
+                        margin=dict(l=50, r=10, t=60, b=20 if not is_mobile else 80),
                         width=heat_w,
                         height=heat_h,
                     )
+                    # On mobile: move colorbar BELOW the chart (horizontal orientation)
+                    # so the full matrix width is available for cells
+                    if is_mobile:
+                        heat_layout["coloraxis_colorbar"] = dict(
+                            orientation="h",
+                            x=0.5, y=-0.18,
+                            xanchor="center", yanchor="top",
+                            title=dict(text="", side="bottom"),
+                            thickness=12,
+                            len=0.75,
+                        )
+                    else:
+                        heat_layout["coloraxis_colorbar"] = dict(title="")
+
+                    heat_fig.update_layout(**heat_layout)
+
                     # Desktop: constrain to 80% viewport using column spacers
                     if not is_mobile:
                         _, hm_col, _ = st.columns([1, 4, 1])
@@ -5421,10 +5438,15 @@ def render_advanced_analytics(
                                 theme="streamlit",
                             )
                     else:
-                        # Wrap in a scrollable container so the full chart is accessible
+                        # Returns are in each asset's origin currency (USD/ILS native prices)
+                        st.caption(tr(
+                            "Correlations computed on daily returns in each asset's native currency.",
+                            "המתאמים מחושבים על תשואות יומיות במטבע המקורי של כל נכס (USD/ILS).",
+                        ))
+                        # Wrap in a scrollable container so the full matrix is accessible
                         st.markdown(
-                            f"<div style='overflow-x:auto;overflow-y:hidden;"
-                            f"-webkit-overflow-scrolling:touch;width:100%;'>",
+                            "<div style='overflow-x:auto;overflow-y:hidden;"
+                            "-webkit-overflow-scrolling:touch;width:100%;'>",
                             unsafe_allow_html=True,
                         )
                         st.plotly_chart(
@@ -5853,7 +5875,7 @@ def main() -> None:
 
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
-    page_risk = tr("Risk", "סיכונים")
+    page_risk = tr("Risk & FIFO", "סיכונים ופיפו") if not _is_mobile_client() else tr("Risk", "סיכון")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_id_to_label = {
         "dashboard": page_dashboard,
