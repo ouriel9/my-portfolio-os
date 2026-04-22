@@ -5897,7 +5897,7 @@ def main() -> None:
         mobile_label_to_id = {
             tr("📊 Overview", "📊 סקירה"): "dashboard",
             tr("💼 Trades", "💼 עסקאות"): "manage",
-            tr("🛡 Reports", "🛡 דוחות"): "risk",
+            tr("🛡 Risk", "🛡 סיכון"): "risk",
             tr("📋 Data", "📋 נתונים"): "quality",
         }
         mobile_options = list(mobile_label_to_id.keys())
