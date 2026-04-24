@@ -459,6 +459,33 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         backdrop-filter: blur(8px) !important;
         -webkit-backdrop-filter: blur(8px) !important;
     }}
+    /* ── Pinned navigation inside pages (tabs / sub-nav) ──
+       Desktop: header is position:fixed with height:0, so stTabs sticks at 0.
+       Mobile: an offset below the app-header-wrap is applied inside the mobile
+       media-query further below. Lower z-index than header/top-nav so those
+       always win if stacks collide. */
+    [data-baseweb="tab-list"] {{
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 900 !important;
+        background: {metric_bg} !important;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border-bottom: 1px solid {metric_border} !important;
+    }}
+    /* ── Overlap shields: make sure charts, dataframes and tooltip badges
+           never visually clip under the sticky header / nav.             ── */
+    [data-testid="stPlotlyChart"],
+    [data-testid="stDataFrame"],
+    [data-testid="stTable"] {{
+        position: relative !important;
+        z-index: 1 !important;
+    }}
+    /* Ensure metric tiles keep gap below sticky top nav on every page. */
+    [data-testid="stMetric"] {{
+        position: relative !important;
+        z-index: 1 !important;
+    }}
     footer,
     footer *,
     [data-testid="stFooter"],
@@ -716,11 +743,28 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             padding-top: 0rem !important;
             margin-top: 0rem !important;
         }}
+        /* Desktop header: transparent and zero-height, but KEEP the toolbar
+           actions (3-dots Main Menu, Rerun, Clear Cache) floating at top-right.
+           The prior rule `display:none` accidentally removed the Main Menu. */
         header[data-testid="stHeader"] {{
-            display: none !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            border: none !important;
             height: 0 !important;
             min-height: 0 !important;
-            overflow: hidden !important;
+            overflow: visible !important;
+            position: fixed !important;
+            top: 0 !important; right: 0 !important; left: 0 !important;
+            z-index: 999999 !important;
+            pointer-events: none !important;
+        }}
+        header[data-testid="stHeader"] button,
+        header[data-testid="stHeader"] [data-testid="stToolbar"],
+        header[data-testid="stHeader"] [data-testid="stToolbarActions"],
+        header[data-testid="stHeader"] [data-testid="stMainMenuButton"] {{
+            pointer-events: auto !important;
+            visibility: visible !important;
+            opacity: 1 !important;
         }}
         h1, h2, h3, h4, h5, h6 {{
             direction: {direction} !important;
@@ -770,6 +814,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         .pm-metric-grid {{grid-template-columns: repeat(2, minmax(0, 1fr));}}
     }}
     @media (max-width: 768px) {{
+        /* Mobile: sticky tabs need to sit BELOW the header + top nav to
+           avoid overlapping. Compute offset so chart/tab content clears
+           both the app-header-wrap and the 4-pill nav radio. */
+        [data-baseweb="tab-list"] {{
+            top: calc(6.2rem + env(safe-area-inset-top, 0px)) !important;
+        }}
         body, [data-testid="stAppViewContainer"] {{
             direction: {direction} !important;
             text-align: {align} !important;
@@ -2246,14 +2296,27 @@ def inject_client_fixes() -> None:
                     height: auto !important;
                   }
                 }
-                /* Desktop: hide header completely — title is the strict top boundary */
+                /* Desktop: header goes transparent & zero-height, but toolbar
+                   (3-dots Main Menu) stays tappable. Title hugs the top. */
                 @media (min-width: 768px) {
                   [data-testid="stHeader"],
                   header[data-testid="stHeader"] {
-                    display: none !important;
+                    background: transparent !important;
+                    box-shadow: none !important;
+                    border: none !important;
                     height: 0 !important;
                     min-height: 0 !important;
-                    overflow: hidden !important;
+                    overflow: visible !important;
+                    position: fixed !important;
+                    top: 0 !important; right: 0 !important; left: 0 !important;
+                    z-index: 999999 !important;
+                    pointer-events: none !important;
+                  }
+                  header[data-testid="stHeader"] button,
+                  header[data-testid="stHeader"] [data-testid="stToolbar"],
+                  header[data-testid="stHeader"] [data-testid="stToolbarActions"],
+                  header[data-testid="stHeader"] [data-testid="stMainMenuButton"] {
+                    pointer-events: auto !important;
                   }
                   section.main > div.block-container,
                   [data-testid="stMainBlockContainer"],
@@ -4764,7 +4827,8 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         .app-sub-title {{ font-size: 0.84rem !important; color: var(--pp2-muted) !important; }}
 
         /* Top floating page-nav radio (4- or 5-pill segmented control) — glass + shadow.
-           Matches either the 4-pill (legacy) or 5-pill (Sim added) top nav. */
+           Matches either the 4-pill (current) or 5-pill (legacy) top nav.
+           Pinned to viewport top so navigation is reachable while scrolling. */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child),
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child) {{
             background: var(--pp2-surface-strong) !important;
@@ -4772,6 +4836,11 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             -webkit-backdrop-filter: blur(18px) saturate(1.15) !important;
             box-shadow: 0 8px 24px -10px rgba(15,23,42,0.28) !important;
             border: 1px solid var(--pp2-border) !important;
+            position: sticky !important;
+            top: calc(3.2rem + env(safe-area-inset-top, 0px)) !important;
+            z-index: 998 !important;
+            padding: 6px 8px !important;
+            border-radius: 14px !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked),
@@ -5348,45 +5417,60 @@ def render_advanced_analytics(
 
     gc1, gc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
     with gc1:
-        _chart_help("Portfolio Health Score: a composite 0-100 score based on Sharpe, drawdown, volatility, CAGR, diversification (HHI) and VaR.",
-                    "ציון בריאות התיק: ציון בין 0 ל-100 שמסכם את מצב הסיכון של התיק. הוא מחושב מ-6 מדדים: יחס שארפ (תשואה לעומת סיכון), עומק משיכה מקסימלי, תנודתיות שנתית, CAGR (צמיחה שנתית), ריכוזיות (HHI) ו-VaR. ציון מעל 75 = מצוין, 55-75 = טוב, 40-55 = מאוזן, מתחת ל-40 = דורש תשומת לב.", language)
+        _chart_help(
+            "Portfolio Health Score: a composite 0–100 score that synthesises SIX pillars into one headline number: (1) Sharpe — risk-adjusted return · (2) Max Drawdown — worst historical pain · (3) Annual Volatility — scale of daily swings · (4) CAGR — compounded annual growth · (5) HHI — how diversified you are · (6) VaR 95% — potential daily loss. Each pillar is normalised 0–100 against healthy benchmarks, then averaged with risk-weighted emphasis. Bands: 75+ = excellent · 55–75 = healthy · 40–55 = balanced, room to optimise · <40 = review allocation, diversification, or drawdown control. This is an educational overview — always cross-check individual pillars before acting.",
+            "ציון בריאות התיק: ציון מרוכב 0-100 המסכם שישה עמודי-תווך למספר אחד: (1) שארפ — תשואה מתואמת סיכון · (2) משיכה מקסימלית — הכאב ההיסטורי החריף · (3) תנודתיות שנתית — עוצמת התנודות היומיות · (4) CAGR — צמיחה שנתית מורכבת · (5) HHI — ריכוזיות ופיזור · (6) VaR 95% — ההפסד היומי הפוטנציאלי. כל עמוד מנורמל 0-100 אל מול סף בריא, וממוצע משוקלל לפי דגש סיכון. טווחים: 75+ = מצוין · 55-75 = בריא · 40-55 = מאוזן, יש מקום לשיפור · <40 = יש לבחון הקצאה, פיזור או בקרת משיכה. זהו סיכום חינוכי — תמיד להצליב מול המדדים הבודדים לפני פעולה.",
+            language,
+        )
         st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
     with gc2:
         kpi_row = st.columns(3)
         kpi_row[0].metric(
             tr("Daily VaR 95%", "VaR יומי 95%"), f"{var_95:.2%}",
             tr("Potential loss / day", "הפסד פוטנציאלי ליום"),
-            help=tr("Value at Risk: the maximum daily loss expected with 95% confidence based on 1-year history.",
-                    "ה-VaR: ההפסד היומי המרבי הצפוי ברמת ביטחון של 95% על בסיס היסטוריה של שנה."),
+            help=tr(
+                "Value-at-Risk (VaR 95%). On a 'normal' trading day there is a 95% chance your loss will NOT exceed this percentage — and a 5% chance it will be worse. Example: a 2% VaR on a ₪100,000 portfolio means that on 1 day in 20 you could lose more than ₪2,000. Computed as the 5th percentile of the last 12 months of daily returns. Use it to sanity-check the size of daily swings; pair it with CVaR (below) to understand how bad those worst-5% days actually get.",
+                "VaR (ערך בסיכון) ברמת ביטחון 95%: ביום מסחר 'רגיל' יש 95% סיכוי שההפסד לא יעלה על האחוז הזה — וב-5% מהימים ההפסד יהיה גרוע יותר. דוגמה: VaR של 2% על תיק בגודל ₪100,000 משמעותו שפעם ב-20 ימים אפשר להפסיד יותר מ-₪2,000. מחושב כאחוזון ה-5 של תשואות יומיות בשנה האחרונה. משמש לבדיקת סדר-גודל התנודות היומיות; יש לצרף אליו CVaR להבנת חומרת 5% הימים הקשים.",
+            ),
         )
         kpi_row[1].metric(
             tr("Daily CVaR 95%", "CVaR יומי 95%"), f"{cvar_95:.2%}",
             tr("Expected tail loss", "הפסד ממוצע בזנב"),
-            help=tr("Conditional VaR (Expected Shortfall): the average loss on the worst 5% of days.",
-                    "CVaR: ממוצע ההפסדים ב-5% הימים הגרועים ביותר. מדד שמרני יותר מ-VaR."),
+            help=tr(
+                "Conditional VaR / Expected Shortfall (CVaR 95%). Answers: 'when things do go badly, how bad on average?' It is the AVERAGE loss on the worst 5% of days — the 'tail' beyond VaR. CVaR is always ≥ VaR in magnitude and is the metric required by Basel III banking regulations because it better captures extreme (black-swan) risk. Rule of thumb: if CVaR is dramatically larger than VaR, your returns have a 'fat tail' — rare events tend to be catastrophic rather than just bad.",
+                "CVaR / Expected Shortfall (תוחלת הפסד בזנב) ברמת 95%: עונה על 'כאשר רע, כמה רע בממוצע?'. זהו ההפסד הממוצע ב-5% הימים הגרועים ביותר — ה'זנב' שמעבר ל-VaR. CVaR תמיד גדול או שווה ל-VaR במוחלט, והוא המדד שנדרש בתקנות באזל III לבנקים, כי הוא תופס טוב יותר אירועי קיצון ('ברבור שחור'). כלל אצבע: אם CVaR גדול בהרבה מ-VaR — לתשואות יש 'זנב שמן', כלומר אירועים נדירים נוטים להיות הרסניים ולא רק רעים.",
+            ),
         )
         kpi_row[2].metric(
             tr("Sortino", "סורטינו"), f"{sortino:.2f}",
-            help=tr("Sortino Ratio: return per unit of downside risk. Higher = better risk-adjusted return.",
-                    "יחס סורטינו: תשואה ביחס לסיכון ירידה בלבד. גבוה יותר = תשואה טובה יותר לסיכון."),
+            help=tr(
+                "Sortino Ratio = (Return − Risk-Free Rate) / Downside Deviation. Unlike Sharpe, it punishes DOWN moves only — upside volatility is considered 'good volatility' and ignored. Interpretation: <1 weak · 1–2 OK · 2–3 good · >3 excellent. A Sortino much higher than Sharpe means your portfolio's volatility is asymmetric: most 'noise' comes from up-moves (which is the healthy kind). For long-only equity portfolios, 1.5–2.5 is a realistic target.",
+                "יחס סורטינו = (תשואה − ריבית חסרת סיכון) / סטיית ירידה. בניגוד לשארפ — מעניש רק תנועות ירידה; תנודתיות בעליות נחשבת 'תנודתיות טובה' ומוסרת מהמשוואה. פרשנות: <1 חלש · 1-2 סביר · 2-3 טוב · >3 מצוין. סורטינו גבוה משמעותית משארפ מעיד על תיק שבו רוב ה'רעש' מגיע מעליות — וזה סימן בריא. ליעד עבור תיקי מניות long-only: 1.5-2.5.",
+            ),
         )
         kpi_row2 = st.columns(3)
         kpi_row2[0].metric(
             tr("Calmar", "קלמאר"), f"{calmar:.2f}",
-            help=tr("Calmar Ratio: annualized return divided by maximum drawdown. Higher = better recovery.",
-                    "יחס קלמאר: תשואה שנתית חלקי הירידה המקסימלית. גבוה יותר = התאוששות טובה יותר."),
+            help=tr(
+                "Calmar Ratio = CAGR / |Max Drawdown|. Measures how much return you earn per unit of the worst pain you had to sit through. A Calmar of 0.5 means a 10% annual return cost you a 20% drawdown at some point. Interpretation: <0.5 weak · 0.5–1.0 acceptable · 1.0–3.0 strong · >3.0 exceptional (hedge-fund tier). Unlike Sharpe/Sortino which use volatility, Calmar uses ACTUAL HISTORICAL PAIN — many investors find it more intuitive because you can 'feel' drawdowns.",
+                "יחס קלמאר = תשואה שנתית (CAGR) חלקי הירידה המרבית המוחלטת. מודד כמה תשואה מקבלים עבור כל יחידת 'כאב' שחווינו. קלמאר של 0.5 אומר שעל 10% רווח שנתי שילמת ירידה של 20% בדרך. פרשנות: <0.5 חלש · 0.5-1.0 סביר · 1.0-3.0 חזק · >3.0 יוצא-דופן (רמת קרן גידור). בניגוד לשארפ/סורטינו שמשתמשים בתנודתיות — קלמאר משתמש ב'כאב אמיתי' היסטורי, ולכן רבים מרגישים אותו אינטואיטיבי יותר.",
+            ),
         )
         kpi_row2[1].metric(
             tr("Concentration (HHI)", "ריכוזיות (HHI)"), f"{hhi:.2f}",
             tr("0=diversified · 1=single-name", "0=מפוזר · 1=נכס יחיד"),
-            help=tr("Herfindahl-Hirschman Index: measures portfolio concentration. 0 = fully diversified, 1 = single asset.",
-                    "מדד הירפינדאל-הירשמן: מודד ריכוזיות התיק. 0 = פיזור מלא, 1 = נכס יחיד בלבד."),
+            help=tr(
+                "Herfindahl-Hirschman Index (HHI) = Σ (weight_i)². Pure math: if you hold 4 assets at 25% each → HHI = 4×0.0625 = 0.25. If you hold 1 asset at 100% → HHI = 1.0. Regulatory/industry anchors: <0.15 = competitive/diversified · 0.15–0.25 = moderately concentrated · >0.25 = concentrated (the US DOJ's antitrust threshold). For a retail portfolio, aim for <0.20. HHI ignores correlation — you can have low HHI but if all assets are tech stocks, you're effectively concentrated. Always pair with the correlation heatmap.",
+                "מדד הירפינדאל-הירשמן (HHI) = סכום (משקל_i)². מתמטיקה: אם מחזיקים 4 נכסים ב-25% כל אחד → HHI = 4×0.0625 = 0.25. אם נכס יחיד ב-100% → HHI = 1.0. עוגני פרשנות: <0.15 = מפוזר · 0.15-0.25 = ריכוזיות בינונית · >0.25 = ריכוזיות גבוהה (הסף לאכיפה אנטי-מונופוליסטית בארה\"ב). לתיק אישי מומלץ לחתור ל-<0.20. המדד מתעלם ממתאמים — אפשר HHI נמוך אבל אם כל הנכסים מניות טכנולוגיה אתה למעשה מרוכז. תמיד יש לצרף את מפת המתאמים.",
+            ),
         )
         kpi_row2[2].metric(
             tr("Beta vs S&P 500", "ביטא מול S&P 500"),
             ("—" if not np.isfinite(beta_val) else f"{beta_val:.2f}"),
-            help=tr("Beta: sensitivity of the portfolio to S&P 500 moves. Beta=1 means it moves with the market; <1 = less volatile.",
-                    "ביטא: רגישות התיק לתנועות ה-S&P 500. ביטא=1 מתנהג כמו השוק; <1 = פחות תנודתי."),
+            help=tr(
+                "Beta (β) measures how sensitive your portfolio is to moves in the S&P 500. Formula: β = Cov(portfolio, SPY) / Var(SPY). Interpretation: β=1.0 moves 1-for-1 with the market · β=1.5 amplifies market moves by +50% (aggressive) · β=0.5 absorbs half the market's move (defensive) · β<0 moves AGAINST the market (hedge). A β of 2 in a −10% market month typically means ≈ −20%. Note: β only captures LINEAR correlation with SPY — idiosyncratic (stock-specific) risk and tail-risk are NOT captured here.",
+                "ביטא (β) מודדת את הרגישות של התיק לתנועות ה-S&P 500. נוסחה: β = קו-וריאנס(תיק, SPY) / שונות(SPY). פרשנות: β=1.0 תנועה זהה לשוק · β=1.5 מעצימה את תנועות השוק ב-50% (אגרסיבי) · β=0.5 סופגת חצי מתנועת השוק (דפנסיבי) · β<0 נעה הפוך לשוק (גידור). ביטא 2 בחודש של ירידה שוקית של 10% משמעותה ≈ 20% ירידה. שים לב: ביטא תופסת רק מתאם ליניארי עם SPY — סיכון ייחודי (specific risk) וסיכוני זנב אינם כלולים.",
+            ),
         )
     try:
         style_metric_cards(border_left_color=score_color, border_radius_px=12, box_shadow=True)
@@ -5663,6 +5747,40 @@ def render_advanced_analytics(
 # ════════════════════════════════════════════════════════════════════════
 # SIMULATOR FEATURE — long-term projection + Safe Withdrawal (pension) model
 # ════════════════════════════════════════════════════════════════════════
+SIM_PREFS_FILE = Path(__file__).resolve().parent / "sim_user_prefs.json"
+_SIM_PERSISTED_KEYS = (
+    "sim_age_now", "sim_age_target",
+    "sim_initial_clean", "sim_annual_return",
+    "sim_monthly_contrib", "sim_lump_sum", "sim_lump_month",
+    "sim_swr", "sim_annual_inflation", "sim_mode_choice",
+)
+
+
+def load_sim_prefs() -> Dict[str, object]:
+    """Load previously saved simulator inputs from disk (per-user persistence)."""
+    if not SIM_PREFS_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(SIM_PREFS_FILE.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_sim_prefs(values: Mapping[str, object]) -> bool:
+    """Persist the simulator input snapshot atomically. Silent on failure so
+    a broken disk never crashes the UI."""
+    try:
+        safe = {k: v for k, v in values.items() if k in _SIM_PERSISTED_KEYS}
+        SIM_PREFS_FILE.write_text(
+            json.dumps(safe, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return True
+    except Exception:
+        return False
+
+
 def sim_project_portfolio(
     initial_capital: float,
     monthly_contribution: float,
@@ -5789,9 +5907,22 @@ def render_simulator_page(
     """
     st.markdown(f"### 🧮 {tr('Simulator', 'סימולטור')}")
     st.caption(tr(
-        "Long-term growth projection with monthly compounding, optional lump-sum and a sustainable monthly pension.",
-        "הדמיית צמיחה ארוכת-טווח עם ריבית דריבית חודשית, תרומה חד-פעמית אפשרית ופנסיה חודשית ברת-קיימא.",
+        "Long-term growth projection with monthly compounding, optional lump-sum, inflation adjustment and a sustainable monthly pension. Your inputs are saved automatically.",
+        "הדמיית צמיחה ארוכת-טווח עם ריבית דריבית חודשית, תרומה חד-פעמית אפשרית, התאמה לאינפלציה ופנסיה חודשית ברת-קיימא. הקלטים נשמרים אוטומטית.",
     ))
+
+    # ── Hydrate persisted inputs from disk (per-user saved state) on the
+    # first visit during this browser session. We gate with a sentinel so a
+    # stale disk-value doesn't keep overwriting the user's live edits.
+    if not st.session_state.get("_sim_prefs_hydrated", False):
+        try:
+            _prefs = load_sim_prefs()
+            for _k, _v in _prefs.items():
+                if _k in _SIM_PERSISTED_KEYS and _k not in st.session_state:
+                    st.session_state[_k] = _v
+        except Exception:
+            pass
+        st.session_state["_sim_prefs_hydrated"] = True
 
     try:
         tv = float(total_value or 0.0)
@@ -5939,8 +6070,30 @@ def render_simulator_page(
             min_value=3.0, max_value=5.0,
             step=0.25,
             key="sim_swr",
-            help=tr("Trinity-study rule of thumb. 4% is the classic default.",
-                    "כלל אצבע ממחקר Trinity. 4% הוא ברירת-המחדל הקלאסית."),
+            help=tr(
+                "Trinity-study rule of thumb: the % of your final balance you can safely withdraw EVERY YEAR without depleting the portfolio over a 30-year retirement. 4% is the classic default; 3.5% is conservative (factors in lower future returns); 5% is aggressive (high sequence-of-returns risk). The withdrawal amount is adjusted for inflation each year. Derived from historical 30-year rolling windows of a 50/50 stock/bond portfolio that survived 95%+ of cases at 4%.",
+                "כלל אצבע ממחקר Trinity: האחוז מהיתרה הסופית שניתן למשוך כל שנה מבלי לרוקן את התיק לאורך 30 שנות פרישה. 4% הוא ברירת-המחדל הקלאסית; 3.5% שמרני (בהנחת תשואות עתידיות נמוכות); 5% אגרסיבי (סיכון 'סדר התשואות' גבוה). סכום המשיכה מותאם לאינפלציה מדי שנה. נגזר מחלונות גלגול של 30 שנה היסטוריים של תיק 50/50 מניות/אג\"ח ששרדו מעל 95% מהתרחישים ב-4%.",
+            ),
+        ))
+
+        # ── NEW: Annual Inflation (converts nominal → REAL final value) ──
+        if "sim_annual_inflation" not in st.session_state:
+            st.session_state["sim_annual_inflation"] = 3.0
+        inflation_pct = float(st.number_input(
+            tr("Annual inflation (%)", "אינפלציה שנתית (%)"),
+            min_value=0.0, max_value=20.0,
+            step=0.25,
+            key="sim_annual_inflation",
+            help=tr(
+                "Discounts future nominal values back into TODAY's purchasing power. "
+                "If inflation runs at 3% for 30 years, ₪1,000,000 nominal will buy roughly what ₪412,000 buys today. "
+                "Israel CPI long-run ≈ 2–3% · USA CPI long-run ≈ 3% · hyper-inflation scenarios 10%+. "
+                "Set to 0 for a pure NOMINAL projection (no adjustment).",
+                "היוון (discount) של שוויים עתידיים נומינליים לכוח הקנייה של היום. "
+                "אם האינפלציה 3% לאורך 30 שנה, ₪1,000,000 נומינליים יקנו בערך מה ש-₪412,000 קונים היום. "
+                "אינפלציה ישראלית ארוכת-טווח ≈ 2-3% · אינפלציה אמריקאית ארוכת-טווח ≈ 3% · היפר-אינפלציה 10%+. "
+                "הזן 0 לתחזית נומינלית טהורה (ללא התאמה).",
+            ),
         ))
 
     # ── Projection ────────────────────────────────────────────────────
@@ -5962,14 +6115,31 @@ def render_simulator_page(
     annual_pension = monthly_pension * 12.0
     lump_uplift = final_with - final_without
 
-    # ── KPI row ───────────────────────────────────────────────────────
+    # Inflation-adjusted ("real") equivalents in today's purchasing power.
+    _infl_factor = (1.0 + inflation_pct / 100.0) ** float(years_total) if inflation_pct > 0 else 1.0
+    real_final = final_with / _infl_factor
+    real_monthly_pension = monthly_pension / _infl_factor
+    real_compound_gains = compound_gains / _infl_factor
+
+    # ── Persist on every rerun (save-on-change, no sidebar button) ──
+    try:
+        save_sim_prefs({k: st.session_state.get(k) for k in _SIM_PERSISTED_KEYS})
+    except Exception:
+        pass
+
+    # ── KPI row — NOMINAL ─────────────────────────────────────────────
     k1, k2, k3, k4 = st.columns(4)
+    _real_delta_final = (
+        f"≈ ₪{real_final:,.0f} " + tr("in today's ₪", "בכוח קנייה של היום")
+    ) if inflation_pct > 0 else None
     k1.metric(
         tr("Final value", "שווי סופי"),
         f"₪{final_with:,.0f}",
-        delta=(f"+₪{lump_uplift:,.0f} " + tr("from lump", "מחד-פעמית")) if lump_uplift > 0 else None,
-        help=tr("Projected balance at target age (with lump sum).",
-                "יתרה חזויה בגיל היעד (כולל הפקדה חד-פעמית)."),
+        delta=_real_delta_final,
+        help=tr(
+            "Nominal projected balance at target age (with lump sum). The delta shows the REAL value in today's purchasing power after deflating by the inflation rate.",
+            "יתרה נומינלית חזויה בגיל היעד (כולל הפקדה חד-פעמית). הדלתא מציגה את השווי הריאלי בכוח הקנייה של היום לאחר היוון באינפלציה.",
+        ),
     )
     k2.metric(
         tr("Total contributed", "סך תרומות"),
@@ -5977,19 +6147,36 @@ def render_simulator_page(
         help=tr("Initial capital + monthly contributions + lump sum.",
                 "הון התחלתי + הפקדות חודשיות + הפקדה חד-פעמית."),
     )
+    _real_delta_gains = (
+        f"≈ ₪{real_compound_gains:,.0f} " + tr("real", "ריאלי")
+    ) if inflation_pct > 0 else None
     k3.metric(
         tr("Compound gains", "רווחי ריבית דריבית"),
         f"₪{compound_gains:,.0f}",
-        help=tr("Growth beyond the money you put in. 'Interest on interest.'",
-                "הצמיחה מעבר לסכום שהפקדת. 'ריבית על ריבית.'"),
+        delta=_real_delta_gains,
+        help=tr(
+            "Growth beyond the money you put in — 'interest on interest'. Real delta discounts inflation over the horizon.",
+            "הצמיחה מעבר לסכום שהפקדת — 'ריבית על ריבית'. הדלתא הריאלית מבטלת את השפעת האינפלציה לאורך התקופה.",
+        ),
     )
+    _real_delta_pension = (
+        f"≈ ₪{real_monthly_pension:,.0f} " + tr("in today's ₪", "בכוח קנייה של היום")
+    ) if inflation_pct > 0 else f"₪{annual_pension:,.0f} / {tr('year', 'שנה')}"
     k4.metric(
         tr("Monthly pension (SWR)", "פנסיה חודשית (SWR)"),
         f"₪{monthly_pension:,.0f}",
-        delta=f"₪{annual_pension:,.0f} / {tr('year', 'שנה')}",
-        help=tr("Sustainable monthly withdrawal at the chosen SWR.",
-                "משיכה חודשית ברת-קיימא לפי שיעור המשיכה שנבחר."),
+        delta=_real_delta_pension,
+        help=tr("Sustainable monthly withdrawal at the chosen SWR. Real equivalent shown in today's purchasing power when inflation > 0.",
+                "משיכה חודשית ברת-קיימא לפי שיעור המשיכה שנבחר. השווי הריאלי מוצג בכוח הקנייה של היום כאשר האינפלציה גדולה מ-0."),
     )
+
+    # Real-value context banner
+    if inflation_pct > 0:
+        _real_pct_loss = (1.0 - 1.0 / _infl_factor) * 100.0
+        st.caption(tr(
+            f"💡 With {inflation_pct:.2f}% annual inflation over {years_total:.1f} years, nominal value loses ≈ {_real_pct_loss:.1f}% of its purchasing power. The 'real' (in today's ₪) equivalent is what your future self will actually feel.",
+            f"💡 באינפלציה של {inflation_pct:.2f}% לשנה לאורך {years_total:.1f} שנים, השווי הנומינלי מאבד כ-{_real_pct_loss:.1f}% מכוח הקנייה. השווי הריאלי (בכוח הקנייה של היום) הוא מה שתרגיש באמת בעתיד.",
+        ))
 
     # ── Chart ─────────────────────────────────────────────────────────
     chart_height = 340 if is_mobile else 420
@@ -6122,6 +6309,28 @@ def render_simulator_page(
         "⚠ ההדמיה היא לצורכי הדגמה בלבד — אינה מהווה ייעוץ השקעות. תשואות בפועל עשויות להשתנות.",
     ))
 
+    # Reset stored inputs (button lives at the bottom since it's rarely needed).
+    _reset_cols = st.columns([3, 1]) if not is_mobile else (st.container(), st.container())
+    with _reset_cols[1]:
+        if st.button(
+            tr("🔄 Reset inputs", "🔄 איפוס קלטים"),
+            key="sim_reset_prefs",
+            use_container_width=True,
+            help=tr(
+                "Clear the saved simulator values and restore factory defaults.",
+                "איפוס הערכים השמורים של הסימולטור לברירות-המחדל.",
+            ),
+        ):
+            for _k in _SIM_PERSISTED_KEYS:
+                st.session_state.pop(_k, None)
+            st.session_state.pop("_sim_prefs_hydrated", None)
+            try:
+                if SIM_PREFS_FILE.exists():
+                    SIM_PREFS_FILE.unlink()
+            except Exception:
+                pass
+            st.rerun()
+
 
 def main() -> None:
     st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="auto")
@@ -6133,34 +6342,57 @@ def main() -> None:
     st.markdown(
         """
         <style>
-        /* ── Keep Streamlit's top header VISIBLE (3-dots menu + sidebar toggle)
-             but remove its decorative divider & zero-out footer.            ── */
+        /* ── Keep Streamlit's top header VISIBLE — it hosts the 3-dots menu
+             (Clear Cache / Rerun / Settings) and sidebar-toggle. On desktop
+             we make the header *transparent + floating* so it doesn't push
+             content down but the toolbar remains tappable. On mobile it
+             stays as a regular bar.                                        ── */
         footer, [data-testid="stDecoration"] {
             display: none !important; visibility: hidden !important; height: 0 !important;
         }
-        /* Hide the Streamlit native top header on desktop — title becomes the strict top boundary.
-           On mobile the header is kept (toolbar/hamburger needed there). */
+        /* Desktop: transparent, zero-height header — but *keep* its toolbar
+           actions visible and floating at the top-right corner. */
         @media (min-width: 768px) {
             header[data-testid="stHeader"] {
-                display: none !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                border: none !important;
                 height: 0 !important;
                 min-height: 0 !important;
-                overflow: hidden !important;
+                /* overflow: visible so the 3-dots button and sidebar-toggle
+                   remain clickable even though the bar itself is zero-height */
+                overflow: visible !important;
+                position: fixed !important;
+                top: 0 !important;
+                right: 0 !important;
+                left: 0 !important;
+                z-index: 999999 !important;
+                pointer-events: none !important;   /* bar itself doesn't block clicks */
+            }
+            header[data-testid="stHeader"] [data-testid="stToolbar"],
+            header[data-testid="stHeader"] [data-testid="stToolbarActions"],
+            header[data-testid="stHeader"] [data-testid="stMainMenuButton"],
+            header[data-testid="stHeader"] button {
+                pointer-events: auto !important;   /* but its buttons do */
             }
         }
-        /* Explicitly ensure the collapse/expand sidebar control stays visible
-           in all viewports (this was accidentally hidden before). */
+        /* Explicitly ensure the collapse/expand sidebar control AND the
+           3-dots Main-Menu stay visible in all viewports. */
         [data-testid="collapsedControl"],
         [data-testid="stSidebarCollapseButton"],
         [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stMainMenuButton"],
+        [data-testid="stToolbar"],
+        [data-testid="stToolbarActions"],
         button[aria-label*="sidebar"],
+        button[aria-label*="menu" i],
         button[kind="header"],
         #MainMenu {
             display: flex !important;
             visibility: visible !important;
             opacity: 1 !important;
             pointer-events: auto !important;
-            z-index: 9999 !important;
+            z-index: 999999 !important;
         }
 
         /* ── Strict upper bound: title hugs top ── */
@@ -6313,11 +6545,25 @@ def main() -> None:
                 padding-top: 0rem !important;
                 margin-top: 0rem !important;
             }
+            /* Header: transparent + zero-height but the 3-dots Main Menu
+               (Clear Cache / Rerun / Settings) stays floating at top-right */
             header[data-testid="stHeader"] {
-                display: none !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                border: none !important;
                 height: 0 !important;
                 min-height: 0 !important;
-                overflow: hidden !important;
+                overflow: visible !important;
+                position: fixed !important;
+                top: 0 !important; right: 0 !important; left: 0 !important;
+                z-index: 999999 !important;
+                pointer-events: none !important;
+            }
+            header[data-testid="stHeader"] button,
+            header[data-testid="stHeader"] [data-testid="stToolbar"],
+            header[data-testid="stHeader"] [data-testid="stToolbarActions"],
+            header[data-testid="stHeader"] [data-testid="stMainMenuButton"] {
+                pointer-events: auto !important;
             }
         }
         </style>
@@ -6496,32 +6742,58 @@ def main() -> None:
 
     if is_mobile:
         # ── Mobile: top segmented control for page nav ──
+        # Per UX review, 5 pills felt crowded — "Data" was moved to a dedicated
+        # sidebar button above the Data Connection Settings expander.
         mobile_label_to_id = {
             tr("📊 Overview", "📊 סקירה"): "dashboard",
             tr("💼 Trades", "💼 עסקאות"): "manage",
             tr("🛡 Risk", "🛡 סיכון"): "risk",
             tr("🧮 Sim", "🧮 סימולטור"): "simulator",
-            tr("📋 Data", "📋 נתונים"): "quality",
         }
         mobile_options = list(mobile_label_to_id.keys())
-        active_mobile_index = 0
-        for i, lbl in enumerate(mobile_options):
-            if mobile_label_to_id.get(lbl) == active_page_id:
-                active_mobile_index = i
-                break
-        # Sync widget state BEFORE creating the widget so single-click works.
-        _mobile_nav_key = "mobile_page_nav_radio"
-        _expected_label = mobile_options[active_mobile_index]
-        if st.session_state.get(_mobile_nav_key) not in mobile_options:
-            st.session_state[_mobile_nav_key] = _expected_label
-        page_choice = st.radio(
-            tr("Page", "עמוד"),
-            mobile_options,
-            horizontal=True,
-            label_visibility="collapsed",
-            key=_mobile_nav_key,
-        )
-        active_page_id = mobile_label_to_id.get(page_choice, "dashboard")
+
+        # If we're on the "Data" page (entered via the sidebar button), show
+        # a compact breadcrumb + back button rather than the 4-pill radio so
+        # the page switcher doesn't force-override the selection.
+        if active_page_id == "quality":
+            brc1, brc2 = st.columns([4, 1])
+            with brc1:
+                st.markdown(
+                    f"<div style='display:flex;align-items:center;gap:8px;"
+                    f"padding:8px 12px;border-radius:10px;"
+                    f"background:rgba(99,102,241,0.08);"
+                    f"border:1px solid rgba(99,102,241,0.25);"
+                    f"font-weight:600;unicode-bidi:plaintext'>📋 "
+                    f"{tr('Data', 'נתונים')}</div>",
+                    unsafe_allow_html=True,
+                )
+            with brc2:
+                if st.button(
+                    tr("⬅ Back", "⬅ חזור"),
+                    use_container_width=True,
+                    key="mobile_data_back",
+                ):
+                    st.session_state["active_page_id"] = "dashboard"
+                    st.rerun()
+        else:
+            active_mobile_index = 0
+            for i, lbl in enumerate(mobile_options):
+                if mobile_label_to_id.get(lbl) == active_page_id:
+                    active_mobile_index = i
+                    break
+            # Sync widget state BEFORE creating the widget so single-click works.
+            _mobile_nav_key = "mobile_page_nav_radio"
+            _expected_label = mobile_options[active_mobile_index]
+            if st.session_state.get(_mobile_nav_key) not in mobile_options:
+                st.session_state[_mobile_nav_key] = _expected_label
+            page_choice = st.radio(
+                tr("Page", "עמוד"),
+                mobile_options,
+                horizontal=True,
+                label_visibility="collapsed",
+                key=_mobile_nav_key,
+            )
+            active_page_id = mobile_label_to_id.get(page_choice, "dashboard")
     else:
         # ── Desktop: sidebar option-menu navigation ──
         st.sidebar.title(tr("Navigation", "ניווט"))
@@ -6586,6 +6858,50 @@ def main() -> None:
     st.session_state["active_page_id"] = active_page_id
     page = page_id_to_label.get(active_page_id, page_dashboard)
 
+    # ── Subtle per-page accent color (color-coded navigation) ─────────
+    # A thin gradient strip under the header + a matching accent on the
+    # active sidebar nav-link makes orientation instantly clear, without
+    # changing the overall palette.
+    _page_accents = {
+        "dashboard": "#6366f1",   # indigo — overview
+        "manage":    "#10b981",   # emerald — active portfolio actions
+        "risk":      "#ef4444",   # rose — risk / warning family
+        "simulator": "#f59e0b",   # amber — exploration / projection
+        "quality":   "#06b6d4",   # cyan — data hygiene
+    }
+    _accent = _page_accents.get(active_page_id, "#6366f1")
+    st.markdown(
+        f"""
+        <style id="pp-page-accent">
+            .app-header-wrap {{
+                border-top: 3px solid {_accent} !important;
+                box-shadow: 0 2px 8px -4px {_accent}55 !important;
+            }}
+            .app-sub-title {{ color: {_accent} !important; }}
+            /* Sidebar active nav-link gets an accent border on the leading edge */
+            [data-testid="stSidebar"] .nav-link-selected,
+            [data-testid="stSidebar"] .nav-link.active {{
+                border-left: 3px solid {_accent} !important;
+                box-shadow: inset 3px 0 0 0 {_accent} !important;
+            }}
+            /* Mobile pill accent on the current page */
+            [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {{
+                box-shadow: 0 4px 14px -2px {_accent}88 !important;
+            }}
+            /* stMetric subtle left accent bar on active page */
+            [data-testid="stMetric"]::before {{
+                content: "";
+                position: absolute;
+                top: 12%; bottom: 12%; left: 0;
+                width: 2px;
+                background: {_accent};
+                border-radius: 2px;
+            }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.markdown(
         f"""<div class='app-header-wrap'>
   <div class='app-logo-row'>
@@ -6615,6 +6931,22 @@ def main() -> None:
 </div>""",
         unsafe_allow_html=True,
     )
+
+    # ── Mobile-only: dedicated Data (Data Quality) button above the
+    # Connection & Data Settings expander. Desktop keeps Data Quality in
+    # the sidebar option_menu, so this button would be redundant there.
+    if is_mobile:
+        _data_btn_primary = (active_page_id == "quality")
+        if st.sidebar.button(
+            ("📋 " + tr("Data", "נתונים")) + ("  ✓" if _data_btn_primary else ""),
+            use_container_width=True,
+            type=("primary" if _data_btn_primary else "secondary"),
+            help=tr("Open the Data / Data Quality page.",
+                    "פתיחת דף הנתונים (בקרת איכות נתונים)."),
+            key="sidebar_data_nav_btn",
+        ):
+            st.session_state["active_page_id"] = "quality"
+            st.rerun()
 
     connection_state_box = None
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
@@ -7115,12 +7447,37 @@ def main() -> None:
                     chart_anchor_id = f"tv-chart-anchor-{widget_prefix}"
                     st.markdown(f"<div id='{chart_anchor_id}'></div>", unsafe_allow_html=True)
                     st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
-                    _, close_col = st.columns([8, 1])
+                    # Toolbar row: [title · spacer · light/dark toggle · close]
+                    _ttitle_col, _tv_theme_col, close_col = st.columns([6, 2, 1])
+                    # Per-chart theme override: defaults to follow the app theme.
+                    _tv_theme_key = "tv_chart_theme_override"
+                    _default_tv_theme = "dark" if is_dark else "light"
+                    if _tv_theme_key not in st.session_state:
+                        st.session_state[_tv_theme_key] = _default_tv_theme
+                    _current_tv_theme = st.session_state[_tv_theme_key]
+                    _tv_toggle_label = (tr("🌙 Dark bg", "🌙 רקע כהה")
+                                        if _current_tv_theme == "light"
+                                        else tr("☀ Light bg", "☀ רקע בהיר"))
+                    if _tv_theme_col.button(
+                        _tv_toggle_label,
+                        key=f"{widget_prefix}_tv_theme_toggle",
+                        use_container_width=True,
+                        help=tr("Toggle chart background between light and dark.",
+                                "החלפת רקע הגרף בין בהיר לכהה."),
+                    ):
+                        st.session_state[_tv_theme_key] = (
+                            "light" if _current_tv_theme == "dark" else "dark"
+                        )
+                        st.rerun()
                     if close_col.button(tr("Close", "סגור"), key=f"{widget_prefix}_tv_inline_close"):
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
                         st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
-                    _render_tradingview_widget(active_ticker, height=580 if is_mobile else 750)
+                    _render_tradingview_widget(
+                        active_ticker,
+                        height=580 if is_mobile else 750,
+                        theme=st.session_state.get(_tv_theme_key, _default_tv_theme),
+                    )
                     if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
                         components.html(
                             f"""
@@ -7837,6 +8194,32 @@ def main() -> None:
         st.markdown(f"### {tr('Reports: Risk, Performance and FIFO', 'דוחות: סיכונים, ביצועים ועלות פיפו')}")
         fifo_df = fifo_metrics(trades)
         st.subheader(tr("FIFO Engine", "מנוע פיפו"))
+        # Educational caption explaining the whole FIFO mechanic in plain language.
+        with st.expander(tr("ℹ What does FIFO mean here?", "ℹ מה זה FIFO כאן?"), expanded=False):
+            st.markdown(tr(
+                "**FIFO = First-In-First-Out.** When you sell part of a position, the system assumes you are selling the OLDEST lots first. "
+                "This is the default accounting method for most tax jurisdictions (including Israel's מס רווחי הון) because it tends to produce the largest realised gain — and therefore the highest tax bill — when prices have risen. "
+                "\n\n**Why you care:**\n"
+                "1. **Realised P/L (רווח ממומש)** — the profit locked in on the lots you've already sold. This is what your tax liability is based on.\n"
+                "2. **Open Cost (עלות פתוחה)** — the remaining cost basis of lots you still hold. Compare it against current value to see unrealised P/L.\n"
+                "3. **Average Buy Price (מחיר קנייה ממוצע)** — weighted average of the still-open lots. Useful for quick break-even checks.\n"
+                "\n**Worked example:** you bought 10 BTC at ₪50K, later 10 more at ₪100K, then sold 10 BTC at ₪150K.\n"
+                "• FIFO sells the FIRST 10 lots → realised gain = 10 × (150K − 50K) = ₪1,000K.\n"
+                "• Remaining open position: 10 BTC at cost ₪100K each (total open cost ₪1,000K).\n"
+                "• LIFO (last-in-first-out) would have given a realised gain of only ₪500K — but FIFO is the default.\n"
+                "\n**Caveats:** the engine processes trades in chronological order of `Purchase_Date`; cash dividends, stock splits, and fees are NOT factored into the cost basis here — add them manually if relevant.",
+                "**FIFO = First-In-First-Out (ראשון-שנכנס-ראשון-שיוצא).** כאשר מוכרים חלק מפוזיציה, המערכת מניחה שהלוטים הוותיקים ביותר נמכרים קודם. "
+                "זוהי שיטת החשבונאות ברירת-המחדל ברוב מדינות העולם (כולל מס רווחי הון בישראל) כי היא נוטה לייצר את הרווח המוכר הגבוה ביותר — ובהתאם גם את חבות המס הגבוהה ביותר — כאשר המחירים עלו. "
+                "\n\n**למה חשוב לך:**\n"
+                "1. **רווח ממומש (Realized P/L)** — הרווח שכבר 'נעלת' על הלוטים שכבר מכרת. זהו הבסיס לחישוב המס.\n"
+                "2. **עלות פתוחה (Open Cost)** — עלות הלוטים שעדיין מוחזקים. השוואה מול השווי הנוכחי נותנת רווח לא-ממומש.\n"
+                "3. **מחיר קנייה ממוצע** — ממוצע משוקלל של הלוטים הפתוחים. שימושי לבדיקה מהירה של נקודת איזון (break-even).\n"
+                "\n**דוגמה מעשית:** קנית 10 BTC ב-₪50K, ואז עוד 10 BTC ב-₪100K, ואז מכרת 10 BTC ב-₪150K.\n"
+                "• FIFO מוכר את 10 הלוטים הראשונים → רווח ממומש = 10 × (150K − 50K) = ₪1,000K.\n"
+                "• פוזיציה פתוחה שנותרה: 10 BTC בעלות ₪100K כל אחד (סה\"כ עלות פתוחה ₪1,000K).\n"
+                "• LIFO היה נותן רווח ממומש של ₪500K בלבד — אך FIFO היא ברירת-המחדל.\n"
+                "\n**אזהרות:** המנוע מעבד עסקאות לפי סדר כרונולוגי של `Purchase_Date`; דיבידנדים במזומן, ספליטים ועמלות לא כלולים בבסיס העלות — יש להזין אותם ידנית במידה ורלוונטי.",
+            ))
         if fifo_df.empty:
             st.info(tr("Not enough data for FIFO", "אין מספיק נתונים לחישוב FIFO"))
         else:
@@ -7879,17 +8262,25 @@ def main() -> None:
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Sharpe", f"{metrics['sharpe']:.2f}",
-                  help=tr("Sharpe Ratio: return per unit of total risk. Above 1 is good, above 2 is excellent.",
-                          "יחס שארפ: תשואה ביחס לסיכון הכולל. מעל 1 טוב, מעל 2 מעולה."))
+                  help=tr(
+                      "Sharpe Ratio = (Portfolio Return − Risk-Free Rate) / Annualized Volatility. Introduced by Nobel laureate William Sharpe (1966). It asks: 'for every unit of risk you take, how much excess return do you earn?' Benchmarks on annualized daily-returns basis: <0 = losing to cash · 0–1 = sub-par · 1–2 = good · 2–3 = very strong · >3 = outlier (double-check data quality). Weakness: Sharpe treats upside volatility as 'risk' — it penalises good surprises the same as bad ones. For asymmetric returns prefer Sortino (below).",
+                      "יחס שארפ = (תשואת התיק − ריבית חסרת סיכון) / תנודתיות שנתית. הוצג ע\"י חתן פרס נובל ויליאם שארפ (1966). שואל: 'על כל יחידת סיכון שלקחת — כמה תשואה עודפת קיבלת?'. עוגני פרשנות (על בסיס תשואות יומיות שנתיות): <0 = מפסיד למזומן · 0-1 = מתחת לממוצע · 1-2 = טוב · 2-3 = חזק מאוד · >3 = חריג (כדאי לבדוק איכות נתונים). חולשה: שארפ מתייחס גם לתנודתיות כלפי מעלה כ'סיכון' — ולכן מעניש גם הפתעות טובות. עבור תשואות א-סימטריות עדיף סורטינו.",
+                  ))
         c2.metric(tr("Annual Volatility", "תנודתיות שנתית"), f"{metrics['vol']:.2%}",
-                  help=tr("Annualized standard deviation of daily returns. Lower = more stable portfolio.",
-                          "סטיית תקן שנתית של תשואות יומיות. נמוכה יותר = תיק יציב יותר."))
+                  help=tr(
+                      "Annualized Volatility = standard-deviation of DAILY returns × √252 (trading days/year). A portfolio with 20% annual vol typically swings within ±20% around its trend line over a year. Typical ranges: bonds 3–8% · diversified equity 12–18% · single large-cap 20–30% · crypto 60–100%+. Volatility is symmetric — it counts big up-days and big down-days equally. Use it as a 'turbulence gauge'; it does NOT predict direction or returns, only the scale of wiggles.",
+                      "תנודתיות שנתית = סטיית-התקן של תשואות יומיות × √252 (ימי מסחר בשנה). תיק בתנודתיות שנתית 20% נוטה לנוע בטווח ±20% סביב קו המגמה שלו לאורך שנה. טווחים אופייניים: אג\"ח 3-8% · תיק מניות מפוזר 12-18% · מניה בודדת גדולה 20-30% · קריפטו 60-100%+. התנודתיות סימטרית — סופרת ימי עליות וירידות חזקים באותה מידה. מדד 'סערה', לא צפי כיוון או תשואה אלא רק עוצמת תנודה.",
+                  ))
         c3.metric(tr("Max Drawdown", "משיכה מקסימלית"), f"{metrics['mdd']:.2%}",
-                  help=tr("Largest peak-to-trough decline in portfolio value. Indicates worst historical loss.",
-                          "הירידה הגדולה ביותר מהשיא לשפל. מציינת את ההפסד ההיסטורי הגרוע ביותר."))
+                  help=tr(
+                      "Maximum Drawdown (MDD) = the largest peak-to-trough decline during the observed period. If your portfolio hit ₪120K then later fell to ₪90K, that's a −25% drawdown. To FULLY recover from an X% drawdown, you need (1/(1−X) − 1) gain: a 20% drop needs +25% to break even; a 50% drop needs +100%. Historical anchors: SPY post-dot-com ≈ −49% (2000–02) · 2008 ≈ −55% · COVID crash Mar-2020 ≈ −34%. Plan your position sizing around your TRUE drawdown tolerance — most people overestimate it.",
+                      "משיכה מקסימלית (MDD): הירידה הגדולה ביותר משיא לשפל בתקופה הנצפית. אם התיק הגיע ל-₪120K ואז ירד ל-₪90K זו משיכה של 25%-. להתאוששות מלאה מירידה של X% צריך רווח של (1/(1−X) − 1): ירידה של 20% דורשת +25%, ירידה של 50% דורשת +100%. עוגנים היסטוריים: SPY אחרי הדוט-קום ≈ -49% (2000-2002) · 2008 ≈ -55% · משבר הקורונה מרץ-2020 ≈ -34%. קבעו גודל פוזיציות לפי סובלנות המשיכה האמיתית — רוב האנשים מעריכים אותה ביתר.",
+                  ))
         c4.metric("CAGR", f"{metrics['cagr']:.2%}",
-                  help=tr("Compound Annual Growth Rate: the annualized return assuming reinvestment.",
-                          "שיעור צמיחה שנתי מורכב: התשואה השנתית מחושבת בהנחת השקעה מחדש."))
+                  help=tr(
+                      "Compound Annual Growth Rate (CAGR) = (Final Value / Initial Value)^(1/years) − 1. The 'smoothed' annual return that would transform the starting balance into the ending balance over the observed period. CAGR irons out path-dependency — two portfolios that ended the same will have the same CAGR even if one was a rollercoaster. Reference points (long-run, nominal USD): S&P 500 ≈ 10% · 60/40 bond-stock ≈ 8% · US Treasuries ≈ 4% · inflation ≈ 3%. For REAL (after-inflation) returns, subtract CPI.",
+                      "שיעור צמיחה שנתי מורכב (CAGR) = (שווי סופי / שווי התחלתי)^(1/שנים) − 1. התשואה השנתית ה'ממוצעת' שהייתה הופכת את הסכום ההתחלתי לסכום הסופי לאורך התקופה. ה-CAGR מחליק את מסלול הצמיחה — שני תיקים שהגיעו לאותו שווי סופי יקבלו אותו CAGR גם אם האחד חווה רכבת הרים. עוגנים ארוכי-טווח נומינליים בדולר: S&P 500 ≈ 10% · תיק 60/40 ≈ 8% · אג\"ח ממשלתי ≈ 4% · אינפלציה ≈ 3%. לתשואה ריאלית יש להוריד CPI.",
+                  ))
 
         if not value_series.empty:
             _hist_color = "#4f46e5"
