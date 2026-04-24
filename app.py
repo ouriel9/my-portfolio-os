@@ -598,6 +598,26 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         direction: {direction} !important;
         text-align: {align} !important;
     }}
+    /* ── BiDi correctness for neutral glyphs (?, !, «», quotes, digits) ──
+       `unicode-bidi: plaintext` makes each text run infer its direction
+       from its first strong character. In Hebrew paragraphs, `?`/`!` now
+       sit correctly at the visual end (left side). English strings keep
+       their neutrals on the right. Fixes the "question mark on wrong
+       side" bug on both mobile and desktop. */
+    [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMarkdownContainer"] li,
+    [data-testid="stMarkdownContainer"] span,
+    [data-testid="stAlert"] p,
+    [data-testid="stAlert"] div,
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p,
+    [data-testid="stMetric"] [data-testid="stMetricLabel"],
+    [data-testid="stMetric"] [data-testid="stMetricDelta"],
+    label, .stTooltipIcon,
+    [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] p,
+    h1, h2, h3, h4, h5, h6 {{
+        unicode-bidi: plaintext !important;
+    }}
     [data-baseweb="tab-list"] {{
         display: flex !important;
         overflow-x: hidden !important;
@@ -4596,23 +4616,51 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             padding-bottom: calc(1.2rem + env(safe-area-inset-bottom)) !important;
         }}
 
-        /* 2-col KPI with equal heights + soft gradient hairline */
+        /* Adaptive KPI grid: wraps to 2-per-row so long labels (CAGR / Calmar /
+           Concentration / Beta …) never get truncated on phones. */
         [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {{
-            flex-wrap: nowrap !important;
+            flex-wrap: wrap !important;
             gap: 0.5rem !important;
+            row-gap: 0.5rem !important;
         }}
         [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) > [data-testid="stColumn"] {{
-            flex: 1 1 0 !important; min-width: 0 !important; max-width: 50% !important;
+            flex: 1 1 calc(50% - 0.25rem) !important;
+            min-width: calc(50% - 0.25rem) !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
         }}
         [data-testid="stMetric"] {{
-            padding: 0.55rem 0.7rem !important;
-            min-height: 78px !important;
+            padding: 0.6rem 0.75rem !important;
+            min-height: 84px !important;
             border-radius: var(--pp2-radius-l) !important;
             background: var(--pp2-surface) !important;
             backdrop-filter: blur(10px) saturate(1.1);
             -webkit-backdrop-filter: blur(10px) saturate(1.1);
             border: 1px solid var(--pp2-border) !important;
             box-shadow: 0 4px 14px -6px rgba(15,23,42,0.18) !important;
+            overflow: hidden !important;
+        }}
+        /* Metric label — allow wrapping instead of ellipsis so full term shows */
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] {{
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            line-height: 1.2 !important;
+            word-break: break-word !important;
+            hyphens: auto !important;
+        }}
+        /* Metric value — keep on single line but shrink font if too long */
+        [data-testid="stMetric"] [data-testid="stMetricValue"] {{
+            white-space: nowrap !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            max-width: 100% !important;
+        }}
+        /* Metric delta — wrap description text so nothing gets cut */
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] {{
+            white-space: normal !important;
+            line-height: 1.25 !important;
+            word-break: break-word !important;
         }}
         [data-testid="stMetric"]::before {{
             width: 3px !important;
@@ -4715,8 +4763,10 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
         .app-sub-title {{ font-size: 0.84rem !important; color: var(--pp2-muted) !important; }}
 
-        /* Top floating nav (the 4-way radio) — glass + shadow */
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) {{
+        /* Top floating page-nav radio (4- or 5-pill segmented control) — glass + shadow.
+           Matches either the 4-pill (legacy) or 5-pill (Sim added) top nav. */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child),
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child) {{
             background: var(--pp2-surface-strong) !important;
             backdrop-filter: blur(18px) saturate(1.15) !important;
             -webkit-backdrop-filter: blur(18px) saturate(1.15) !important;
@@ -4724,6 +4774,8 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             border: 1px solid var(--pp2-border) !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked),
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
         [data-baseweb="radio"]:has(input:checked) {{
             background: var(--pp2-grad) !important;
             box-shadow: 0 4px 12px -2px rgba(99,102,241,0.55);
@@ -4753,9 +4805,10 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     /* Small phones: even tighter */
     @media (max-width: 420px) {{
         .block-container {{ padding-left: 0.55rem !important; padding-right: 0.55rem !important; }}
-        [data-testid="stMetric"] {{ min-height: 70px !important; padding: 0.45rem 0.55rem !important; }}
+        [data-testid="stMetric"] {{ min-height: 74px !important; padding: 0.5rem 0.6rem !important; }}
         [data-testid="stMetricValue"] {{ font-size: 1.05rem !important; }}
-        [data-testid="stMetricLabel"] {{ font-size: 0.60rem !important; }}
+        /* Keep label legible (not micro) — primary readability over max density */
+        [data-testid="stMetricLabel"] {{ font-size: 0.68rem !important; line-height: 1.2 !important; }}
     }}
 
     /* Respect reduced-motion users */
@@ -4867,6 +4920,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
         {"id": "nav-dashboard", "label": "דשבורד" if is_he else "Dashboard", "hint": "g d"},
         {"id": "nav-manage",    "label": "ניהול עסקאות" if is_he else "Trade Management", "hint": "g t"},
         {"id": "nav-risk",      "label": "סיכונים ופיפו" if is_he else "Risk & FIFO", "hint": "g r"},
+        {"id": "nav-simulator", "label": "סימולטור" if is_he else "Simulator", "hint": "g s"},
         {"id": "nav-quality",   "label": "בקרת נתונים" if is_he else "Data Quality", "hint": "g q"},
         {"id": "toggle-theme",  "label": "החלפת ערכת נושא" if is_he else "Toggle theme", "hint": "t"},
         {"id": "focus-search",  "label": "חיפוש" if is_he else "Focus search", "hint": "/"},
@@ -4946,6 +5000,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
             if (id === 'nav-dashboard') clickByText(['דשבורד','Dashboard','סקירה','Overview']);
             else if (id === 'nav-manage') clickByText(['ניהול עסקאות','Trade','עסקאות','Trades']);
             else if (id === 'nav-risk') clickByText(['סיכונים','Risk','סיכון','Reports','דוחות']);
+            else if (id === 'nav-simulator') clickByText(['סימולטור','Simulator','Sim']);
             else if (id === 'nav-quality') clickByText(['בקרת נתונים','Data Quality','נתונים','Data']);
             else if (id === 'toggle-theme') {{
               var b = doc.querySelector('header button[kind="header"]'); if (b) b.click();
@@ -4956,7 +5011,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
             }} else if (id === 'rerun') {{
               location.reload();
             }} else if (id === 'help') {{
-              showToast('⌘K · / · t · r · g d/t/r/q · ?');
+              showToast('⌘K · / · t · r · g d/t/r/s/q · ?');
             }}
           }} catch(e) {{}}
         }}
@@ -4994,6 +5049,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
             if (e.key === 'd') runCommand('nav-dashboard');
             else if (e.key === 't') runCommand('nav-manage');
             else if (e.key === 'r') runCommand('nav-risk');
+            else if (e.key === 's') runCommand('nav-simulator');
             else if (e.key === 'q') runCommand('nav-quality');
           }}
         }}, true);
@@ -5183,12 +5239,18 @@ def pp_portfolio_health_score(metrics: Dict[str, float],
 
 def _chart_help(en: str, he: str, language: str) -> None:
     """Renders a small ❓ badge (hover = tooltip text, tap on mobile = tooltip)."""
-    text = (he if language == "he" else en).replace('"', "'")
+    text = (he if language in ("he", "עברית") else en).replace('"', "'")
+    # Perfect circle: fixed-dimension inline-flex box with centered glyph.
+    # Avoids the oval caused by asymmetric padding + border-radius:50%.
     st.markdown(
-        f'<div style="text-align:right;margin-bottom:-6px">'
-        f'<span title="{text}" style="cursor:help;font-size:0.72rem;color:#94a3b8;'
-        f'border:1px solid #94a3b8;border-radius:50%;padding:1px 6px;'
-        f'user-select:none;line-height:1.4">?</span></div>',
+        f'<div style="text-align:right;margin-bottom:-6px;direction:ltr">'
+        f'<span title="{text}" aria-label="{text}" role="img" '
+        f'style="cursor:help;display:inline-flex;align-items:center;'
+        f'justify-content:center;width:18px;height:18px;box-sizing:border-box;'
+        f'font-size:0.7rem;font-weight:600;color:#94a3b8;'
+        f'border:1px solid #94a3b8;border-radius:50%;line-height:1;'
+        f'user-select:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;'
+        f'unicode-bidi:isolate;direction:ltr;flex-shrink:0">?</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -5287,7 +5349,7 @@ def render_advanced_analytics(
     gc1, gc2 = st.columns([1, 2]) if not is_mobile else (st.container(), st.container())
     with gc1:
         _chart_help("Portfolio Health Score: a composite 0-100 score based on Sharpe, drawdown, volatility, CAGR, diversification (HHI) and VaR.",
-                    "ציון בריאות התיק: ציון מורכב 0-100 המבוסס על שארפ, עומק משיכה, תנודתיות, CAGR, פיזור (HHI) ו-VaR.", language)
+                    "ציון בריאות התיק: ציון בין 0 ל-100 שמסכם את מצב הסיכון של התיק. הוא מחושב מ-6 מדדים: יחס שארפ (תשואה לעומת סיכון), עומק משיכה מקסימלי, תנודתיות שנתית, CAGR (צמיחה שנתית), ריכוזיות (HHI) ו-VaR. ציון מעל 75 = מצוין, 55-75 = טוב, 40-55 = מאוזן, מתחת ל-40 = דורש תשומת לב.", language)
         st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
     with gc2:
         kpi_row = st.columns(3)
@@ -5597,6 +5659,469 @@ def render_advanced_analytics(
 # ════════════════════════════════════════════════════════════════════════
 # END OF PREMIUM ENHANCEMENTS
 # ════════════════════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════════════════════
+# SIMULATOR FEATURE — long-term projection + Safe Withdrawal (pension) model
+# ════════════════════════════════════════════════════════════════════════
+def sim_project_portfolio(
+    initial_capital: float,
+    monthly_contribution: float,
+    annual_return_pct: float,
+    years: float,
+    lump_sum: float = 0.0,
+    lump_sum_month: int = 0,
+) -> pd.DataFrame:
+    """Project portfolio growth with monthly compounding and optional lump-sum.
+
+    Returns a DataFrame with columns:
+      month, year, contributions_cum, balance_no_lump, balance_with_lump
+    """
+    try:
+        initial_capital = float(initial_capital or 0.0)
+        monthly_contribution = float(monthly_contribution or 0.0)
+        annual_return_pct = float(annual_return_pct or 0.0)
+        years = float(years or 0.0)
+        lump_sum = float(lump_sum or 0.0)
+        lump_sum_month = int(lump_sum_month or 0)
+    except (TypeError, ValueError):
+        initial_capital = monthly_contribution = annual_return_pct = 0.0
+        years = lump_sum = 0.0
+        lump_sum_month = 0
+
+    n = max(int(round(years * 12)), 0)
+    if n == 0:
+        return pd.DataFrame(
+            [{"month": 0, "year": 0.0, "contributions_cum": initial_capital,
+              "balance_no_lump": initial_capital,
+              "balance_with_lump": initial_capital + (lump_sum if lump_sum_month == 0 else 0.0)}]
+        )
+
+    r_annual = annual_return_pct / 100.0
+    # Clamp: cannot lose more than ~100% in a month.
+    if r_annual <= -1.0:
+        r_m = -0.999999
+    else:
+        r_m = (1.0 + r_annual) ** (1.0 / 12.0) - 1.0
+
+    k = max(0, min(lump_sum_month, n))
+
+    balances_nl = np.zeros(n + 1, dtype=float)
+    balances_wl = np.zeros(n + 1, dtype=float)
+    contribs = np.zeros(n + 1, dtype=float)
+
+    balances_nl[0] = initial_capital
+    balances_wl[0] = initial_capital + (lump_sum if k == 0 else 0.0)
+    contribs[0] = initial_capital
+
+    for m in range(1, n + 1):
+        balances_nl[m] = balances_nl[m - 1] * (1.0 + r_m) + monthly_contribution
+        inj = lump_sum if m == k else 0.0
+        balances_wl[m] = balances_wl[m - 1] * (1.0 + r_m) + monthly_contribution + inj
+        contribs[m] = contribs[m - 1] + monthly_contribution
+
+    months = np.arange(n + 1, dtype=int)
+    return pd.DataFrame({
+        "month": months,
+        "year": months / 12.0,
+        "contributions_cum": contribs,
+        "balance_no_lump": balances_nl,
+        "balance_with_lump": balances_wl,
+    })
+
+
+def sim_safe_withdrawal_monthly(final_balance: float, swr_pct: float) -> float:
+    """Trinity-style: monthly pension = final_balance * (swr/100) / 12."""
+    try:
+        fb = float(final_balance or 0.0)
+        sw = float(swr_pct or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, fb * (sw / 100.0) / 12.0)
+
+
+def sim_years_to_target(
+    initial_capital: float,
+    monthly_contribution: float,
+    annual_return_pct: float,
+    target_balance: float,
+    lump_sum: float = 0.0,
+    max_years: int = 80,
+) -> float:
+    """Find the first fractional-year point where the projection hits target.
+
+    Returns `float("inf")` if the target is never reached within `max_years`.
+    """
+    try:
+        target_balance = float(target_balance or 0.0)
+    except (TypeError, ValueError):
+        return float("inf")
+    if target_balance <= 0:
+        return 0.0
+    df = sim_project_portfolio(
+        initial_capital=initial_capital,
+        monthly_contribution=monthly_contribution,
+        annual_return_pct=annual_return_pct,
+        years=float(max_years),
+        lump_sum=lump_sum,
+        lump_sum_month=0,
+    )
+    hits = df[df["balance_with_lump"] >= target_balance]
+    if hits.empty:
+        return float("inf")
+    return float(hits.iloc[0]["year"])
+
+
+def render_simulator_page(
+    tr,
+    total_value: float,
+    language: str,
+    is_dark: bool,
+    is_mobile: bool,
+) -> None:
+    """Render the Simulator page.
+
+    Two modes:
+      • Clean Simulator — user fills every input.
+      • My Portfolio Simulator — Initial Capital is locked to live total_value.
+
+    Outputs 4 KPIs, a chart (contributions / no-lump / with-lump),
+    milestones, delay-cost insight, and a yearly breakdown + CSV export.
+    """
+    st.markdown(f"### 🧮 {tr('Simulator', 'סימולטור')}")
+    st.caption(tr(
+        "Long-term growth projection with monthly compounding, optional lump-sum and a sustainable monthly pension.",
+        "הדמיית צמיחה ארוכת-טווח עם ריבית דריבית חודשית, תרומה חד-פעמית אפשרית ופנסיה חודשית ברת-קיימא.",
+    ))
+
+    try:
+        tv = float(total_value or 0.0)
+    except (TypeError, ValueError):
+        tv = 0.0
+    has_portfolio = tv > 0.0
+
+    mode_clean = tr("🧼 Clean Simulator", "🧼 סימולטור נקי")
+    mode_mine = tr("💼 My Portfolio Simulator", "💼 סימולטור התיק שלי")
+    mode_options = [mode_mine, mode_clean] if has_portfolio else [mode_clean]
+
+    default_mode = mode_mine if has_portfolio else mode_clean
+    if st.session_state.get("sim_mode_choice") not in mode_options:
+        st.session_state["sim_mode_choice"] = default_mode
+
+    mode = st.radio(
+        tr("Mode", "מצב"),
+        mode_options,
+        horizontal=True,
+        key="sim_mode_choice",
+    )
+
+    use_portfolio = (mode == mode_mine) and has_portfolio
+
+    # ── Inputs (grouped in glassy bordered container) ─────────────────
+    with st.container(border=True):
+        st.markdown(f"**{tr('Parameters', 'פרמטרים')}**")
+        col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
+
+        with col_l:
+            # Initialize defaults in session-state first so widgets with keys
+            # never violate updated min_value constraints across reruns.
+            if "sim_age_now" not in st.session_state:
+                st.session_state["sim_age_now"] = 30
+            age_now = st.number_input(
+                tr("Your current age", "הגיל הנוכחי שלך"),
+                min_value=10, max_value=90,
+                step=1,
+                key="sim_age_now",
+                help=tr("Starting age — used only to compute the horizon.",
+                        "גיל התחלה — משמש רק לחישוב משך ההשקעה."),
+            )
+            # Keep target age strictly above current age at all times.
+            min_target = int(age_now) + 1
+            if "sim_age_target" not in st.session_state:
+                st.session_state["sim_age_target"] = max(min_target, 67)
+            elif int(st.session_state["sim_age_target"]) < min_target:
+                st.session_state["sim_age_target"] = min_target
+            age_target = st.number_input(
+                tr("Target retirement age", "גיל פרישה מתוכנן"),
+                min_value=min_target, max_value=100,
+                step=1,
+                key="sim_age_target",
+                help=tr("Projection ends at this age.", "ההדמיה מסתיימת בגיל זה."),
+            )
+
+            if use_portfolio:
+                initial_capital = tv
+                # Force the locked widget's session value to the live portfolio value.
+                st.session_state["sim_initial_mine"] = float(round(tv, 2))
+                st.number_input(
+                    tr("Initial capital (₪) — locked to your portfolio",
+                       "הון התחלתי (₪) — נעול לשווי התיק שלך"),
+                    step=100.0,
+                    disabled=True,
+                    key="sim_initial_mine",
+                    help=tr("Auto-seeded from the live portfolio total value.",
+                            "מוזן אוטומטית משווי התיק הנוכחי."),
+                )
+                st.info(tr(
+                    f"Seeded from your portfolio: ₪{tv:,.0f}",
+                    f"הוזן משווי התיק שלך: ₪{tv:,.0f}",
+                ))
+            else:
+                if "sim_initial_clean" not in st.session_state:
+                    st.session_state["sim_initial_clean"] = 0.0
+                initial_capital = float(st.number_input(
+                    tr("Initial capital (₪)", "הון התחלתי (₪)"),
+                    min_value=0.0,
+                    step=1000.0,
+                    key="sim_initial_clean",
+                    help=tr("Starting amount at month 0.", "הסכום בנקודת הזמן 0."),
+                ))
+
+        with col_r:
+            if "sim_annual_return" not in st.session_state:
+                st.session_state["sim_annual_return"] = 7.0
+            annual_return = float(st.number_input(
+                tr("Expected annual return (%)", "תשואה שנתית צפויה (%)"),
+                min_value=-20.0, max_value=40.0,
+                step=0.25,
+                key="sim_annual_return",
+                help=tr("S&P 500 long-run average ≈ 7% real / 10% nominal.",
+                        "ממוצע רב-שנתי של S&P 500: ≈7% ריאלי / 10% נומינלי."),
+            ))
+            if "sim_monthly_contrib" not in st.session_state:
+                st.session_state["sim_monthly_contrib"] = 2000.0
+            monthly_contrib = float(st.number_input(
+                tr("Monthly contribution (₪)", "הפקדה חודשית (₪)"),
+                min_value=0.0,
+                step=100.0,
+                key="sim_monthly_contrib",
+                help=tr("Amount added at the end of every month.",
+                        "סכום שמתווסף בסוף כל חודש."),
+            ))
+            if "sim_lump_sum" not in st.session_state:
+                st.session_state["sim_lump_sum"] = 0.0
+            lump_sum = float(st.number_input(
+                tr("One-time lump sum (₪)", "הפקדה חד-פעמית (₪)"),
+                min_value=0.0,
+                step=1000.0,
+                key="sim_lump_sum",
+                help=tr("A single extra deposit (e.g. bonus, inheritance).",
+                        "הפקדה נוספת חד-פעמית (למשל בונוס, ירושה)."),
+            ))
+
+        years_total = max(1.0, float(age_target) - float(age_now))
+        months_total = int(round(years_total * 12))
+
+        # Clamp lump-month into the current slider range (horizon may have
+        # changed between reruns when the user adjusts current/target age).
+        _slider_max = max(1, months_total)
+        if "sim_lump_month" not in st.session_state:
+            st.session_state["sim_lump_month"] = 0
+        elif int(st.session_state["sim_lump_month"]) > _slider_max:
+            st.session_state["sim_lump_month"] = _slider_max
+        elif int(st.session_state["sim_lump_month"]) < 0:
+            st.session_state["sim_lump_month"] = 0
+        lump_month = st.slider(
+            tr("Lump-sum timing (months from today)",
+               "תזמון ההפקדה החד-פעמית (חודשים מהיום)"),
+            min_value=0,
+            max_value=_slider_max,
+            step=1,
+            key="sim_lump_month",
+            disabled=(lump_sum <= 0.0),
+            help=tr("0 = today. Later = less compounding time.",
+                    "0 = היום. מאוחר יותר = פחות זמן לריבית דריבית."),
+        )
+
+        if "sim_swr" not in st.session_state:
+            st.session_state["sim_swr"] = 4.0
+        swr_pct = float(st.slider(
+            tr("Safe Withdrawal Rate (SWR %)", "שיעור משיכה בטוח (SWR %)"),
+            min_value=3.0, max_value=5.0,
+            step=0.25,
+            key="sim_swr",
+            help=tr("Trinity-study rule of thumb. 4% is the classic default.",
+                    "כלל אצבע ממחקר Trinity. 4% הוא ברירת-המחדל הקלאסית."),
+        ))
+
+    # ── Projection ────────────────────────────────────────────────────
+    df_proj = sim_project_portfolio(
+        initial_capital=initial_capital,
+        monthly_contribution=monthly_contrib,
+        annual_return_pct=annual_return,
+        years=years_total,
+        lump_sum=lump_sum,
+        lump_sum_month=int(lump_month),
+    )
+
+    final = df_proj.iloc[-1]
+    final_with = float(final["balance_with_lump"])
+    final_without = float(final["balance_no_lump"])
+    total_contributed = float(final["contributions_cum"])
+    compound_gains = max(0.0, final_with - total_contributed - (lump_sum if lump_sum else 0.0))
+    monthly_pension = sim_safe_withdrawal_monthly(final_with, swr_pct)
+    annual_pension = monthly_pension * 12.0
+    lump_uplift = final_with - final_without
+
+    # ── KPI row ───────────────────────────────────────────────────────
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric(
+        tr("Final value", "שווי סופי"),
+        f"₪{final_with:,.0f}",
+        delta=(f"+₪{lump_uplift:,.0f} " + tr("from lump", "מחד-פעמית")) if lump_uplift > 0 else None,
+        help=tr("Projected balance at target age (with lump sum).",
+                "יתרה חזויה בגיל היעד (כולל הפקדה חד-פעמית)."),
+    )
+    k2.metric(
+        tr("Total contributed", "סך תרומות"),
+        f"₪{(total_contributed + lump_sum):,.0f}",
+        help=tr("Initial capital + monthly contributions + lump sum.",
+                "הון התחלתי + הפקדות חודשיות + הפקדה חד-פעמית."),
+    )
+    k3.metric(
+        tr("Compound gains", "רווחי ריבית דריבית"),
+        f"₪{compound_gains:,.0f}",
+        help=tr("Growth beyond the money you put in. 'Interest on interest.'",
+                "הצמיחה מעבר לסכום שהפקדת. 'ריבית על ריבית.'"),
+    )
+    k4.metric(
+        tr("Monthly pension (SWR)", "פנסיה חודשית (SWR)"),
+        f"₪{monthly_pension:,.0f}",
+        delta=f"₪{annual_pension:,.0f} / {tr('year', 'שנה')}",
+        help=tr("Sustainable monthly withdrawal at the chosen SWR.",
+                "משיכה חודשית ברת-קיימא לפי שיעור המשיכה שנבחר."),
+    )
+
+    # ── Chart ─────────────────────────────────────────────────────────
+    chart_height = 340 if is_mobile else 420
+    fig = go.Figure()
+    # Layer 1: cumulative contributions (baseline)
+    fig.add_trace(go.Scatter(
+        x=df_proj["year"], y=df_proj["contributions_cum"],
+        mode="lines",
+        name=tr("Contributions (baseline)", "תרומות (קו בסיס)"),
+        line=dict(color="#94a3b8", width=1.4, dash="dot"),
+        hovertemplate=tr("Year", "שנה") + ": %{x:.1f}<br>"
+                      + tr("Contributed", "הופקד") + ": ₪%{y:,.0f}<extra></extra>",
+    ))
+    # Layer 2: balance without lump
+    fig.add_trace(go.Scatter(
+        x=df_proj["year"], y=df_proj["balance_no_lump"],
+        mode="lines",
+        name=tr("Balance (no lump)", "יתרה ללא חד-פעמית"),
+        line=dict(color="#06b6d4", width=1.8, dash="dash"),
+        hovertemplate=tr("Year", "שנה") + ": %{x:.1f}<br>"
+                      + tr("Balance", "יתרה") + ": ₪%{y:,.0f}<extra></extra>",
+    ))
+    # Layer 3: balance with lump (main line)
+    fig.add_trace(go.Scatter(
+        x=df_proj["year"], y=df_proj["balance_with_lump"],
+        mode="lines",
+        name=tr("Balance (with lump)", "יתרה עם חד-פעמית"),
+        line=dict(color="#6366f1", width=2.4),
+        fill="tozeroy",
+        fillcolor="rgba(99,102,241,0.10)",
+        hovertemplate=tr("Year", "שנה") + ": %{x:.1f}<br>"
+                      + tr("Balance", "יתרה") + ": ₪%{y:,.0f}<extra></extra>",
+    ))
+    # Injection marker
+    if lump_sum > 0:
+        inj_year = float(lump_month) / 12.0
+        fig.add_vline(
+            x=inj_year,
+            line=dict(color="#f59e0b", width=1.4, dash="dashdot"),
+            annotation_text=tr("Lump-sum", "הפקדה"),
+            annotation_position="top",
+        )
+
+    template = "plotly_dark" if is_dark else "plotly_white"
+    fig.update_layout(
+        template=template,
+        title=tr("Long-term Projection", "הדמיה ארוכת-טווח"),
+        xaxis_title=tr("Years", "שנים"),
+        yaxis_title=tr("Value (₪)", "שווי (₪)"),
+        margin=dict(l=10, r=10, t=56, b=30),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        height=chart_height,
+    )
+    st.plotly_chart(
+        _apply_plotly_theme(fig, is_dark, is_mobile),
+        theme="streamlit",
+        use_container_width=True,
+    )
+
+    # ── Delay-cost insight ─────────────────────────────────────────────
+    if lump_sum > 0 and lump_month > 0:
+        r_m = (1.0 + annual_return / 100.0) ** (1.0 / 12.0) - 1.0
+        # pure_uplift: compound growth of the lump over the full horizon
+        pure_uplift = lump_sum * ((1.0 + r_m) ** months_total - 1.0)
+        # fraction lost due to delay
+        d_months = int(lump_month)
+        delay_cost = pure_uplift * (1.0 - (1.0 + r_m) ** (-d_months))
+        if delay_cost > 0:
+            st.caption(tr(
+                f"⏳ Delaying the lump-sum by {d_months} months costs roughly ₪{delay_cost:,.0f} in forgone compounding.",
+                f"⏳ דחיית ההפקדה החד-פעמית ב-{d_months} חודשים מאבדת כ-₪{delay_cost:,.0f} בריבית דריבית.",
+            ))
+
+    # ── Milestones ─────────────────────────────────────────────────────
+    if initial_capital > 0 or lump_sum > 0:
+        base = max(initial_capital, 1.0)
+        ms = st.columns(3)
+        for idx, mult in enumerate([2, 5, 10]):
+            target = base * mult
+            yrs = sim_years_to_target(
+                initial_capital=initial_capital,
+                monthly_contribution=monthly_contrib,
+                annual_return_pct=annual_return,
+                target_balance=target,
+                lump_sum=lump_sum,
+                max_years=80,
+            )
+            if np.isfinite(yrs):
+                ms[idx].metric(
+                    f"×{mult} {tr('capital', 'הון')}",
+                    f"{yrs:.1f} " + tr("years", "שנים"),
+                    help=tr(f"Years until balance reaches ₪{target:,.0f}.",
+                            f"שנים עד שהיתרה תגיע ל-₪{target:,.0f}."),
+                )
+            else:
+                ms[idx].metric(
+                    f"×{mult} {tr('capital', 'הון')}",
+                    tr(">80y", ">80ש'"),
+                    help=tr(f"Target ₪{target:,.0f} not reached within 80 years.",
+                            f"היעד ₪{target:,.0f} לא מושג תוך 80 שנה."),
+                )
+
+    # ── Yearly breakdown + CSV export ─────────────────────────────────
+    with st.expander(tr("📋 Yearly breakdown", "📋 פירוט שנתי")):
+        yearly = df_proj.iloc[::12].copy()
+        yearly = yearly.assign(
+            Year=yearly["year"].round(1),
+            Contributed=yearly["contributions_cum"].round(0),
+            BalanceNoLump=yearly["balance_no_lump"].round(0),
+            BalanceWithLump=yearly["balance_with_lump"].round(0),
+        )[["Year", "Contributed", "BalanceNoLump", "BalanceWithLump"]].rename(columns={
+            "Year": tr("Year", "שנה"),
+            "Contributed": tr("Contributed (₪)", "הופקד (₪)"),
+            "BalanceNoLump": tr("Balance no lump (₪)", "יתרה ללא חד-פעמית (₪)"),
+            "BalanceWithLump": tr("Balance with lump (₪)", "יתרה עם חד-פעמית (₪)"),
+        })
+        st.dataframe(yearly, use_container_width=True, hide_index=True)
+        csv = yearly.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            label=tr("⬇ Download yearly breakdown (CSV)", "⬇ הורדת הפירוט השנתי (CSV)"),
+            data=csv,
+            file_name="simulator_yearly.csv",
+            mime="text/csv",
+            use_container_width=is_mobile,
+        )
+
+    st.caption(tr(
+        "⚠ Projections are educational estimates only — not investment advice. Actual returns vary.",
+        "⚠ ההדמיה היא לצורכי הדגמה בלבד — אינה מהווה ייעוץ השקעות. תשואות בפועל עשויות להשתנות.",
+    ))
+
 
 def main() -> None:
     st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="auto")
@@ -5951,14 +6476,16 @@ def main() -> None:
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
     page_risk = tr("Risk & FIFO", "סיכונים ופיפו") if not _is_mobile_client() else tr("Risk", "סיכון")
+    page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_id_to_label = {
         "dashboard": page_dashboard,
         "manage": page_manage,
         "risk": page_risk,
+        "simulator": page_simulator,
         "quality": page_quality,
     }
-    page_order = ["dashboard", "manage", "risk", "quality"]
+    page_order = ["dashboard", "manage", "risk", "simulator", "quality"]
     active_page_id = _clean(st.session_state.get("active_page_id", "dashboard")) or "dashboard"
     if active_page_id not in page_id_to_label:
         active_page_id = "dashboard"
@@ -5973,6 +6500,7 @@ def main() -> None:
             tr("📊 Overview", "📊 סקירה"): "dashboard",
             tr("💼 Trades", "💼 עסקאות"): "manage",
             tr("🛡 Risk", "🛡 סיכון"): "risk",
+            tr("🧮 Sim", "🧮 סימולטור"): "simulator",
             tr("📋 Data", "📋 נתונים"): "quality",
         }
         mobile_options = list(mobile_label_to_id.keys())
@@ -6015,7 +6543,7 @@ def main() -> None:
                 page = option_menu(
                     menu_title=None,
                     options=page_options,
-                    icons=["house", "wallet", "shield-check", "database-check"],
+                    icons=["house", "wallet", "shield-check", "calculator", "database-check"],
                     default_index=active_page_index,
                     key="main_nav_option_menu",
                     orientation="vertical",
@@ -7951,6 +8479,21 @@ def main() -> None:
                         st.rerun()
                     else:
                         st.error(f"{tr('Delete failed', 'מחיקה נכשלה')}: {msg}")
+
+    elif page == page_simulator:
+        try:
+            render_simulator_page(
+                tr=tr,
+                total_value=float(total_value),
+                language=language,
+                is_dark=is_dark,
+                is_mobile=is_mobile,
+            )
+        except Exception as _sim_exc:
+            st.error(tr(
+                f"Simulator unavailable: {_sim_exc}",
+                f"הסימולטור אינו זמין: {_sim_exc}",
+            ))
 
     else:
         st.markdown(f"### {tr('Data Quality', 'בקרת נתונים ואיכות')}")
