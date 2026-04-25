@@ -438,13 +438,84 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     section.main, .main {{
         padding-top: 0 !important;
     }}
-    /* ── Suppress 0-height component iframe wrappers (prevents "undefined" flash) ── */
-    .element-container:has(> div > iframe[height="0"]),
-    [data-testid="stElementContainer"]:has(> div > iframe[height="0"]) {{
-        height: 0 !important;
-        overflow: hidden !important;
-        margin: 0 !important;
-        padding: 0 !important;
+    /* ── Suppress phantom 0-height iframes from `components.html(height=0)`.
+       IMPORTANT: limit to `data-testid="stIFrame"` so custom components
+       (option_menu, lottie, ...) are NOT hidden — they start at
+       height=0 and resize via postMessage; CSS-hiding kills them.       */
+    .element-container:has(> div > iframe[data-testid="stIFrame"][height="0"]),
+    [data-testid="stElementContainer"]:has(> div > iframe[data-testid="stIFrame"][height="0"]) {{
+        display: none !important;
+    }}
+    /* Collapse "phantom" element-containers that hold ONLY <style>/<script>
+       tags (st.markdown CSS injections). The :not(:has(visible-tags)) test
+       matches any markdown container without paragraph-level content.     */
+    .element-container:has(> .stMarkdown > [data-testid="stMarkdownContainer"]:not(:has(p,h1,h2,h3,h4,h5,h6,ul,ol,li,table,img,svg,hr,button,a,code,pre,blockquote,em,strong,details,summary,figure))),
+    [data-testid="stElementContainer"]:has(> .stMarkdown > [data-testid="stMarkdownContainer"]:not(:has(p,h1,h2,h3,h4,h5,h6,ul,ol,li,table,img,svg,hr,button,a,code,pre,blockquote,em,strong,details,summary,figure))) {{
+        display: none !important;
+    }}
+    /* ── Hide Deploy button — not needed for personal/local app, and was
+       stacking over the Main Menu (3-dots) at the same top-right slot. */
+    [data-testid="stAppDeployButton"],
+    [data-testid="stBaseButton-header"][kind="header"]:not([data-testid="stMainMenuButton"]),
+    button[kind="header"][data-testid="stBaseButton-header"]:not([data-testid="stMainMenuButton"]) {{
+        display: none !important;
+        visibility: hidden !important;
+        width: 0 !important; height: 0 !important;
+        pointer-events: none !important;
+    }}
+    /* ── 3-dots Main Menu — pin to TOP-RIGHT (desktop) or TOP-LEFT next
+       to the sidebar-expand button (mobile). Was previously (a) clipped
+       by parent header height:0, and (b) covered by the Deploy button
+       at the same position. Now isolated, fixed, above everything.       */
+    [data-testid="stMainMenuButton"],
+    button[data-testid="stMainMenuButton"] {{
+        position: fixed !important;
+        top: 8px !important;
+        right: 10px !important;
+        left: auto !important;
+        z-index: 1000001 !important;       /* above EVERYTHING */
+        background: {metric_bg} !important;
+        border: 1px solid {metric_border} !important;
+        border-radius: 10px !important;
+        width: 40px !important; height: 40px !important;
+        padding: 6px !important;
+        box-shadow: 0 6px 18px -4px rgba(15,23,42,0.22) !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        color: {metric_text} !important;
+    }}
+    [data-testid="stMainMenuButton"] svg {{
+        width: 22px !important; height: 22px !important;
+        color: {metric_text} !important;
+        fill: currentColor !important;
+    }}
+    [data-testid="stMainMenuButton"]:hover {{
+        background: {metric_bg} !important;
+        filter: brightness(1.05);
+        transform: translateY(-1px);
+    }}
+    /* Mobile: positioned BELOW the pills bar (top: 78px) and the parent
+       header lifted to z=1000000 so it stacks above .app-header-wrap
+       (z:9999) and the pills (z:998). On mobile Streamlit otherwise
+       gives the header z:999, which puts it BEHIND the page header. */
+    @media (max-width: 820px) {{
+        header[data-testid="stHeader"] {{
+            z-index: 1000000 !important;
+            overflow: visible !important;
+        }}
+        [data-testid="stMainMenuButton"],
+        button[data-testid="stMainMenuButton"] {{
+            top: 78px !important;
+            right: 10px !important;
+            left: auto !important;
+            width: 40px !important; height: 40px !important;
+            z-index: 1000050 !important;
+            box-shadow: 0 4px 14px -2px rgba(15,23,42,0.32) !important;
+        }}
     }}
     .app-header-wrap {{
         text-align: center !important;
@@ -4439,11 +4510,15 @@ def apply_premium_polish(language: str = "עברית",
 
 
 def _pp_inject_help_shim() -> None:
-    """Tiny global handler for `<details class="pp-help">` popovers:
-    - Tap/click anywhere outside an open help closes it (proper mobile UX).
-    - Opening one auto-closes any other open help on the page (single-active).
-    - Esc key closes the currently open help.
-    Idempotent — safe to inject on every rerun."""
+    """Two persistent runtime shims, idempotent across reruns:
+      1. Help-badge popover handler (close on outside tap, single-active, Esc).
+      2. **Phantom container collapser** — finds every Streamlit
+         `stElementContainer` whose only payload is a 0-height iframe or
+         a `<style>`/`<script>`-only markdown injection and `display:none`s
+         it. Streamlit's parent `stVerticalBlock` has `gap: 1rem`, so even
+         0-height children consume 16px. This is what was creating
+         ~200px of "dead space" above the title.
+    """
     components.html(
         """
         <script>(function(){
@@ -4452,34 +4527,92 @@ def _pp_inject_help_shim() -> None:
             if (d.__pp_help_shim_installed) return;
             d.__pp_help_shim_installed = true;
 
+            // ── 1) Help popover behaviour ──────────────────────────────
             function closeAllExcept(except) {
               d.querySelectorAll('details.pp-help[open]').forEach(function(el){
                 if (el !== except) el.removeAttribute('open');
               });
             }
-            // Outside-tap closes
             d.addEventListener('click', function(ev){
               var t = ev.target;
               if (!t || !t.closest) return;
               var inHelp = t.closest('details.pp-help');
-              if (inHelp) {
-                // Opened a help → close any other
-                closeAllExcept(inHelp);
-              } else {
-                closeAllExcept(null);
-              }
+              closeAllExcept(inHelp || null);
             }, true);
-            // Esc closes
             d.addEventListener('keydown', function(ev){
               if (ev.key === 'Escape') closeAllExcept(null);
             }, true);
-            // Touchstart on mobile too (some Streamlit captures cancel clicks)
             d.addEventListener('touchstart', function(ev){
               var t = ev.target;
               if (!t || !t.closest) return;
               var inHelp = t.closest('details.pp-help');
               if (!inHelp) closeAllExcept(null);
             }, {passive: true, capture: true});
+
+            // ── 2) Phantom container collapser (NARROW, CONSERVATIVE) ──
+            // Only hide containers that match one of the explicitly-known
+            // "phantom" patterns:
+            //   (a) Markdown container whose immediate children are ONLY
+            //       <style>, <script>, or <link> (no visible content).
+            //   (b) Empty markdown container (no children at all).
+            //   (c) Iframe with explicit height="0" attribute (the
+            //       `components.html(height=0)` case).
+            // We DO NOT use computed-height heuristics — those wrongly
+            // hide widgets that load asynchronously.
+            function isStyleOnlyMarkdown(el) {
+              var md = el.querySelector(':scope > .stMarkdown > div > [data-testid="stMarkdownContainer"]');
+              if (!md) {
+                md = el.querySelector('[data-testid="stMarkdownContainer"]');
+                if (!md) return false;
+                // Make sure this markdown belongs DIRECTLY to this container
+                if (md.closest('[data-testid="stElementContainer"]') !== el) return false;
+              }
+              var kids = md.children;
+              if (!kids || kids.length === 0) return true;  // empty markdown
+              for (var i = 0; i < kids.length; i++) {
+                var t = kids[i].tagName;
+                if (t !== 'STYLE' && t !== 'SCRIPT' && t !== 'LINK') return false;
+              }
+              return true;
+            }
+            function isZeroIframe(el) {
+              // Only target Streamlit's components.html iframes (data-testid="stIFrame").
+              // Custom components (streamlit-option-menu, lottie, etc.) start at
+              // height=0 and grow via postMessage — hiding them kills navigation.
+              var ifrs = el.querySelectorAll('iframe[data-testid="stIFrame"]');
+              for (var i = 0; i < ifrs.length; i++) {
+                var ifr = ifrs[i];
+                if (ifr.closest('[data-testid="stElementContainer"]') !== el) continue;
+                var h = ifr.getAttribute('height');
+                if (h === '0' || h === 0 || h === '0px') return true;
+                var inlineH = (ifr.style && ifr.style.height) || '';
+                if (inlineH === '0' || inlineH === '0px') return true;
+                var rect = ifr.getBoundingClientRect();
+                if (rect && rect.height < 1) return true;
+              }
+              return false;
+            }
+            function isPhantom(el) {
+              return isStyleOnlyMarkdown(el) || isZeroIframe(el);
+            }
+            function collapsePhantoms() {
+              var containers = d.querySelectorAll('[data-testid="stElementContainer"]');
+              for (var i = 0; i < containers.length; i++) {
+                var c = containers[i];
+                if (isPhantom(c)) {
+                  if (c.style.display !== 'none') {
+                    c.style.setProperty('display', 'none', 'important');
+                  }
+                }
+              }
+            }
+            collapsePhantoms();
+            try {
+              var mo = new MutationObserver(function(){
+                requestAnimationFrame(collapsePhantoms);
+              });
+              mo.observe(d.body, {childList: true, subtree: true});
+            } catch(e) {}
           } catch(e) {}
         })();</script>
         """,
@@ -4824,11 +4957,14 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     @media (max-width: 820px) {{
         html, body {{ background: {bg_base}; }}
 
-        /* Pin Streamlit header/toolbar to top, no empty scroll space above */
+        /* Pin Streamlit header/toolbar to top, no empty scroll space above.
+           overflow MUST be visible — otherwise the floating Main Menu
+           (3-dots), which lives inside the header, gets clipped to a 1-px
+           sliver at the right edge. */
         [data-testid="stHeader"], header[data-testid="stHeader"] {{
-            position: sticky !important; top: 0 !important; z-index: 999 !important;
+            position: sticky !important; top: 0 !important; z-index: 1000000 !important;
             height: 0 !important; min-height: 0 !important; padding: 0 !important;
-            overflow: hidden !important;
+            overflow: visible !important;
         }}
         [data-testid="stAppViewContainer"] {{
             padding-top: 0 !important;
