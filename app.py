@@ -473,6 +473,94 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         -webkit-backdrop-filter: blur(10px);
         border-bottom: 1px solid {metric_border} !important;
     }}
+
+    /* ─────────────────────────────────────────────────────────────────
+       Help-badges (?) — perfect SVG circle, taps open a popup on mobile,
+       hover/click on desktop. The native <details> element handles all
+       toggling without JS.                                             */
+    .pp-help-wrap {{
+        text-align: right;
+        margin: -2px 0 -4px 0;
+        position: relative;
+        direction: ltr;
+    }}
+    details.pp-help {{
+        display: inline-block;
+        position: relative;
+    }}
+    details.pp-help > summary.pp-help-summary {{
+        list-style: none;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px; height: 22px;
+        border-radius: 50%;
+        color: #94a3b8;
+        background: transparent;
+        transition: background 120ms ease, color 120ms ease, transform 120ms ease;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+    }}
+    details.pp-help > summary.pp-help-summary::-webkit-details-marker {{ display: none; }}
+    details.pp-help > summary.pp-help-summary::marker {{ display: none; content: ""; }}
+    details.pp-help > summary.pp-help-summary:hover,
+    details.pp-help > summary.pp-help-summary:focus-visible {{
+        color: #6366f1;
+        background: rgba(99, 102, 241, 0.10);
+        outline: none;
+    }}
+    details.pp-help[open] > summary.pp-help-summary {{
+        color: #6366f1;
+        background: rgba(99, 102, 241, 0.14);
+    }}
+    details.pp-help > summary.pp-help-summary .pp-help-icon {{
+        display: block; pointer-events: none;
+    }}
+    details.pp-help > .pp-help-body {{
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0; left: auto;
+        z-index: 10000;
+        min-width: 240px;
+        max-width: min(360px, calc(100vw - 24px));
+        padding: 12px 14px;
+        font-size: 0.86rem;
+        line-height: 1.55;
+        background: {metric_bg};
+        color: {metric_text};
+        border: 1px solid {metric_border};
+        border-radius: 12px;
+        box-shadow: 0 14px 32px -8px rgba(0,0,0,0.32);
+        unicode-bidi: plaintext;
+        white-space: normal;
+        word-wrap: break-word;
+        text-align: start;
+        animation: pp-help-fade 120ms ease-out;
+    }}
+    @keyframes pp-help-fade {{
+        from {{ opacity: 0; transform: translateY(-4px); }}
+        to   {{ opacity: 1; transform: translateY(0); }}
+    }}
+    /* Mobile: full-width drawer-style popup so long tooltips don't clip off-screen */
+    @media (max-width: 600px) {{
+        details.pp-help > .pp-help-body {{
+            position: fixed;
+            top: auto;
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+            left: 12px; right: 12px;
+            max-width: none;
+            min-width: 0;
+            padding: 14px 16px;
+            font-size: 0.92rem;
+            box-shadow: 0 -10px 32px -6px rgba(0,0,0,0.45);
+            animation: pp-help-fade-mob 160ms ease-out;
+        }}
+        @keyframes pp-help-fade-mob {{
+            from {{ opacity: 0; transform: translateY(12px); }}
+            to   {{ opacity: 1; transform: translateY(0); }}
+        }}
+    }}
     /* ── Overlap shields: make sure charts, dataframes and tooltip badges
            never visually clip under the sticky header / nav.             ── */
     [data-testid="stPlotlyChart"],
@@ -2551,68 +2639,88 @@ def _clear_query_param(name: str) -> None:
 
 
 def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "dark") -> None:
+    """Render the TradingView Advanced Chart widget.
+
+    Two implementation details that matter:
+      1. **Theme toggle**: TradingView's embed script keeps state per iframe.
+         If we keep the same DOM container ID, the script may NOT re-init
+         on a theme change. We force a fresh iframe by giving the container
+         a unique id that includes the theme + a cache-buster timestamp.
+      2. **MA 150 & MA 50**: the embed widget supports MA via `studies`
+         array of strings (not objects) — the format
+         `"MASimple@tv-basicstudies"` loads a simple moving average.
+         Multiple SMAs are supported by repeating the entry. Lengths are
+         tuned via `studies_overrides`. The two MAs end up named
+         `moving average` and `moving average #1` in the override scope.
+    """
     symbol = _tradingview_symbol(ticker)
     if not symbol:
         st.info("No chart symbol")
         return
     tv_theme = "dark" if theme == "dark" else "light"
-    # Advanced TradingView chart: drawing tools (trend lines, channels), MA 150 & MA 50
+
+    # Cache-bust id forces TradingView's embed script to remount on every render.
+    # This is what makes the Light/Dark toggle actually take effect.
+    cache_key = f"{tv_theme}-{int(time.time() * 1000)}"
+    container_id = f"tv-widget-{abs(hash(cache_key)) % (10**9)}"
+
+    bg_outer = "#0b1220" if tv_theme == "dark" else "#ffffff"
+
     widget_html = f"""
-    <div class="tradingview-widget-container" style="height:{height}px;width:100%">
-      <div class="tradingview-widget-container__widget" style="height:{height}px;width:100%"></div>
+    <!-- tv-cache-bust:{cache_key} -->
+    <div id="{container_id}" class="tradingview-widget-container"
+         style="height:{height}px;width:100%;background:{bg_outer};border-radius:10px;overflow:hidden">
+      <div class="tradingview-widget-container__widget"
+           style="height:{height}px;width:100%"></div>
       <script type="text/javascript"
-        src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-        {{
-          "width": "100%",
-          "height": "{height}",
-          "symbol": "{symbol}",
-          "interval": "D",
-          "timezone": "Etc/UTC",
-          "theme": "{tv_theme}",
-          "style": "1",
-          "locale": "en",
-          "allow_symbol_change": true,
-          "save_image": true,
-          "hide_side_toolbar": false,
-          "withdateranges": true,
-          "details": false,
-          "calendar": false,
-          "show_popup_button": true,
-          "popup_width": "1000",
-          "popup_height": "650",
-          "support_host": "https://www.tradingview.com",
-           "drawings_access": {{
-             "type": "all",
-             "tools": [
-               {{ "name": "Trend Line" }},
-               {{ "name": "Regression Trend" }},
-               {{ "name": "Parallel Channel" }}
-             ]
-           }},
-           "enabled_features": ["drawing_templates"],
-           "studies": [
-             {{
-               "id": "STD;SMA",
-               "inputs": {{
-                 "length": 150
-               }}
-             }},
-             {{
-               "id": "STD;SMA",
-               "inputs": {{
-                 "length": 50
-               }}
-             }}
-           ],
-           "studies_overrides": {{
-             "moving average.length": 150,
-             "moving average.plot.color": "#ff9800",
-             "moving average.plot.linewidth": 2,
-             "moving average#1.length": 50,
-             "moving average#1.plot.color": "#2196f3",
-             "moving average#1.plot.linewidth": 2
-           }}
-        }}
+        src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js?v={cache_key}" async>
+      {{
+        "autosize": true,
+        "width": "100%",
+        "height": "{height}",
+        "symbol": "{symbol}",
+        "interval": "D",
+        "timezone": "Etc/UTC",
+        "theme": "{tv_theme}",
+        "style": "1",
+        "locale": "en",
+        "toolbar_bg": "{bg_outer}",
+        "allow_symbol_change": true,
+        "save_image": true,
+        "hide_side_toolbar": false,
+        "withdateranges": true,
+        "details": false,
+        "calendar": false,
+        "show_popup_button": true,
+        "popup_width": "1000",
+        "popup_height": "650",
+        "support_host": "https://www.tradingview.com",
+        "studies": [
+          "MASimple@tv-basicstudies",
+          "MASimple@tv-basicstudies"
+        ],
+        "studies_overrides": {{
+          "moving average.length": 150,
+          "moving average.plot.color": "rgb(255,152,0)",
+          "moving average.plot.linewidth": 2,
+          "moving average.plot.linestyle": 0,
+          "moving average #1.length": 50,
+          "moving average #1.plot.color": "rgb(33,150,243)",
+          "moving average #1.plot.linewidth": 2,
+          "moving average #1.plot.linestyle": 0
+        }},
+        "drawings_access": {{
+          "type": "all",
+          "tools": [
+            {{ "name": "Trend Line" }},
+            {{ "name": "Horizontal Line" }},
+            {{ "name": "Regression Trend" }},
+            {{ "name": "Parallel Channel" }},
+            {{ "name": "Fib Retracement" }}
+          ]
+        }},
+        "enabled_features": ["drawing_templates"]
+      }}
       </script>
     </div>
     """
@@ -4324,6 +4432,59 @@ def apply_premium_polish(language: str = "עברית",
         _pp_inject_productivity_layer(language=language)
     except Exception:
         pass
+    try:
+        _pp_inject_help_shim()
+    except Exception:
+        pass
+
+
+def _pp_inject_help_shim() -> None:
+    """Tiny global handler for `<details class="pp-help">` popovers:
+    - Tap/click anywhere outside an open help closes it (proper mobile UX).
+    - Opening one auto-closes any other open help on the page (single-active).
+    - Esc key closes the currently open help.
+    Idempotent — safe to inject on every rerun."""
+    components.html(
+        """
+        <script>(function(){
+          try {
+            var d = (window.parent && window.parent.document) ? window.parent.document : document;
+            if (d.__pp_help_shim_installed) return;
+            d.__pp_help_shim_installed = true;
+
+            function closeAllExcept(except) {
+              d.querySelectorAll('details.pp-help[open]').forEach(function(el){
+                if (el !== except) el.removeAttribute('open');
+              });
+            }
+            // Outside-tap closes
+            d.addEventListener('click', function(ev){
+              var t = ev.target;
+              if (!t || !t.closest) return;
+              var inHelp = t.closest('details.pp-help');
+              if (inHelp) {
+                // Opened a help → close any other
+                closeAllExcept(inHelp);
+              } else {
+                closeAllExcept(null);
+              }
+            }, true);
+            // Esc closes
+            d.addEventListener('keydown', function(ev){
+              if (ev.key === 'Escape') closeAllExcept(null);
+            }, true);
+            // Touchstart on mobile too (some Streamlit captures cancel clicks)
+            d.addEventListener('touchstart', function(ev){
+              var t = ev.target;
+              if (!t || !t.closest) return;
+              var inHelp = t.closest('details.pp-help');
+              if (!inHelp) closeAllExcept(null);
+            }, {passive: true, capture: true});
+          } catch(e) {}
+        })();</script>
+        """,
+        height=0, width=0,
+    )
 
 
 def _pp_inject_premium_css(is_dark: bool, is_mobile: bool) -> None:
@@ -5307,19 +5468,36 @@ def pp_portfolio_health_score(metrics: Dict[str, float],
 
 
 def _chart_help(en: str, he: str, language: str) -> None:
-    """Renders a small ❓ badge (hover = tooltip text, tap on mobile = tooltip)."""
-    text = (he if language in ("he", "עברית") else en).replace('"', "'")
-    # Perfect circle: fixed-dimension inline-flex box with centered glyph.
-    # Avoids the oval caused by asymmetric padding + border-radius:50%.
+    """Inline help badge that works on BOTH desktop hover-or-click AND mobile tap.
+
+    Implementation:
+    - SVG-based circle (guaranteed perfect 20×20, no font-metric drift).
+    - Wrapped in <details><summary> so a tap toggles the popup natively.
+    - Popup is position:absolute so it doesn't push surrounding charts.
+    - Closing on outside tap is wired up by a tiny global JS shim injected
+      once via _pp_inject_help_shim() (see main()).
+    """
+    raw = he if language in ("he", "עברית") else en
+    text = (raw.replace("&", "&amp;")
+               .replace("<", "&lt;")
+               .replace(">", "&gt;")
+               .replace('"', "&quot;")
+               .replace("\n", "<br>"))
     st.markdown(
-        f'<div style="text-align:right;margin-bottom:-6px;direction:ltr">'
-        f'<span title="{text}" aria-label="{text}" role="img" '
-        f'style="cursor:help;display:inline-flex;align-items:center;'
-        f'justify-content:center;width:18px;height:18px;box-sizing:border-box;'
-        f'font-size:0.7rem;font-weight:600;color:#94a3b8;'
-        f'border:1px solid #94a3b8;border-radius:50%;line-height:1;'
-        f'user-select:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;'
-        f'unicode-bidi:isolate;direction:ltr;flex-shrink:0">?</span></div>',
+        f"""
+<div class="pp-help-wrap">
+  <details class="pp-help">
+    <summary class="pp-help-summary" aria-label="Help" role="button">
+      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false" class="pp-help-icon">
+        <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" stroke-width="1.4"/>
+        <text x="10" y="14.5" text-anchor="middle" font-size="12" font-weight="700" fill="currentColor"
+              font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif">?</text>
+      </svg>
+    </summary>
+    <div class="pp-help-body" role="tooltip">{text}</div>
+  </details>
+</div>
+""",
         unsafe_allow_html=True,
     )
 
