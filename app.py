@@ -463,6 +463,50 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         width: 0 !important; height: 0 !important;
         pointer-events: none !important;
     }}
+    /* ── Sidebar collapse-arrow buttons — fix the top:-14px clip by
+       making them position:fixed so they don't inherit the zero-height
+       header's geometry. */
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="stSidebarCollapseButton"],
+    button[data-testid="stExpandSidebarButton"],
+    button[data-testid="stSidebarCollapseButton"] {{
+        position: fixed !important;
+        top: 12px !important;
+        z-index: 1000003 !important;
+        background: {metric_bg} !important;
+        border: 1px solid {metric_border} !important;
+        border-radius: 10px !important;
+        width: 38px !important; height: 38px !important;
+        padding: 6px !important;
+        box-shadow: 0 4px 14px -4px rgba(15,23,42,0.22) !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        color: {metric_text} !important;
+    }}
+    [data-testid="stExpandSidebarButton"] svg,
+    [data-testid="stSidebarCollapseButton"] svg {{
+        width: 22px !important; height: 22px !important;
+        color: {metric_text} !important;
+        fill: currentColor !important;
+    }}
+    /* When sidebar collapsed: expand button at the LEFT edge (LTR layout) */
+    [data-testid="stExpandSidebarButton"] {{
+        left: 12px !important; right: auto !important;
+    }}
+    /* When sidebar open: collapse button on the LEFT edge of viewport but
+       just inside the open sidebar (Streamlit places it inside .stSidebar). */
+    [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {{
+        position: absolute !important;   /* relative to sidebar, not viewport */
+        top: 12px !important;
+        right: 8px !important;
+        left: auto !important;
+        z-index: 99 !important;
+    }}
+
     /* ── 3-dots Main Menu — pin to TOP-RIGHT (desktop) or TOP-LEFT next
        to the sidebar-expand button (mobile). Was previously (a) clipped
        by parent header height:0, and (b) covered by the Deploy button
@@ -498,10 +542,10 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         filter: brightness(1.05);
         transform: translateY(-1px);
     }}
-    /* Mobile: positioned BELOW the pills bar (top: 78px) and the parent
-       header lifted to z=1000000 so it stacks above .app-header-wrap
-       (z:9999) and the pills (z:998). On mobile Streamlit otherwise
-       gives the header z:999, which puts it BEHIND the page header. */
+    /* Mobile: 3-dots Main Menu sits at the SAME vertical level as the
+       page-pills bar (top: 12px), in the right-side 56px gutter we
+       reserved by giving the pills `margin-right: 56px`. Header z is
+       lifted to 1000000 so it stacks above .app-header-wrap (z:9999). */
     @media (max-width: 820px) {{
         header[data-testid="stHeader"] {{
             z-index: 1000000 !important;
@@ -509,12 +553,22 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         }}
         [data-testid="stMainMenuButton"],
         button[data-testid="stMainMenuButton"] {{
-            top: 78px !important;
+            top: 12px !important;
             right: 10px !important;
             left: auto !important;
-            width: 40px !important; height: 40px !important;
+            width: 38px !important; height: 38px !important;
             z-index: 1000050 !important;
             box-shadow: 0 4px 14px -2px rgba(15,23,42,0.32) !important;
+        }}
+        /* The app-header-wrap (title) sticks BELOW the pills bar so it
+           never gets covered by the nav. Includes a 10px breathing gap. */
+        .app-header-wrap {{
+            top: 76px !important;
+            margin-top: 10px !important;
+        }}
+        /* When sidebar is OPEN (rare on mobile) — collapse arrow position */
+        [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {{
+            top: 12px !important;
         }}
     }}
     .app-header-wrap {{
@@ -593,8 +647,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         top: calc(100% + 6px);
         right: 0; left: auto;
         z-index: 10000;
-        min-width: 240px;
-        max-width: min(360px, calc(100vw - 24px));
+        min-width: 220px;
+        max-width: min(340px, calc(100vw - 24px));
         padding: 12px 14px;
         font-size: 0.86rem;
         line-height: 1.55;
@@ -613,23 +667,21 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         from {{ opacity: 0; transform: translateY(-4px); }}
         to   {{ opacity: 1; transform: translateY(0); }}
     }}
-    /* Mobile: full-width drawer-style popup so long tooltips don't clip off-screen */
+    /* Mobile: keep popup INLINE near the badge (matching Streamlit's
+       native `help=` tooltip behaviour), NOT a bottom drawer. The popup
+       opens just below the ? badge, capped at viewport-minus-padding for
+       width so long Hebrew text wraps cleanly. */
     @media (max-width: 600px) {{
         details.pp-help > .pp-help-body {{
-            position: fixed;
-            top: auto;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
-            left: 12px; right: 12px;
-            max-width: none;
-            min-width: 0;
-            padding: 14px 16px;
-            font-size: 0.92rem;
-            box-shadow: 0 -10px 32px -6px rgba(0,0,0,0.45);
-            animation: pp-help-fade-mob 160ms ease-out;
-        }}
-        @keyframes pp-help-fade-mob {{
-            from {{ opacity: 0; transform: translateY(12px); }}
-            to   {{ opacity: 1; transform: translateY(0); }}
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0; left: auto; bottom: auto;
+            min-width: 220px;
+            max-width: min(320px, calc(100vw - 32px));
+            padding: 11px 13px;
+            font-size: 0.86rem;
+            box-shadow: 0 12px 28px -6px rgba(0,0,0,0.35);
+            animation: pp-help-fade 120ms ease-out;
         }}
     }}
     /* ── Overlap shields: make sure charts, dataframes and tooltip badges
@@ -1052,13 +1104,16 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         body {{
             overscroll-behavior-y: none !important;
         }}
-        /* ── Title: sticky at top ── */
+        /* ── Title: sticky BELOW the pills nav. Pills are effectively
+              fixed-positioned (don't take flow space), so we add a 70px
+              top-margin to physically push the title below them. The
+              sticky behaviour pins it at the same line when scrolling. ── */
         .app-header-wrap {{
             position: sticky !important;
-            top: 0 !important;
-            z-index: 10001 !important;
+            top: 76px !important;
+            margin-top: 70px !important;
+            z-index: 900 !important;        /* below nav (z:998) */
             padding: 0.3rem 0.5rem 0.2rem 0.5rem !important;
-            margin: 0 !important;
         }}
         /* ── Nav radio bar: compact text ── */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
@@ -4548,6 +4603,65 @@ def _pp_inject_help_shim() -> None:
               var inHelp = t.closest('details.pp-help');
               if (!inHelp) closeAllExcept(null);
             }, {passive: true, capture: true});
+            // Scroll closes any open help. Streamlit's actual scroll
+            // container is NOT the window — `stAppViewContainer` has
+            // overflow:hidden and the `section.main` (or similar) below
+            // it is what scrolls. So we listen on EVERY element with
+            // overflow auto/scroll, plus window/document, plus a polling
+            // fallback that walks open details' scroll-parents.
+            function onScrollOrTouch() { closeAllExcept(null); }
+            var w = d.defaultView || window;
+            d.addEventListener('scroll', onScrollOrTouch, {passive: true, capture: true});
+            w.addEventListener('scroll', onScrollOrTouch, {passive: true, capture: true});
+            w.addEventListener('wheel', onScrollOrTouch, {passive: true, capture: true});
+            d.addEventListener('wheel', onScrollOrTouch, {passive: true, capture: true});
+            d.addEventListener('touchmove', onScrollOrTouch, {passive: true, capture: true});
+            w.addEventListener('resize', onScrollOrTouch);
+            w.addEventListener('orientationchange', onScrollOrTouch);
+
+            function findScrollableParent(el) {
+              var n = el && el.parentElement;
+              while (n) {
+                var cs = getComputedStyle(n);
+                var oy = cs.overflowY, ox = cs.overflowX;
+                if (oy === 'auto' || oy === 'scroll' || ox === 'auto' || ox === 'scroll') {
+                  return n;
+                }
+                n = n.parentElement;
+              }
+              return null;
+            }
+            // Whenever a help opens, attach a one-shot scroll listener on
+            // its nearest scrollable ancestor (which is what actually
+            // scrolls inside Streamlit).
+            d.addEventListener('toggle', function(ev){
+              var t = ev.target;
+              if (!t || !t.matches || !t.matches('details.pp-help')) return;
+              if (!t.open) return;
+              var sp = findScrollableParent(t);
+              if (sp && !sp.__pp_help_scroll_bound) {
+                sp.__pp_help_scroll_bound = true;
+                sp.addEventListener('scroll', onScrollOrTouch, {passive: true, capture: true});
+              }
+              // Also bind on each scrollable section.main / stMain
+              d.querySelectorAll('section.main, [data-testid="stMain"], [data-testid="stMainBlockContainer"], [data-testid="stAppViewContainer"]').forEach(function(s){
+                if (s.__pp_help_scroll_bound) return;
+                s.__pp_help_scroll_bound = true;
+                s.addEventListener('scroll', onScrollOrTouch, {passive: true, capture: true});
+              });
+            }, true);
+
+            // Final polling fallback (covers any container we missed)
+            var lastSig = '';
+            setInterval(function(){
+              try {
+                var sig = (w.scrollY || 0) + ':' + Array.from(d.querySelectorAll('[data-testid="stMain"], section.main, [data-testid="stMainBlockContainer"]')).map(function(s){return s.scrollTop;}).join(',');
+                if (sig !== lastSig) {
+                  if (lastSig) closeAllExcept(null);
+                  lastSig = sig;
+                }
+              } catch(e) {}
+            }, 200);
 
             // ── 2) Phantom container collapser (NARROW, CONSERVATIVE) ──
             // Only hide containers that match one of the explicitly-known
@@ -5124,8 +5238,8 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         .app-sub-title {{ font-size: 0.84rem !important; color: var(--pp2-muted) !important; }}
 
         /* Top floating page-nav radio (4- or 5-pill segmented control) — glass + shadow.
-           Matches either the 4-pill (current) or 5-pill (legacy) top nav.
-           Pinned to viewport top so navigation is reachable while scrolling. */
+           Pinned at the very top, leaves 50px of right-side gutter so the
+           3-dots Main Menu fits at the SAME vertical level (per user spec). */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child),
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child) {{
             background: var(--pp2-surface-strong) !important;
@@ -5134,10 +5248,11 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             box-shadow: 0 8px 24px -10px rgba(15,23,42,0.28) !important;
             border: 1px solid var(--pp2-border) !important;
             position: sticky !important;
-            top: calc(3.2rem + env(safe-area-inset-top, 0px)) !important;
+            top: 6px !important;            /* hug the very top */
             z-index: 998 !important;
             padding: 6px 8px !important;
             border-radius: 14px !important;
+            margin-right: 56px !important;  /* gutter for 3-dots Main Menu */
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked),
@@ -7761,36 +7876,25 @@ def main() -> None:
                     chart_anchor_id = f"tv-chart-anchor-{widget_prefix}"
                     st.markdown(f"<div id='{chart_anchor_id}'></div>", unsafe_allow_html=True)
                     st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
-                    # Toolbar row: [title · spacer · light/dark toggle · close]
-                    _ttitle_col, _tv_theme_col, close_col = st.columns([6, 2, 1])
-                    # Per-chart theme override: defaults to follow the app theme.
-                    _tv_theme_key = "tv_chart_theme_override"
-                    _default_tv_theme = "dark" if is_dark else "light"
-                    if _tv_theme_key not in st.session_state:
-                        st.session_state[_tv_theme_key] = _default_tv_theme
-                    _current_tv_theme = st.session_state[_tv_theme_key]
-                    _tv_toggle_label = (tr("🌙 Dark bg", "🌙 רקע כהה")
-                                        if _current_tv_theme == "light"
-                                        else tr("☀ Light bg", "☀ רקע בהיר"))
-                    if _tv_theme_col.button(
-                        _tv_toggle_label,
-                        key=f"{widget_prefix}_tv_theme_toggle",
+                    # Compact toolbar: [title · close]. Per-chart theme toggle
+                    # was removed — TradingView's embed widget caches theme
+                    # state in localStorage and ignores re-init theme params,
+                    # which made the toggle unreliable.
+                    _ttitle_col, close_col = st.columns([8, 1])
+                    if close_col.button(
+                        tr("✕ Close", "✕ סגור"),
+                        key=f"{widget_prefix}_tv_inline_close",
+                        type="primary",
                         use_container_width=True,
-                        help=tr("Toggle chart background between light and dark.",
-                                "החלפת רקע הגרף בין בהיר לכהה."),
                     ):
-                        st.session_state[_tv_theme_key] = (
-                            "light" if _current_tv_theme == "dark" else "dark"
-                        )
-                        st.rerun()
-                    if close_col.button(tr("Close", "סגור"), key=f"{widget_prefix}_tv_inline_close"):
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
                         st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
+                        st.rerun()
                     _render_tradingview_widget(
                         active_ticker,
                         height=580 if is_mobile else 750,
-                        theme=st.session_state.get(_tv_theme_key, _default_tv_theme),
+                        theme="dark" if is_dark else "light",
                     )
                     if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
                         components.html(
