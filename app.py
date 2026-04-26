@@ -6961,7 +6961,8 @@ def render_simulator_page(
         b1.metric(
             tr("Regular (gross)", "רגיל (לפני מס)"),
             f"₪{reg_final_gross:,.0f}",
-            delta=(f"− ₪{reg_tax:,.0f} " + tr("tax", "מס")) if reg_tax > 0 else None,
+            delta=(f"-₪{reg_tax:,.0f} " + tr("tax", "מס")) if reg_tax > 0 else None,
+            delta_color="inverse" if reg_tax > 0 else "off",
             help=tr(
                 f"25% of inflation-adjusted gain. Tax = ₪{reg_tax:,.0f}. NET = ₪{reg_final_net:,.0f}.",
                 f"25% מהרווח הריאלי. מס = ₪{reg_tax:,.0f}. NET = ₪{reg_final_net:,.0f}.",
