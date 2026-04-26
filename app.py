@@ -5184,7 +5184,7 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         .stButton > button[kind="primary"],
         .stButton > button[data-testid="baseButton-primary"],
         button[kind="primary"] {{
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1e3a8a 100%) !important;
+            background: linear-gradient(135deg, #1e40af 0%, #2563eb 55%, #3b82f6 100%) !important;
             color: #fff !important;
             border: 0 !important;
             font-weight: 700 !important;
@@ -5245,7 +5245,7 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             color: var(--pp2-text) !important;
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {{
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1e3a8a 100%) !important;
+            background: linear-gradient(135deg, #1e40af 0%, #2563eb 55%, #3b82f6 100%) !important;
             color: #fff !important;
             box-shadow: 0 4px 12px -3px rgba(15,23,42,0.55),
                         0 1px 0 0 rgba(255,255,255,0.08) inset !important;
@@ -5347,7 +5347,7 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         [data-baseweb="radio"]:has(input:checked),
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
         [data-baseweb="radio"]:has(input:checked) {{
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1e3a8a 100%) !important;
+            background: linear-gradient(135deg, #1e40af 0%, #2563eb 55%, #3b82f6 100%) !important;
             box-shadow: 0 4px 14px -3px rgba(15,23,42,0.55),
                         0 1px 0 0 rgba(255,255,255,0.08) inset !important;
             color: #fff !important;
@@ -5361,12 +5361,15 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             color: #fff !important;
             font-weight: 700 !important;
         }}
+        /* (legacy gradient rule removed — was overriding the new royal-blue
+           premium gradient defined above. Same selector, kept for backwards
+           compat but now matches the brand palette.) */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked),
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
         [data-baseweb="radio"]:has(input:checked) {{
-            background: var(--pp2-grad) !important;
-            box-shadow: 0 4px 12px -2px rgba(99,102,241,0.55);
+            background: linear-gradient(135deg, #1e40af 0%, #2563eb 55%, #3b82f6 100%) !important;
+            box-shadow: 0 4px 12px -2px rgba(37,99,235,0.50) !important;
         }}
 
         /* Safer hamburger — bigger, subtle press */
