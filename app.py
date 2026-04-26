@@ -5178,29 +5178,31 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             transform: translateY(0);
             background: rgba(99,102,241,0.06) !important;
         }}
-        /* Primary buttons (kind="primary") — refined indigo gradient */
+        /* Primary buttons (kind="primary") — same charcoal-to-sapphire
+           gradient as the nav pills + tabs. ONE accent identity across
+           every prominent button on mobile. Less "kindergarten purple". */
         .stButton > button[kind="primary"],
         .stButton > button[data-testid="baseButton-primary"],
         button[kind="primary"] {{
-            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 55%, #818cf8 100%) !important;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1e3a8a 100%) !important;
             color: #fff !important;
             border: 0 !important;
             font-weight: 700 !important;
             letter-spacing: 0.01em !important;
-            box-shadow: 0 4px 14px -3px rgba(79,70,229,0.42),
-                        0 1px 0 0 rgba(255,255,255,0.16) inset !important;
+            box-shadow: 0 4px 14px -3px rgba(15,23,42,0.45),
+                        0 1px 0 0 rgba(255,255,255,0.10) inset !important;
             transition: filter 120ms ease, box-shadow 140ms ease, transform 80ms ease !important;
         }}
         .stButton > button[kind="primary"]:hover,
         button[kind="primary"]:hover {{
-            filter: brightness(1.06);
+            filter: brightness(1.18);
             transform: translateY(-1px);
-            box-shadow: 0 6px 18px -4px rgba(79,70,229,0.55) !important;
+            box-shadow: 0 6px 18px -4px rgba(30,58,138,0.55) !important;
         }}
         .stButton > button[kind="primary"]:active,
         button[kind="primary"]:active {{
             transform: translateY(0);
-            filter: brightness(0.96);
+            filter: brightness(0.94);
         }}
 
         /* Sticky toolbar row above content when it contains buttons */
@@ -5243,13 +5245,14 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             color: var(--pp2-text) !important;
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {{
-            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 60%, #818cf8 100%) !important;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1e3a8a 100%) !important;
             color: #fff !important;
-            box-shadow: 0 4px 12px -3px rgba(79,70,229,0.45) !important;
+            box-shadow: 0 4px 12px -3px rgba(15,23,42,0.55),
+                        0 1px 0 0 rgba(255,255,255,0.08) inset !important;
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"]:hover {{
-            filter: brightness(1.05);
+            filter: brightness(1.10);
         }}
 
         /* Plotly charts: taller intrinsic box, no modebar on mobile */
@@ -5327,7 +5330,10 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             border-radius: 14px !important;
             margin-right: 56px !important;  /* gutter for 3-dots */
         }}
-        /* Each pill — neutral by default, accent on active */
+        /* Each pill — neutral by default; ACTIVE uses a deep charcoal-to-
+           sapphire gradient (premium, not "kindergarten purple"). The same
+           palette is reused for tabs and primary buttons below so the whole
+           mobile UI shares ONE accent identity. */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"],
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
@@ -5341,8 +5347,9 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         [data-baseweb="radio"]:has(input:checked),
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
         [data-baseweb="radio"]:has(input:checked) {{
-            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 60%, #818cf8 100%) !important;
-            box-shadow: 0 4px 14px -3px rgba(79,70,229,0.50) !important;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #1e3a8a 100%) !important;
+            box-shadow: 0 4px 14px -3px rgba(15,23,42,0.55),
+                        0 1px 0 0 rgba(255,255,255,0.08) inset !important;
             color: #fff !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
