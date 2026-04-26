@@ -5140,7 +5140,9 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             width: 3px !important;
         }}
 
-        /* Bigger, thumb-friendly controls (Apple HIG 44pt) */
+        /* Bigger, thumb-friendly controls (Apple HIG 44pt). Buttons are
+           refined: subtle elevation, refined typography, no kindergarten
+           gradient unless explicitly type="primary". */
         .stButton > button, .stDownloadButton > button,
         [data-testid="stFormSubmitButton"] button,
         div[data-baseweb="select"] > div,
@@ -5148,6 +5150,57 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             min-height: 44px !important;
             font-size: 16px !important; /* prevent iOS zoom */
             border-radius: 12px !important;
+        }}
+        /* Default (secondary) buttons — clean, subtle, professional */
+        .stButton > button:not([kind="primary"]):not([data-testid="baseButton-primary"]),
+        .stDownloadButton > button:not([kind="primary"]) {{
+            background: var(--pp2-surface) !important;
+            color: var(--pp2-text) !important;
+            border: 1px solid var(--pp2-border) !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.01em !important;
+            box-shadow: 0 1px 2px 0 rgba(15,23,42,0.05),
+                        0 1px 3px 0 rgba(15,23,42,0.08) !important;
+            transition: background 140ms ease, border-color 140ms ease,
+                        box-shadow 140ms ease, transform 80ms ease !important;
+        }}
+        .stButton > button:not([kind="primary"]):hover,
+        .stDownloadButton > button:not([kind="primary"]):hover {{
+            background: var(--pp2-surface-strong) !important;
+            border-color: rgba(99,102,241,0.45) !important;
+            color: #4f46e5 !important;
+            box-shadow: 0 2px 6px -1px rgba(79,70,229,0.18),
+                        0 4px 10px -3px rgba(15,23,42,0.10) !important;
+            transform: translateY(-1px);
+        }}
+        .stButton > button:not([kind="primary"]):active,
+        .stDownloadButton > button:not([kind="primary"]):active {{
+            transform: translateY(0);
+            background: rgba(99,102,241,0.06) !important;
+        }}
+        /* Primary buttons (kind="primary") — refined indigo gradient */
+        .stButton > button[kind="primary"],
+        .stButton > button[data-testid="baseButton-primary"],
+        button[kind="primary"] {{
+            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 55%, #818cf8 100%) !important;
+            color: #fff !important;
+            border: 0 !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.01em !important;
+            box-shadow: 0 4px 14px -3px rgba(79,70,229,0.42),
+                        0 1px 0 0 rgba(255,255,255,0.16) inset !important;
+            transition: filter 120ms ease, box-shadow 140ms ease, transform 80ms ease !important;
+        }}
+        .stButton > button[kind="primary"]:hover,
+        button[kind="primary"]:hover {{
+            filter: brightness(1.06);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px -4px rgba(79,70,229,0.55) !important;
+        }}
+        .stButton > button[kind="primary"]:active,
+        button[kind="primary"]:active {{
+            transform: translateY(0);
+            filter: brightness(0.96);
         }}
 
         /* Sticky toolbar row above content when it contains buttons */
@@ -5170,17 +5223,34 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             -webkit-backdrop-filter: blur(10px);
             border: 1px solid var(--pp2-border) !important;
         }}
+        /* Tabs — refined "soft pill" appearance, more professional than
+           the gradient default. Inactive: muted ghost; active: solid
+           accent fill with subtle drop shadow + crisp white text. */
         [data-baseweb="tab-list"] [data-baseweb="tab"] {{
             border-radius: 10px !important;
-            padding: 8px 12px !important;
-            min-height: 40px !important;
+            padding: 8px 14px !important;
+            min-height: 38px !important;
             border: 0 !important;
+            font-weight: 600 !important;
+            font-size: 13px !important;
+            letter-spacing: 0.01em !important;
+            color: var(--pp2-muted) !important;
+            background: transparent !important;
+            transition: background 140ms ease, color 140ms ease, transform 120ms var(--pp2-ease) !important;
+        }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"]:hover {{
+            background: rgba(99,102,241,0.08) !important;
+            color: var(--pp2-text) !important;
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {{
-            background: var(--pp2-grad) !important;
+            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 60%, #818cf8 100%) !important;
             color: #fff !important;
+            box-shadow: 0 4px 12px -3px rgba(79,70,229,0.45) !important;
         }}
         [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] * {{ color:#fff !important; }}
+        [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"]:hover {{
+            filter: brightness(1.05);
+        }}
 
         /* Plotly charts: taller intrinsic box, no modebar on mobile */
         [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; position: relative; }}
@@ -5237,22 +5307,52 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
         .app-sub-title {{ font-size: 0.84rem !important; color: var(--pp2-muted) !important; }}
 
-        /* Top floating page-nav radio (4- or 5-pill segmented control) — glass + shadow.
-           Pinned at the very top, leaves 50px of right-side gutter so the
-           3-dots Main Menu fits at the SAME vertical level (per user spec). */
+        /* Top page-nav radio (4-pill segmented control) — refined glass
+           pill bar with subtle border, professional shadow, no gradient
+           background. Active pill gets a clean indigo fill (matches the
+           tabs above and the brand accent), inactive pills stay neutral.
+           Pinned at the very top with right-side gutter for 3-dots. */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child),
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child) {{
             background: var(--pp2-surface-strong) !important;
             backdrop-filter: blur(18px) saturate(1.15) !important;
             -webkit-backdrop-filter: blur(18px) saturate(1.15) !important;
-            box-shadow: 0 8px 24px -10px rgba(15,23,42,0.28) !important;
+            box-shadow: 0 6px 20px -8px rgba(15,23,42,0.20),
+                        0 1px 0 0 rgba(255,255,255,0.50) inset !important;
             border: 1px solid var(--pp2-border) !important;
             position: sticky !important;
-            top: 6px !important;            /* hug the very top */
+            top: 6px !important;
             z-index: 998 !important;
-            padding: 6px 8px !important;
+            padding: 5px 6px !important;
             border-radius: 14px !important;
-            margin-right: 56px !important;  /* gutter for 3-dots Main Menu */
+            margin-right: 56px !important;  /* gutter for 3-dots */
+        }}
+        /* Each pill — neutral by default, accent on active */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"],
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
+        [data-baseweb="radio"] {{
+            background: transparent !important;
+            border-radius: 10px !important;
+            padding: 6px 10px !important;
+            transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked),
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
+        [data-baseweb="radio"]:has(input:checked) {{
+            background: linear-gradient(135deg, #4f46e5 0%, #6366f1 60%, #818cf8 100%) !important;
+            box-shadow: 0 4px 14px -3px rgba(79,70,229,0.50) !important;
+            color: #fff !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) p,
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
+        [data-baseweb="radio"]:has(input:checked) p,
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"]:has(input:checked) * {{
+            color: #fff !important;
+            font-weight: 700 !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked),
@@ -6352,6 +6452,34 @@ def render_simulator_page(
         except Exception:
             pass
         st.session_state["_sim_prefs_hydrated"] = True
+
+    # Defensive type-coercion: Streamlit's number_input widget raises a
+    # `TypeError: ... must be ... not str/int` when the session-state value
+    # type doesn't match the widget signature (step=float ⟹ value must be
+    # float, etc). JSON-deserialised prefs may produce ints where floats
+    # are expected, OR earlier code may have stashed a string, so we
+    # normalise every persisted key to its expected Python type here.
+    _SIM_TYPES: Dict[str, Tuple[type, object]] = {
+        "sim_age_now": (int, 30),
+        "sim_age_target": (int, 67),
+        "sim_initial_clean": (float, 0.0),
+        "sim_annual_return": (float, 7.0),
+        "sim_monthly_contrib": (float, 2000.0),
+        "sim_lump_sum": (float, 0.0),
+        "sim_lump_month": (int, 0),
+        "sim_swr": (float, 4.0),
+        "sim_annual_inflation": (float, 3.0),
+    }
+    for _k, (_typ, _default) in _SIM_TYPES.items():
+        if _k in st.session_state:
+            _val = st.session_state[_k]
+            try:
+                if _typ is float:
+                    st.session_state[_k] = float(_val if _val is not None else _default)
+                elif _typ is int:
+                    st.session_state[_k] = int(float(_val) if _val is not None else _default)
+            except (TypeError, ValueError):
+                st.session_state[_k] = _default
 
     try:
         tv = float(total_value or 0.0)
