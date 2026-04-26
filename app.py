@@ -6343,16 +6343,53 @@ def render_advanced_analytics(
 # SIMULATOR FEATURE — long-term projection + Safe Withdrawal (pension) model
 # ════════════════════════════════════════════════════════════════════════
 SIM_PREFS_FILE = Path(__file__).resolve().parent / "sim_user_prefs.json"
-_SIM_PERSISTED_KEYS = (
-    "sim_age_now", "sim_age_target",
-    "sim_initial_clean", "sim_annual_return",
-    "sim_monthly_contrib", "sim_lump_sum", "sim_lump_month",
-    "sim_swr", "sim_annual_inflation", "sim_mode_choice",
+
+# Per-mode input keys. Each mode (`mine` for "My Portfolio", `clean` for
+# "Clean") gets its OWN copy of every input below; switching modes never
+# overwrites the other.
+_SIM_MODE_KEYS = (
+    # Horizon + global
+    "age_now", "age_target", "swr", "annual_inflation",
+    # Regular taxable portfolio
+    "regular_initial", "regular_monthly", "regular_lump", "regular_lump_month",
+    "regular_return",
+    # Pension fund (tax-exempt at retirement)
+    "pension_initial", "pension_monthly", "pension_return",
+    "pension_fee_accumulation", "pension_fee_deposits",
+    # Education fund (קרן השתלמות) — tax-exempt
+    "education_initial", "education_monthly", "education_return",
+    "education_fee_accumulation", "education_fee_deposits",
 )
+# Singletons (not per-mode)
+_SIM_GLOBAL_KEYS = ("sim_mode_choice",)
+
+
+def _sim_key(mode: str, key: str) -> str:
+    """Namespaced session-state key. Examples:
+        ('mine', 'age_now')        → 'sim_mine_age_now'
+        ('clean', 'pension_fee_*') → 'sim_clean_pension_fee_*'"""
+    return f"sim_{mode}_{key}"
+
+
+def _sim_default(key: str) -> object:
+    """Default value for a given input key (typed appropriately)."""
+    defaults = {
+        "age_now": 30, "age_target": 67,
+        "swr": 4.0, "annual_inflation": 3.0,
+        "regular_initial": 0.0, "regular_monthly": 2000.0,
+        "regular_lump": 0.0, "regular_lump_month": 0,
+        "regular_return": 7.0,
+        "pension_initial": 0.0, "pension_monthly": 1500.0, "pension_return": 6.0,
+        "pension_fee_accumulation": 0.5, "pension_fee_deposits": 1.0,
+        "education_initial": 0.0, "education_monthly": 800.0, "education_return": 6.0,
+        "education_fee_accumulation": 0.5, "education_fee_deposits": 0.5,
+    }
+    return defaults.get(key, 0.0)
 
 
 def load_sim_prefs() -> Dict[str, object]:
-    """Load previously saved simulator inputs from disk (per-user persistence)."""
+    """Load previously saved simulator inputs from disk (per-user persistence).
+    The on-disk JSON mirrors session_state keys 1:1 (already namespaced)."""
     if not SIM_PREFS_FILE.exists():
         return {}
     try:
@@ -6363,10 +6400,16 @@ def load_sim_prefs() -> Dict[str, object]:
 
 
 def save_sim_prefs(values: Mapping[str, object]) -> bool:
-    """Persist the simulator input snapshot atomically. Silent on failure so
-    a broken disk never crashes the UI."""
+    """Persist the simulator input snapshot atomically. Saves EVERY known
+    namespaced key for both modes — switching modes never loses the
+    other mode's data."""
     try:
-        safe = {k: v for k, v in values.items() if k in _SIM_PERSISTED_KEYS}
+        # Only persist keys we know about (whitelist)
+        whitelist = set(_SIM_GLOBAL_KEYS)
+        for mode in ("mine", "clean"):
+            for k in _SIM_MODE_KEYS:
+                whitelist.add(_sim_key(mode, k))
+        safe = {k: v for k, v in values.items() if k in whitelist}
         SIM_PREFS_FILE.write_text(
             json.dumps(safe, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -6374,6 +6417,68 @@ def save_sim_prefs(values: Mapping[str, object]) -> bool:
         return True
     except Exception:
         return False
+
+
+# ──────────────────────────────────────────────────────────────────
+# Financial math: tax + management fees
+# ──────────────────────────────────────────────────────────────────
+ISRAELI_CAPITAL_GAINS_TAX = 0.25  # 25% on REAL (inflation-adjusted) profits
+
+
+def _real_capital_gains_tax(
+    final_nominal: float,
+    total_contributed: float,
+    inflation_pct: float,
+    years: float,
+) -> float:
+    """Israeli rule of thumb: 25% on the inflation-adjusted gain.
+    Indexed basis = contributions × (1+inflation)^years. Tax = 25% × max(0, nominal − indexed).
+    Returns the tax amount (always >= 0)."""
+    if final_nominal <= 0 or total_contributed <= 0 or years <= 0:
+        return 0.0
+    inflation_factor = (1.0 + max(0.0, inflation_pct) / 100.0) ** float(years)
+    indexed_basis = total_contributed * inflation_factor
+    real_gain = max(0.0, final_nominal - indexed_basis)
+    return ISRAELI_CAPITAL_GAINS_TAX * real_gain
+
+
+def sim_project_fund(
+    initial: float,
+    monthly_contrib: float,
+    annual_return_pct: float,
+    years: float,
+    fee_accumulation_pct: float = 0.0,
+    fee_deposits_pct: float = 0.0,
+) -> float:
+    """Project a tax-exempt fund (Pension or Education) with TWO fee types:
+    - `fee_accumulation_pct`: annual % skimmed off the BALANCE (e.g. 0.5%/yr).
+    - `fee_deposits_pct`: % skimmed off EACH deposit (e.g. 1% of every payment).
+    Returns the gross balance at maturity (no tax — these funds are exempt
+    when used for their designated purpose)."""
+    try:
+        initial = float(initial or 0.0)
+        monthly_contrib = float(monthly_contrib or 0.0)
+        annual_return_pct = float(annual_return_pct or 0.0)
+        years = float(years or 0.0)
+        fee_acc = float(fee_accumulation_pct or 0.0)
+        fee_dep = float(fee_deposits_pct or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if years <= 0:
+        return initial
+    # Net annual return after accumulation fee
+    net_annual = annual_return_pct - fee_acc
+    if 1.0 + net_annual / 100.0 <= 0:
+        r_m = -0.999999
+    else:
+        r_m = (1.0 + net_annual / 100.0) ** (1.0 / 12.0) - 1.0
+    # Each deposit is reduced by deposit fee
+    effective_monthly = monthly_contrib * (1.0 - fee_dep / 100.0)
+    n = max(1, int(round(years * 12)))
+    balance = initial
+    for _ in range(1, n + 1):
+        balance = balance * (1.0 + r_m) + effective_monthly
+    return balance
 
 
 def sim_project_portfolio(
@@ -6493,60 +6598,53 @@ def render_simulator_page(
 ) -> None:
     """Render the Simulator page.
 
-    Two modes:
-      • Clean Simulator — user fills every input.
-      • My Portfolio Simulator — Initial Capital is locked to live total_value.
+    Two modes — each with FULLY INDEPENDENT state (switching modes never
+    overwrites the other's data):
+      • 💼 My Portfolio Simulator — Regular-portfolio Initial Capital is
+        locked to the live total_value of your real portfolio.
+      • 🧼 Clean Simulator — every input is user-editable from scratch.
 
-    Outputs 4 KPIs, a chart (contributions / no-lump / with-lump),
-    milestones, delay-cost insight, and a yearly breakdown + CSV export.
+    Each mode has THREE sub-portfolios that are projected independently:
+      1. Regular taxable portfolio   → 25% capital-gains tax on REAL
+                                       (inflation-adjusted) profits
+      2. Pension fund (קרן פנסיה)    → tax-EXEMPT (designated retirement use)
+      3. Education fund (קרן השתלמות)→ tax-EXEMPT after vesting period
+
+    Funds (Pension / Education) factor in TWO management-fee types:
+      - Fee on accumulation: annual % skimmed off the running balance
+      - Fee on deposits: % skimmed off every monthly contribution
+
+    All KPI cards (Total Value · Real Value · Monthly SWR Allowance) show
+    NET values after every tax + fee deduction.
+
+    Inputs persist to disk (sim_user_prefs.json) keyed by mode, so closing
+    the browser, refreshing, or even rebooting the laptop preserves
+    everything. Switching mode never touches the OTHER mode's saved data.
     """
     st.markdown(f"### 🧮 {tr('Simulator', 'סימולטור')}")
     st.caption(tr(
-        "Long-term growth projection with monthly compounding, optional lump-sum, inflation adjustment and a sustainable monthly pension. Your inputs are saved automatically.",
-        "הדמיית צמיחה ארוכת-טווח עם ריבית דריבית חודשית, תרומה חד-פעמית אפשרית, התאמה לאינפלציה ופנסיה חודשית ברת-קיימא. הקלטים נשמרים אוטומטית.",
+        "Long-term projection: regular taxable portfolio (25% tax on real "
+        "gains) + tax-exempt Pension and Education funds. Each mode keeps "
+        "its own inputs — switching never overwrites the other side. All "
+        "results show NET values after taxes and management fees.",
+        "תחזית ארוכת-טווח: תיק רגיל חייב במס (25% על רווח ריאלי) + קרן "
+        "פנסיה וקרן השתלמות פטורות ממס. כל מצב שומר את הקלטים שלו בנפרד — "
+        "מעבר בין מצבים לעולם לא מוחק את השני. כל התוצאות הן ערכי NET לאחר "
+        "מסים ודמי-ניהול.",
     ))
 
-    # ── Hydrate persisted inputs from disk (per-user saved state) on the
-    # first visit during this browser session. We gate with a sentinel so a
-    # stale disk-value doesn't keep overwriting the user's live edits.
+    # ── Hydrate persisted inputs from disk on first visit ─────────────
     if not st.session_state.get("_sim_prefs_hydrated", False):
         try:
             _prefs = load_sim_prefs()
             for _k, _v in _prefs.items():
-                if _k in _SIM_PERSISTED_KEYS and _k not in st.session_state:
+                if _k not in st.session_state:
                     st.session_state[_k] = _v
         except Exception:
             pass
         st.session_state["_sim_prefs_hydrated"] = True
 
-    # Defensive type-coercion: Streamlit's number_input widget raises a
-    # `TypeError: ... must be ... not str/int` when the session-state value
-    # type doesn't match the widget signature (step=float ⟹ value must be
-    # float, etc). JSON-deserialised prefs may produce ints where floats
-    # are expected, OR earlier code may have stashed a string, so we
-    # normalise every persisted key to its expected Python type here.
-    _SIM_TYPES: Dict[str, Tuple[type, object]] = {
-        "sim_age_now": (int, 30),
-        "sim_age_target": (int, 67),
-        "sim_initial_clean": (float, 0.0),
-        "sim_annual_return": (float, 7.0),
-        "sim_monthly_contrib": (float, 2000.0),
-        "sim_lump_sum": (float, 0.0),
-        "sim_lump_month": (int, 0),
-        "sim_swr": (float, 4.0),
-        "sim_annual_inflation": (float, 3.0),
-    }
-    for _k, (_typ, _default) in _SIM_TYPES.items():
-        if _k in st.session_state:
-            _val = st.session_state[_k]
-            try:
-                if _typ is float:
-                    st.session_state[_k] = float(_val if _val is not None else _default)
-                elif _typ is int:
-                    st.session_state[_k] = int(float(_val) if _val is not None else _default)
-            except (TypeError, ValueError):
-                st.session_state[_k] = _default
-
+    # ── Mode selector (independent state per mode) ─────────────────────
     try:
         tv = float(total_value or 0.0)
     except (TypeError, ValueError):
@@ -6556,297 +6654,371 @@ def render_simulator_page(
     mode_clean = tr("🧼 Clean Simulator", "🧼 סימולטור נקי")
     mode_mine = tr("💼 My Portfolio Simulator", "💼 סימולטור התיק שלי")
     mode_options = [mode_mine, mode_clean] if has_portfolio else [mode_clean]
-
     default_mode = mode_mine if has_portfolio else mode_clean
     if st.session_state.get("sim_mode_choice") not in mode_options:
         st.session_state["sim_mode_choice"] = default_mode
-
     mode = st.radio(
-        tr("Mode", "מצב"),
-        mode_options,
-        horizontal=True,
-        key="sim_mode_choice",
+        tr("Mode", "מצב"), mode_options, horizontal=True, key="sim_mode_choice",
     )
-
     use_portfolio = (mode == mode_mine) and has_portfolio
+    mode_id = "mine" if (mode == mode_mine) else "clean"
 
-    # ── Inputs (grouped in glassy bordered container) ─────────────────
+    # Defensive type-coercion for THIS mode's keys.
+    _SIM_TYPES: Dict[str, type] = {
+        "age_now": int, "age_target": int, "regular_lump_month": int,
+    }
+    for k in _SIM_MODE_KEYS:
+        full = _sim_key(mode_id, k)
+        if full in st.session_state:
+            target_type = _SIM_TYPES.get(k, float)
+            try:
+                if target_type is int:
+                    st.session_state[full] = int(float(st.session_state[full]) if st.session_state[full] is not None else _sim_default(k))
+                else:
+                    st.session_state[full] = float(st.session_state[full] if st.session_state[full] is not None else _sim_default(k))
+            except (TypeError, ValueError):
+                st.session_state[full] = _sim_default(k)
+
+    # Helper: ensure key exists in session_state with a typed default.
+    def _need(key: str):
+        full = _sim_key(mode_id, key)
+        if full not in st.session_state:
+            st.session_state[full] = _sim_default(key)
+        return full
+
+    # ── Inputs ─────────────────────────────────────────────────────────
     with st.container(border=True):
-        st.markdown(f"**{tr('Parameters', 'פרמטרים')}**")
+        st.markdown(f"**{tr('Horizon & global', 'אופק וזמן')}**")
         col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
-
         with col_l:
-            # Initialize defaults in session-state first so widgets with keys
-            # never violate updated min_value constraints across reruns.
-            if "sim_age_now" not in st.session_state:
-                st.session_state["sim_age_now"] = 30
+            k_age_now = _need("age_now")
             age_now = st.number_input(
                 tr("Your current age", "הגיל הנוכחי שלך"),
-                min_value=10, max_value=90,
-                step=1,
-                key="sim_age_now",
-                help=tr("Starting age — used only to compute the horizon.",
-                        "גיל התחלה — משמש רק לחישוב משך ההשקעה."),
+                min_value=10, max_value=90, step=1, key=k_age_now,
             )
-            # Keep target age strictly above current age at all times.
             min_target = int(age_now) + 1
-            if "sim_age_target" not in st.session_state:
-                st.session_state["sim_age_target"] = max(min_target, 67)
-            elif int(st.session_state["sim_age_target"]) < min_target:
-                st.session_state["sim_age_target"] = min_target
+            k_age_t = _need("age_target")
+            if int(st.session_state[k_age_t]) < min_target:
+                st.session_state[k_age_t] = min_target
             age_target = st.number_input(
                 tr("Target retirement age", "גיל פרישה מתוכנן"),
-                min_value=min_target, max_value=100,
-                step=1,
-                key="sim_age_target",
-                help=tr("Projection ends at this age.", "ההדמיה מסתיימת בגיל זה."),
+                min_value=min_target, max_value=100, step=1, key=k_age_t,
             )
+        with col_r:
+            k_swr = _need("swr")
+            swr_pct = float(st.slider(
+                tr("Safe Withdrawal Rate (SWR %)", "שיעור משיכה בטוח (SWR %)"),
+                min_value=3.0, max_value=5.0, step=0.25, key=k_swr,
+                help=tr("Trinity-study rule. 4% is the classic default.",
+                        "כלל אצבע ממחקר Trinity. 4% הוא ברירת-המחדל."),
+            ))
+            k_infl = _need("annual_inflation")
+            inflation_pct = float(st.number_input(
+                tr("Annual inflation (%)", "אינפלציה שנתית (%)"),
+                min_value=0.0, max_value=20.0, step=0.25, key=k_infl,
+                help=tr("Used for REAL value + 25% real-gains tax basis.",
+                        "משמש לחישוב שווי ריאלי ובסיס מס רווח-הון ריאלי."),
+            ))
 
+        years_total = max(1.0, float(age_target) - float(age_now))
+        months_total = int(round(years_total * 12))
+
+    # ── Regular (TAXABLE) portfolio ─────────────────────────────────────
+    with st.container(border=True):
+        st.markdown(
+            f"**📈 {tr('Regular portfolio (25% tax on real gains)', 'תיק רגיל (מס 25% על רווח ריאלי)')}**"
+        )
+        col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
+        with col_l:
             if use_portfolio:
-                initial_capital = tv
-                # Force the locked widget's session value to the live portfolio value.
-                st.session_state["sim_initial_mine"] = float(round(tv, 2))
+                # Lock initial capital to live portfolio value
+                st.session_state[_sim_key(mode_id, "regular_initial")] = float(round(tv, 2))
+                regular_initial = float(tv)
                 st.number_input(
                     tr("Initial capital (₪) — locked to your portfolio",
                        "הון התחלתי (₪) — נעול לשווי התיק שלך"),
-                    step=100.0,
-                    disabled=True,
-                    key="sim_initial_mine",
-                    help=tr("Auto-seeded from the live portfolio total value.",
-                            "מוזן אוטומטית משווי התיק הנוכחי."),
+                    step=100.0, disabled=True,
+                    key=_sim_key(mode_id, "regular_initial"),
                 )
                 st.info(tr(
                     f"Seeded from your portfolio: ₪{tv:,.0f}",
                     f"הוזן משווי התיק שלך: ₪{tv:,.0f}",
                 ))
             else:
-                if "sim_initial_clean" not in st.session_state:
-                    st.session_state["sim_initial_clean"] = 0.0
-                initial_capital = float(st.number_input(
+                k = _need("regular_initial")
+                regular_initial = float(st.number_input(
                     tr("Initial capital (₪)", "הון התחלתי (₪)"),
-                    min_value=0.0,
-                    step=1000.0,
-                    key="sim_initial_clean",
-                    help=tr("Starting amount at month 0.", "הסכום בנקודת הזמן 0."),
+                    min_value=0.0, step=1000.0, key=k,
                 ))
-
+            k = _need("regular_monthly")
+            regular_monthly = float(st.number_input(
+                tr("Monthly contribution (₪)", "הפקדה חודשית (₪)"),
+                min_value=0.0, step=100.0, key=k,
+            ))
         with col_r:
-            if "sim_annual_return" not in st.session_state:
-                st.session_state["sim_annual_return"] = 7.0
-            annual_return = float(st.number_input(
+            k = _need("regular_return")
+            regular_return = float(st.number_input(
                 tr("Expected annual return (%)", "תשואה שנתית צפויה (%)"),
-                min_value=-20.0, max_value=40.0,
-                step=0.25,
-                key="sim_annual_return",
-                help=tr("S&P 500 long-run average ≈ 7% real / 10% nominal.",
+                min_value=-20.0, max_value=40.0, step=0.25, key=k,
+                help=tr("S&P 500 long-run ≈ 7% real / 10% nominal.",
                         "ממוצע רב-שנתי של S&P 500: ≈7% ריאלי / 10% נומינלי."),
             ))
-            if "sim_monthly_contrib" not in st.session_state:
-                st.session_state["sim_monthly_contrib"] = 2000.0
-            monthly_contrib = float(st.number_input(
-                tr("Monthly contribution (₪)", "הפקדה חודשית (₪)"),
-                min_value=0.0,
-                step=100.0,
-                key="sim_monthly_contrib",
-                help=tr("Amount added at the end of every month.",
-                        "סכום שמתווסף בסוף כל חודש."),
-            ))
-            if "sim_lump_sum" not in st.session_state:
-                st.session_state["sim_lump_sum"] = 0.0
-            lump_sum = float(st.number_input(
+            k = _need("regular_lump")
+            regular_lump = float(st.number_input(
                 tr("One-time lump sum (₪)", "הפקדה חד-פעמית (₪)"),
-                min_value=0.0,
-                step=1000.0,
-                key="sim_lump_sum",
-                help=tr("A single extra deposit (e.g. bonus, inheritance).",
-                        "הפקדה נוספת חד-פעמית (למשל בונוס, ירושה)."),
+                min_value=0.0, step=1000.0, key=k,
+            ))
+            k = _need("regular_lump_month")
+            slider_max = max(1, months_total)
+            if int(st.session_state[k]) > slider_max:
+                st.session_state[k] = slider_max
+            elif int(st.session_state[k]) < 0:
+                st.session_state[k] = 0
+            regular_lump_month = int(st.slider(
+                tr("Lump-sum timing (months)", "תזמון ההפקדה (חודשים)"),
+                min_value=0, max_value=slider_max, step=1, key=k,
+                disabled=(regular_lump <= 0.0),
             ))
 
-        years_total = max(1.0, float(age_target) - float(age_now))
-        months_total = int(round(years_total * 12))
-
-        # Clamp lump-month into the current slider range (horizon may have
-        # changed between reruns when the user adjusts current/target age).
-        _slider_max = max(1, months_total)
-        if "sim_lump_month" not in st.session_state:
-            st.session_state["sim_lump_month"] = 0
-        elif int(st.session_state["sim_lump_month"]) > _slider_max:
-            st.session_state["sim_lump_month"] = _slider_max
-        elif int(st.session_state["sim_lump_month"]) < 0:
-            st.session_state["sim_lump_month"] = 0
-        lump_month = st.slider(
-            tr("Lump-sum timing (months from today)",
-               "תזמון ההפקדה החד-פעמית (חודשים מהיום)"),
-            min_value=0,
-            max_value=_slider_max,
-            step=1,
-            key="sim_lump_month",
-            disabled=(lump_sum <= 0.0),
-            help=tr("0 = today. Later = less compounding time.",
-                    "0 = היום. מאוחר יותר = פחות זמן לריבית דריבית."),
+    # ── Pension fund (TAX-EXEMPT) ───────────────────────────────────────
+    with st.container(border=True):
+        st.markdown(
+            f"**🏦 {tr('Pension fund (קרן פנסיה) — tax-exempt', 'קרן פנסיה — פטורה ממס')}**"
         )
+        col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
+        with col_l:
+            k = _need("pension_initial")
+            pension_initial = float(st.number_input(
+                tr("Initial amount (₪)", "סכום התחלתי (₪)"),
+                min_value=0.0, step=1000.0, key=k,
+            ))
+            k = _need("pension_monthly")
+            pension_monthly = float(st.number_input(
+                tr("Monthly contribution (₪)", "הפקדה חודשית (₪)"),
+                min_value=0.0, step=100.0, key=k,
+                help=tr("Combined employer + employee + severance.",
+                        "סך הפקדות עובד + מעסיק + פיצויים."),
+            ))
+            k = _need("pension_return")
+            pension_return = float(st.number_input(
+                tr("Expected annual return (%)", "תשואה שנתית צפויה (%)"),
+                min_value=-20.0, max_value=40.0, step=0.25, key=k,
+            ))
+        with col_r:
+            k = _need("pension_fee_accumulation")
+            pension_fee_acc = float(st.number_input(
+                tr("Mgmt fee — accumulation (%/yr)",
+                   "דמי-ניהול מצבירה (%/שנה)"),
+                min_value=0.0, max_value=5.0, step=0.05, key=k,
+                help=tr("Annual % skimmed off the balance.",
+                        "אחוז שנתי שגובה הקרן מסך הצבירה."),
+            ))
+            k = _need("pension_fee_deposits")
+            pension_fee_dep = float(st.number_input(
+                tr("Mgmt fee — deposits (%)",
+                   "דמי-ניהול מהפקדות (%)"),
+                min_value=0.0, max_value=10.0, step=0.05, key=k,
+                help=tr("% skimmed off each monthly contribution.",
+                        "אחוז שנגרע מכל הפקדה חודשית."),
+            ))
 
-        if "sim_swr" not in st.session_state:
-            st.session_state["sim_swr"] = 4.0
-        swr_pct = float(st.slider(
-            tr("Safe Withdrawal Rate (SWR %)", "שיעור משיכה בטוח (SWR %)"),
-            min_value=3.0, max_value=5.0,
-            step=0.25,
-            key="sim_swr",
-            help=tr(
-                "Trinity-study rule of thumb: the % of your final balance you can safely withdraw EVERY YEAR without depleting the portfolio over a 30-year retirement. 4% is the classic default; 3.5% is conservative (factors in lower future returns); 5% is aggressive (high sequence-of-returns risk). The withdrawal amount is adjusted for inflation each year. Derived from historical 30-year rolling windows of a 50/50 stock/bond portfolio that survived 95%+ of cases at 4%.",
-                "כלל אצבע ממחקר Trinity: האחוז מהיתרה הסופית שניתן למשוך כל שנה מבלי לרוקן את התיק לאורך 30 שנות פרישה. 4% הוא ברירת-המחדל הקלאסית; 3.5% שמרני (בהנחת תשואות עתידיות נמוכות); 5% אגרסיבי (סיכון 'סדר התשואות' גבוה). סכום המשיכה מותאם לאינפלציה מדי שנה. נגזר מחלונות גלגול של 30 שנה היסטוריים של תיק 50/50 מניות/אג\"ח ששרדו מעל 95% מהתרחישים ב-4%.",
-            ),
-        ))
+    # ── Education fund (TAX-EXEMPT after 6 yr vest) ─────────────────────
+    with st.container(border=True):
+        st.markdown(
+            f"**🎓 {tr('Education fund (קרן השתלמות) — tax-exempt', 'קרן השתלמות — פטורה ממס')}**"
+        )
+        col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
+        with col_l:
+            k = _need("education_initial")
+            education_initial = float(st.number_input(
+                tr("Initial amount (₪)", "סכום התחלתי (₪)"),
+                min_value=0.0, step=1000.0, key=k,
+            ))
+            k = _need("education_monthly")
+            education_monthly = float(st.number_input(
+                tr("Monthly contribution (₪)", "הפקדה חודשית (₪)"),
+                min_value=0.0, step=100.0, key=k,
+            ))
+            k = _need("education_return")
+            education_return = float(st.number_input(
+                tr("Expected annual return (%)", "תשואה שנתית צפויה (%)"),
+                min_value=-20.0, max_value=40.0, step=0.25, key=k,
+            ))
+        with col_r:
+            k = _need("education_fee_accumulation")
+            education_fee_acc = float(st.number_input(
+                tr("Mgmt fee — accumulation (%/yr)",
+                   "דמי-ניהול מצבירה (%/שנה)"),
+                min_value=0.0, max_value=5.0, step=0.05, key=k,
+            ))
+            k = _need("education_fee_deposits")
+            education_fee_dep = float(st.number_input(
+                tr("Mgmt fee — deposits (%)",
+                   "דמי-ניהול מהפקדות (%)"),
+                min_value=0.0, max_value=10.0, step=0.05, key=k,
+            ))
 
-        # ── NEW: Annual Inflation (converts nominal → REAL final value) ──
-        if "sim_annual_inflation" not in st.session_state:
-            st.session_state["sim_annual_inflation"] = 3.0
-        inflation_pct = float(st.number_input(
-            tr("Annual inflation (%)", "אינפלציה שנתית (%)"),
-            min_value=0.0, max_value=20.0,
-            step=0.25,
-            key="sim_annual_inflation",
-            help=tr(
-                "Discounts future nominal values back into TODAY's purchasing power. "
-                "If inflation runs at 3% for 30 years, ₪1,000,000 nominal will buy roughly what ₪412,000 buys today. "
-                "Israel CPI long-run ≈ 2–3% · USA CPI long-run ≈ 3% · hyper-inflation scenarios 10%+. "
-                "Set to 0 for a pure NOMINAL projection (no adjustment).",
-                "היוון (discount) של שוויים עתידיים נומינליים לכוח הקנייה של היום. "
-                "אם האינפלציה 3% לאורך 30 שנה, ₪1,000,000 נומינליים יקנו בערך מה ש-₪412,000 קונים היום. "
-                "אינפלציה ישראלית ארוכת-טווח ≈ 2-3% · אינפלציה אמריקאית ארוכת-טווח ≈ 3% · היפר-אינפלציה 10%+. "
-                "הזן 0 לתחזית נומינלית טהורה (ללא התאמה).",
-            ),
-        ))
-
-    # ── Projection ────────────────────────────────────────────────────
-    df_proj = sim_project_portfolio(
-        initial_capital=initial_capital,
-        monthly_contribution=monthly_contrib,
-        annual_return_pct=annual_return,
+    # ── Projections ────────────────────────────────────────────────────
+    df_reg = sim_project_portfolio(
+        initial_capital=regular_initial,
+        monthly_contribution=regular_monthly,
+        annual_return_pct=regular_return,
         years=years_total,
-        lump_sum=lump_sum,
-        lump_sum_month=int(lump_month),
+        lump_sum=regular_lump,
+        lump_sum_month=regular_lump_month,
+    )
+    reg_final_gross = float(df_reg.iloc[-1]["balance_with_lump"])
+    reg_total_contributed = (
+        regular_initial + regular_monthly * months_total + regular_lump
+    )
+    reg_tax = _real_capital_gains_tax(
+        final_nominal=reg_final_gross,
+        total_contributed=reg_total_contributed,
+        inflation_pct=inflation_pct,
+        years=years_total,
+    )
+    reg_final_net = reg_final_gross - reg_tax
+
+    pension_final = sim_project_fund(
+        initial=pension_initial,
+        monthly_contrib=pension_monthly,
+        annual_return_pct=pension_return,
+        years=years_total,
+        fee_accumulation_pct=pension_fee_acc,
+        fee_deposits_pct=pension_fee_dep,
+    )
+    education_final = sim_project_fund(
+        initial=education_initial,
+        monthly_contrib=education_monthly,
+        annual_return_pct=education_return,
+        years=years_total,
+        fee_accumulation_pct=education_fee_acc,
+        fee_deposits_pct=education_fee_dep,
     )
 
-    final = df_proj.iloc[-1]
-    final_with = float(final["balance_with_lump"])
-    final_without = float(final["balance_no_lump"])
-    total_contributed = float(final["contributions_cum"])
-    compound_gains = max(0.0, final_with - total_contributed - (lump_sum if lump_sum else 0.0))
-    monthly_pension = sim_safe_withdrawal_monthly(final_with, swr_pct)
+    total_final_net = reg_final_net + pension_final + education_final
+    inflation_factor = (1.0 + inflation_pct / 100.0) ** float(years_total) if inflation_pct > 0 else 1.0
+    total_real = total_final_net / inflation_factor
+    monthly_pension = sim_safe_withdrawal_monthly(total_final_net, swr_pct)
     annual_pension = monthly_pension * 12.0
-    lump_uplift = final_with - final_without
 
-    # Inflation-adjusted ("real") equivalents in today's purchasing power.
-    _infl_factor = (1.0 + inflation_pct / 100.0) ** float(years_total) if inflation_pct > 0 else 1.0
-    real_final = final_with / _infl_factor
-    real_monthly_pension = monthly_pension / _infl_factor
-    real_compound_gains = compound_gains / _infl_factor
+    total_contributed_all = (
+        reg_total_contributed
+        + (pension_initial + pension_monthly * months_total)
+        + (education_initial + education_monthly * months_total)
+    )
 
-    # ── Persist on every rerun (save-on-change, no sidebar button) ──
+    # Persist on every rerun (atomic save of every namespaced key)
     try:
-        save_sim_prefs({k: st.session_state.get(k) for k in _SIM_PERSISTED_KEYS})
+        save_sim_prefs({k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")})
     except Exception:
         pass
 
-    # ── KPI row — NOMINAL ─────────────────────────────────────────────
+    # ── KPI row — NET totals (after tax + fees) ────────────────────────
+    st.markdown(f"### 💰 {tr('Net results (after tax + fees)', 'תוצאות נטו (אחרי מס ודמי-ניהול)')}")
     k1, k2, k3, k4 = st.columns(4)
-    _real_delta_final = (
-        f"≈ ₪{real_final:,.0f} " + tr("in today's ₪", "בכוח קנייה של היום")
+    _real_delta_total = (
+        f"≈ ₪{total_real:,.0f} " + tr("real", "ריאלי")
     ) if inflation_pct > 0 else None
     k1.metric(
-        tr("Final value", "שווי סופי"),
-        f"₪{final_with:,.0f}",
-        delta=_real_delta_final,
+        tr("Total Value (NET)", "שווי כולל (NET)"),
+        f"₪{total_final_net:,.0f}",
+        delta=_real_delta_total,
         help=tr(
-            "Nominal projected balance at target age (with lump sum). The delta shows the REAL value in today's purchasing power after deflating by the inflation rate.",
-            "יתרה נומינלית חזויה בגיל היעד (כולל הפקדה חד-פעמית). הדלתא מציגה את השווי הריאלי בכוח הקנייה של היום לאחר היוון באינפלציה.",
+            "Sum of regular portfolio (after 25% tax on real gains) + pension fund + education fund (both tax-exempt).",
+            "סך התיק הרגיל (אחרי מס 25% על רווח ריאלי) + קרן פנסיה + קרן השתלמות (פטורות ממס).",
         ),
     )
     k2.metric(
-        tr("Total contributed", "סך תרומות"),
-        f"₪{(total_contributed + lump_sum):,.0f}",
-        help=tr("Initial capital + monthly contributions + lump sum.",
-                "הון התחלתי + הפקדות חודשיות + הפקדה חד-פעמית."),
-    )
-    _real_delta_gains = (
-        f"≈ ₪{real_compound_gains:,.0f} " + tr("real", "ריאלי")
-    ) if inflation_pct > 0 else None
-    k3.metric(
-        tr("Compound gains", "רווחי ריבית דריבית"),
-        f"₪{compound_gains:,.0f}",
-        delta=_real_delta_gains,
+        tr("Real Value (today's ₪)", "שווי ריאלי (₪ של היום)"),
+        f"₪{total_real:,.0f}",
         help=tr(
-            "Growth beyond the money you put in — 'interest on interest'. Real delta discounts inflation over the horizon.",
-            "הצמיחה מעבר לסכום שהפקדת — 'ריבית על ריבית'. הדלתא הריאלית מבטלת את השפעת האינפלציה לאורך התקופה.",
+            "Total Value deflated by your inflation rate — what your future self will actually feel.",
+            "השווי הכולל מהוון לפי האינפלציה — כוח הקנייה האמיתי בעתיד.",
         ),
     )
-    _real_delta_pension = (
-        f"≈ ₪{real_monthly_pension:,.0f} " + tr("in today's ₪", "בכוח קנייה של היום")
-    ) if inflation_pct > 0 else f"₪{annual_pension:,.0f} / {tr('year', 'שנה')}"
-    k4.metric(
-        tr("Monthly pension (SWR)", "פנסיה חודשית (SWR)"),
+    k3.metric(
+        tr("Monthly pension (NET)", "פנסיה חודשית (NET)"),
         f"₪{monthly_pension:,.0f}",
-        delta=_real_delta_pension,
-        help=tr("Sustainable monthly withdrawal at the chosen SWR. Real equivalent shown in today's purchasing power when inflation > 0.",
-                "משיכה חודשית ברת-קיימא לפי שיעור המשיכה שנבחר. השווי הריאלי מוצג בכוח הקנייה של היום כאשר האינפלציה גדולה מ-0."),
+        delta=f"₪{annual_pension:,.0f} / {tr('year', 'שנה')}",
+        help=tr(
+            "Sustainable monthly withdrawal at your chosen SWR%, computed on the NET total.",
+            "משיכה חודשית ברת-קיימא לפי שיעור SWR שנבחר — מחושב על השווי הנקי.",
+        ),
+    )
+    k4.metric(
+        tr("Total contributed", "סך תרומות"),
+        f"₪{total_contributed_all:,.0f}",
+        help=tr(
+            "Sum of every initial deposit + monthly contributions + lump sum across all 3 buckets.",
+            "סכום כל ההפקדות (התחלתי + חודשיות + חד-פעמית) בכל שלוש הקופות.",
+        ),
     )
 
-    # Real-value context banner
-    if inflation_pct > 0:
-        _real_pct_loss = (1.0 - 1.0 / _infl_factor) * 100.0
-        st.caption(tr(
-            f"💡 With {inflation_pct:.2f}% annual inflation over {years_total:.1f} years, nominal value loses ≈ {_real_pct_loss:.1f}% of its purchasing power. The 'real' (in today's ₪) equivalent is what your future self will actually feel.",
-            f"💡 באינפלציה של {inflation_pct:.2f}% לשנה לאורך {years_total:.1f} שנים, השווי הנומינלי מאבד כ-{_real_pct_loss:.1f}% מכוח הקנייה. השווי הריאלי (בכוח הקנייה של היום) הוא מה שתרגיש באמת בעתיד.",
-        ))
+    # ── Per-bucket breakdown ───────────────────────────────────────────
+    with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=True):
+        b1, b2, b3 = st.columns(3)
+        b1.metric(
+            tr("Regular (gross)", "רגיל (לפני מס)"),
+            f"₪{reg_final_gross:,.0f}",
+            delta=(f"− ₪{reg_tax:,.0f} " + tr("tax", "מס")) if reg_tax > 0 else None,
+            help=tr(
+                f"25% of inflation-adjusted gain. Tax = ₪{reg_tax:,.0f}. NET = ₪{reg_final_net:,.0f}.",
+                f"25% מהרווח הריאלי. מס = ₪{reg_tax:,.0f}. NET = ₪{reg_final_net:,.0f}.",
+            ),
+        )
+        b2.metric(
+            tr("Pension fund", "קרן פנסיה"),
+            f"₪{pension_final:,.0f}",
+            help=tr(
+                "Tax-exempt at retirement. Both fees applied during accumulation.",
+                "פטורה ממס בפרישה. שני סוגי דמי-ניהול נלקחים בחשבון לאורך הצבירה.",
+            ),
+        )
+        b3.metric(
+            tr("Education fund", "קרן השתלמות"),
+            f"₪{education_final:,.0f}",
+            help=tr(
+                "Tax-exempt after 6-yr vesting. Both fees applied during accumulation.",
+                "פטורה ממס לאחר 6 שנות וותק. שני סוגי דמי-ניהול נלקחים בחשבון.",
+            ),
+        )
 
-    # ── Chart ─────────────────────────────────────────────────────────
+    # ── Projection chart (regular bucket only — funds are point-in-time) ─
     chart_height = 340 if is_mobile else 420
     fig = go.Figure()
-    # Layer 1: cumulative contributions (baseline)
     fig.add_trace(go.Scatter(
-        x=df_proj["year"], y=df_proj["contributions_cum"],
+        x=df_reg["year"], y=df_reg["contributions_cum"],
         mode="lines",
         name=tr("Contributions (baseline)", "תרומות (קו בסיס)"),
         line=dict(color="#94a3b8", width=1.4, dash="dot"),
-        hovertemplate=tr("Year", "שנה") + ": %{x:.1f}<br>"
-                      + tr("Contributed", "הופקד") + ": ₪%{y:,.0f}<extra></extra>",
     ))
-    # Layer 2: balance without lump
     fig.add_trace(go.Scatter(
-        x=df_proj["year"], y=df_proj["balance_no_lump"],
+        x=df_reg["year"], y=df_reg["balance_no_lump"],
         mode="lines",
-        name=tr("Balance (no lump)", "יתרה ללא חד-פעמית"),
+        name=tr("Regular bucket (no lump)", "תיק רגיל (ללא חד-פעמית)"),
         line=dict(color="#06b6d4", width=1.8, dash="dash"),
-        hovertemplate=tr("Year", "שנה") + ": %{x:.1f}<br>"
-                      + tr("Balance", "יתרה") + ": ₪%{y:,.0f}<extra></extra>",
     ))
-    # Layer 3: balance with lump (main line)
     fig.add_trace(go.Scatter(
-        x=df_proj["year"], y=df_proj["balance_with_lump"],
+        x=df_reg["year"], y=df_reg["balance_with_lump"],
         mode="lines",
-        name=tr("Balance (with lump)", "יתרה עם חד-פעמית"),
+        name=tr("Regular bucket (with lump)", "תיק רגיל (עם חד-פעמית)"),
         line=dict(color="#6366f1", width=2.4),
         fill="tozeroy",
         fillcolor="rgba(99,102,241,0.10)",
-        hovertemplate=tr("Year", "שנה") + ": %{x:.1f}<br>"
-                      + tr("Balance", "יתרה") + ": ₪%{y:,.0f}<extra></extra>",
     ))
-    # Injection marker
-    if lump_sum > 0:
-        inj_year = float(lump_month) / 12.0
+    if regular_lump > 0:
         fig.add_vline(
-            x=inj_year,
+            x=float(regular_lump_month) / 12.0,
             line=dict(color="#f59e0b", width=1.4, dash="dashdot"),
             annotation_text=tr("Lump-sum", "הפקדה"),
             annotation_position="top",
         )
-
     template = "plotly_dark" if is_dark else "plotly_white"
     fig.update_layout(
         template=template,
-        title=tr("Long-term Projection", "הדמיה ארוכת-טווח"),
+        title=tr("Regular portfolio projection (BEFORE tax)",
+                 "תחזית תיק רגיל (לפני מס)"),
         xaxis_title=tr("Years", "שנים"),
         yaxis_title=tr("Value (₪)", "שווי (₪)"),
         margin=dict(l=10, r=10, t=56, b=30),
@@ -6856,56 +7028,12 @@ def render_simulator_page(
     )
     st.plotly_chart(
         _apply_plotly_theme(fig, is_dark, is_mobile),
-        theme="streamlit",
-        use_container_width=True,
+        theme="streamlit", use_container_width=True,
     )
 
-    # ── Delay-cost insight ─────────────────────────────────────────────
-    if lump_sum > 0 and lump_month > 0:
-        r_m = (1.0 + annual_return / 100.0) ** (1.0 / 12.0) - 1.0
-        # pure_uplift: compound growth of the lump over the full horizon
-        pure_uplift = lump_sum * ((1.0 + r_m) ** months_total - 1.0)
-        # fraction lost due to delay
-        d_months = int(lump_month)
-        delay_cost = pure_uplift * (1.0 - (1.0 + r_m) ** (-d_months))
-        if delay_cost > 0:
-            st.caption(tr(
-                f"⏳ Delaying the lump-sum by {d_months} months costs roughly ₪{delay_cost:,.0f} in forgone compounding.",
-                f"⏳ דחיית ההפקדה החד-פעמית ב-{d_months} חודשים מאבדת כ-₪{delay_cost:,.0f} בריבית דריבית.",
-            ))
-
-    # ── Milestones ─────────────────────────────────────────────────────
-    if initial_capital > 0 or lump_sum > 0:
-        base = max(initial_capital, 1.0)
-        ms = st.columns(3)
-        for idx, mult in enumerate([2, 5, 10]):
-            target = base * mult
-            yrs = sim_years_to_target(
-                initial_capital=initial_capital,
-                monthly_contribution=monthly_contrib,
-                annual_return_pct=annual_return,
-                target_balance=target,
-                lump_sum=lump_sum,
-                max_years=80,
-            )
-            if np.isfinite(yrs):
-                ms[idx].metric(
-                    f"×{mult} {tr('capital', 'הון')}",
-                    f"{yrs:.1f} " + tr("years", "שנים"),
-                    help=tr(f"Years until balance reaches ₪{target:,.0f}.",
-                            f"שנים עד שהיתרה תגיע ל-₪{target:,.0f}."),
-                )
-            else:
-                ms[idx].metric(
-                    f"×{mult} {tr('capital', 'הון')}",
-                    tr(">80y", ">80ש'"),
-                    help=tr(f"Target ₪{target:,.0f} not reached within 80 years.",
-                            f"היעד ₪{target:,.0f} לא מושג תוך 80 שנה."),
-                )
-
-    # ── Yearly breakdown + CSV export ─────────────────────────────────
-    with st.expander(tr("📋 Yearly breakdown", "📋 פירוט שנתי")):
-        yearly = df_proj.iloc[::12].copy()
+    # ── Yearly breakdown (regular bucket) ──────────────────────────────
+    with st.expander(tr("📋 Yearly breakdown (regular bucket)", "📋 פירוט שנתי (תיק רגיל)")):
+        yearly = df_reg.iloc[::12].copy()
         yearly = yearly.assign(
             Year=yearly["year"].round(1),
             Contributed=yearly["contributions_cum"].round(0),
@@ -6928,28 +7056,27 @@ def render_simulator_page(
         )
 
     st.caption(tr(
-        "⚠ Projections are educational estimates only — not investment advice. Actual returns vary.",
-        "⚠ ההדמיה היא לצורכי הדגמה בלבד — אינה מהווה ייעוץ השקעות. תשואות בפועל עשויות להשתנות.",
+        "⚠ Educational projections only — not investment advice. Tax = 25% on real (inflation-adjusted) gains for the regular bucket; pension + education funds are treated as tax-exempt per Israeli rules.",
+        "⚠ ההדמיה היא לצורכי הדגמה בלבד — אינה ייעוץ השקעות. מיסוי = 25% על רווח ריאלי בתיק הרגיל; קרנות פנסיה והשתלמות פטורות ממס לפי הכללים בישראל.",
     ))
 
     # Reset stored inputs (button lives at the bottom since it's rarely needed).
     _reset_cols = st.columns([3, 1]) if not is_mobile else (st.container(), st.container())
     with _reset_cols[1]:
         if st.button(
-            tr("🔄 Reset inputs", "🔄 איפוס קלטים"),
-            key="sim_reset_prefs",
+            tr("🔄 Reset inputs (this mode)", "🔄 איפוס קלטים (מצב זה)"),
+            key=f"sim_reset_prefs_{mode_id}",
             use_container_width=True,
             help=tr(
-                "Clear the saved simulator values and restore factory defaults.",
-                "איפוס הערכים השמורים של הסימולטור לברירות-המחדל.",
+                "Clear saved values for THIS mode only — the other mode's data is preserved.",
+                "איפוס הערכים השמורים של המצב הנוכחי בלבד — נתוני המצב השני נשמרים.",
             ),
         ):
-            for _k in _SIM_PERSISTED_KEYS:
-                st.session_state.pop(_k, None)
-            st.session_state.pop("_sim_prefs_hydrated", None)
+            for _k in _SIM_MODE_KEYS:
+                st.session_state.pop(_sim_key(mode_id, _k), None)
             try:
-                if SIM_PREFS_FILE.exists():
-                    SIM_PREFS_FILE.unlink()
+                # Persist immediately so on-disk reflects the deletion
+                save_sim_prefs({k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")})
             except Exception:
                 pass
             st.rerun()
@@ -7517,44 +7644,141 @@ def main() -> None:
     st.session_state["active_page_id"] = active_page_id
     page = page_id_to_label.get(active_page_id, page_dashboard)
 
-    # ── Subtle per-page accent color (color-coded navigation) ─────────
-    # A thin gradient strip under the header + a matching accent on the
-    # active sidebar nav-link makes orientation instantly clear, without
-    # changing the overall palette.
+    # ── Per-page accent color (color-coded navigation) ─────────────────
+    # Dashboard is BLUE (per spec). Each page has its own accent that
+    # propagates to: header border, sidebar nav-link, mobile pill, metric
+    # left-bar, primary buttons, focus rings, sub-tab underline, expander
+    # header, dataframe header. Designed to make orientation instant and
+    # visually reinforce the "where am I" feeling.
     _page_accents = {
-        "dashboard": "#6366f1",   # indigo — overview
+        "dashboard": "#2563eb",   # blue — overview (per spec)
         "manage":    "#10b981",   # emerald — active portfolio actions
         "risk":      "#ef4444",   # rose — risk / warning family
         "simulator": "#f59e0b",   # amber — exploration / projection
         "quality":   "#06b6d4",   # cyan — data hygiene
     }
-    _accent = _page_accents.get(active_page_id, "#6366f1")
+    # Per-accent dark variant (for gradient stops, hover, subtle bg tint)
+    _page_accents_dark = {
+        "dashboard": "#1e40af",
+        "manage":    "#047857",
+        "risk":      "#b91c1c",
+        "simulator": "#b45309",
+        "quality":   "#0e7490",
+    }
+    _accent = _page_accents.get(active_page_id, "#2563eb")
+    _accent_dark = _page_accents_dark.get(active_page_id, "#1e40af")
     st.markdown(
         f"""
         <style id="pp-page-accent">
+            /* Header border + faint coloured glow */
             .app-header-wrap {{
                 border-top: 3px solid {_accent} !important;
-                box-shadow: 0 2px 8px -4px {_accent}55 !important;
+                box-shadow: 0 2px 12px -4px {_accent}66 !important;
             }}
             .app-sub-title {{ color: {_accent} !important; }}
-            /* Sidebar active nav-link gets an accent border on the leading edge */
+            .app-logo-badge {{
+                background: {_accent}1A !important;
+                border: 1px solid {_accent}55 !important;
+                color: {_accent} !important;
+            }}
+            /* Hero title gradient — page-aware */
+            .app-main-title {{
+                background: linear-gradient(135deg, {_accent_dark} 0%, {_accent} 60%, {_accent}cc 100%) !important;
+                -webkit-background-clip: text !important;
+                background-clip: text !important;
+                -webkit-text-fill-color: transparent !important;
+            }}
+
+            /* Sidebar active nav-link */
             [data-testid="stSidebar"] .nav-link-selected,
             [data-testid="stSidebar"] .nav-link.active {{
                 border-left: 3px solid {_accent} !important;
                 box-shadow: inset 3px 0 0 0 {_accent} !important;
+                background-color: {_accent}14 !important;
+                color: {_accent} !important;
             }}
-            /* Mobile pill accent on the current page */
+
+            /* Mobile pill accent — tinted glow that matches the page */
             [data-testid="stRadio"] [data-baseweb="radio"]:has(input:checked) {{
-                box-shadow: 0 4px 14px -2px {_accent}88 !important;
+                box-shadow: 0 4px 14px -2px {_accent}99 !important;
             }}
-            /* stMetric subtle left accent bar on active page */
+            @media (max-width: 820px) {{
+                [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+                [data-baseweb="radio"]:has(input:checked),
+                [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child)
+                [data-baseweb="radio"]:has(input:checked) {{
+                    background: linear-gradient(135deg, {_accent_dark} 0%, {_accent} 60%, {_accent}cc 100%) !important;
+                    box-shadow: 0 4px 14px -3px {_accent}88,
+                                0 1px 0 0 rgba(255,255,255,0.10) inset !important;
+                }}
+                /* Tabs active state matches accent */
+                [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {{
+                    background: linear-gradient(135deg, {_accent_dark} 0%, {_accent} 60%, {_accent}cc 100%) !important;
+                    box-shadow: 0 4px 12px -3px {_accent}88 !important;
+                }}
+                /* Primary buttons — accent gradient (mobile) */
+                .stButton > button[kind="primary"],
+                .stButton > button[data-testid="baseButton-primary"],
+                button[kind="primary"] {{
+                    background: linear-gradient(135deg, {_accent_dark} 0%, {_accent} 55%, {_accent}cc 100%) !important;
+                    box-shadow: 0 4px 14px -3px {_accent}88,
+                                0 1px 0 0 rgba(255,255,255,0.10) inset !important;
+                }}
+                /* Secondary button hover gets the accent border */
+                .stButton > button:not([kind="primary"]):hover,
+                .stDownloadButton > button:not([kind="primary"]):hover {{
+                    border-color: {_accent}88 !important;
+                    color: {_accent} !important;
+                    box-shadow: 0 2px 6px -1px {_accent}33,
+                                0 4px 10px -3px rgba(15,23,42,0.10) !important;
+                }}
+            }}
+
+            /* Sub-tab underline (active tab) */
+            [data-baseweb="tab-list"] [data-baseweb="tab"][aria-selected="true"] {{
+                border-bottom: 2px solid {_accent} !important;
+            }}
+
+            /* Metric left accent bar */
             [data-testid="stMetric"]::before {{
                 content: "";
                 position: absolute;
                 top: 12%; bottom: 12%; left: 0;
-                width: 2px;
-                background: {_accent};
-                border-radius: 2px;
+                width: 3px;
+                background: linear-gradient(180deg, {_accent} 0%, {_accent_dark} 100%);
+                border-radius: 3px;
+            }}
+            /* Metric value colour pop on the active page */
+            [data-testid="stMetric"] [data-testid="stMetricValue"] {{
+                color: {_accent} !important;
+            }}
+
+            /* Expander header — subtle accent on hover + coloured caret */
+            details[data-testid="stExpander"]:hover,
+            div[data-testid="stExpander"]:hover {{
+                border-color: {_accent}88 !important;
+            }}
+            details[data-testid="stExpander"] svg,
+            div[data-testid="stExpander"] svg {{
+                color: {_accent} !important;
+            }}
+
+            /* DataFrame header strip */
+            [data-testid="stDataFrame"] [role="columnheader"] {{
+                border-top: 2px solid {_accent}55 !important;
+            }}
+
+            /* Focus rings + accessible outlines */
+            :focus-visible {{
+                outline-color: {_accent} !important;
+            }}
+
+            /* Scrollbar thumb — accent tinted */
+            ::-webkit-scrollbar-thumb {{
+                background: {_accent}66 !important;
+            }}
+            ::-webkit-scrollbar-thumb:hover {{
+                background: {_accent}aa !important;
             }}
         </style>
         """,
