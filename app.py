@@ -1069,10 +1069,37 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             opacity: 1 !important;
             pointer-events: auto !important;
         }}
-        /* Hide Deploy button and branding on mobile, but keep sidebar expand and 3-dot menu */
+        /* Hide Deploy button + ALL Streamlit/GitHub branding on mobile.
+           Covers: status widget, "Hosted with Streamlit" badge, "view source"
+           on GitHub link, viewer badge, Made-by-Streamlit footer, any
+           anchor pointing to streamlit.io / share.streamlit.io / github.com.
+           Belt-and-braces: covers older + newer Streamlit testid names. */
         [data-testid="stAppDeployButton"],
-        [data-testid="stStatusWidget"] {{
+        [data-testid="stStatusWidget"],
+        [data-testid="stFooter"],
+        [data-testid="stAppCreator"],
+        [data-testid="viewerBadge_container__r5tak"],
+        [class*="viewerBadge"],
+        [class*="hostedWithLove"],
+        [class*="hostedwithlove"],
+        [class*="HostedWithStreamlit"],
+        [data-testid="manage-app-button"],
+        a[href*="streamlit.io"],
+        a[href*="share.streamlit.io"],
+        a[href*="streamlit.app"],
+        a[href*="github.com"][title*="View" i],
+        a[href*="github.com"][aria-label*="GitHub" i],
+        a[href*="github.com"][aria-label*="source" i],
+        a[aria-label*="streamlit" i],
+        a[aria-label*="Streamlit" i],
+        footer:not(.app-footer-keep) {{
             display: none !important;
+            visibility: hidden !important;
+            width: 0 !important;
+            height: 0 !important;
+            opacity: 0 !important;
+            overflow: hidden !important;
+            pointer-events: none !important;
         }}
         /* Sidebar expand button — force visible as fixed hamburger */
         [data-testid="stExpandSidebarButton"] {{
@@ -2291,7 +2318,14 @@ def inject_client_fixes() -> None:
               '[data-testid="stFooter"]',
               '[data-testid="stAppCreator"]',
               '[data-testid="stDeployButton"]',
-              '[data-testid="stStatusWidget"]'
+              '[data-testid="stAppDeployButton"]',
+              '[data-testid="stStatusWidget"]',
+              '[data-testid="manage-app-button"]',
+              '[data-testid*="viewerBadge"]',
+              '[class*="viewerBadge"]',
+              '[class*="hostedWithLove"]',
+              '[class*="hostedwithlove"]',
+              '[class*="HostedWithStreamlit"]'
             ];
 
             brandingHosts.forEach((sel) => {
@@ -2309,23 +2343,44 @@ def inject_client_fixes() -> None:
               });
             });
 
-            rootDoc.querySelectorAll('a[href*="streamlit.io"], a[href*="share.streamlit.io"]').forEach((link) => {
-              const holder = link.closest('footer, [data-testid="stFooter"], [data-testid="stAppCreator"], [role="contentinfo"]');
-              const text = ((holder && holder.innerText) || link.innerText || '').toLowerCase();
-              if (text.includes('streamlit') || text.includes('hosted with') || text.includes('created by')) {
-                (holder || link).style.display = 'none';
-              }
+            // Hide ANY anchor/icon/svg that points to streamlit or github.com
+            // and lives at the bottom of the viewport (a typical "viewer badge").
+            const brandLinkSel = [
+              'a[href*="streamlit.io"]',
+              'a[href*="share.streamlit.io"]',
+              'a[href*="streamlit.app"]',
+              'a[href*="github.com"]',
+              'a[aria-label*="streamlit" i]',
+              'a[aria-label*="GitHub" i]',
+              'a[aria-label*="source" i]',
+              'a[title*="streamlit" i]',
+              'a[title*="GitHub" i]'
+            ].join(',');
+
+            rootDoc.querySelectorAll(brandLinkSel).forEach((link) => {
+              // Walk up to a sensible "container" and nuke it
+              const holder = link.closest(
+                'footer, [data-testid="stFooter"], [data-testid="stAppCreator"], '
+                + '[data-testid*="viewerBadge"], [class*="viewerBadge"], '
+                + '[class*="hostedWithLove"], [role="contentinfo"]'
+              ) || link;
+              try {
+                holder.style.display = 'none';
+                holder.style.visibility = 'hidden';
+              } catch (e) {}
             });
 
 
-            // Fallback: hide tiny fixed bottom-right badges that include Streamlit links.
-            rootDoc.querySelectorAll('div, section, aside').forEach((el) => {
+            // Final fallback: any FIXED-position element near the viewport
+            // bottom edge that contains a streamlit/github link or icon.
+            rootDoc.querySelectorAll('div, section, aside, span').forEach((el) => {
               const style = rootWin.getComputedStyle ? rootWin.getComputedStyle(el) : null;
               if (!style) return;
               const isFixed = style.position === 'fixed' || style.position === 'sticky';
-              const nearBottom = parseFloat(style.bottom || '9999') <= 40;
+              const bottomVal = parseFloat(style.bottom || '9999');
+              const nearBottom = bottomVal >= 0 && bottomVal <= 60;
               if (!isFixed || !nearBottom) return;
-              if (el.querySelector('a[href*="streamlit.io"], a[href*="share.streamlit.io"]')) {
+              if (el.querySelector(brandLinkSel)) {
                 el.style.display = 'none';
               }
             });
