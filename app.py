@@ -7749,10 +7749,8 @@ def main() -> None:
                 background: linear-gradient(180deg, {_accent} 0%, {_accent_dark} 100%);
                 border-radius: 3px;
             }}
-            /* Metric value colour pop on the active page */
-            [data-testid="stMetric"] [data-testid="stMetricValue"] {{
-                color: {_accent} !important;
-            }}
+            /* Metric values + delta numbers stay NEUTRAL (per user request).
+               Per-page accent is applied only to the bar/border/header. */
 
             /* Expander header — subtle accent on hover + coloured caret */
             details[data-testid="stExpander"]:hover,
