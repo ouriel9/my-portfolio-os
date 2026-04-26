@@ -4456,6 +4456,7 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
     return False, str(parsed.get("error") or parsed)
 
 
+@st.cache_data(ttl=300, show_spinner=False, hash_funcs={pd.DataFrame: lambda d: (len(d), tuple(d.columns), str(pd.util.hash_pandas_object(d.head(50)).sum() if len(d) else 0))})
 def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     trades = df[(df["Record_Source"] == "STATE_SNAPSHOT") & (df["Event_Type"] == "TRADE")].copy() if "Record_Source" in df.columns else df.copy()
     if "Status" not in trades.columns:
@@ -7159,6 +7160,15 @@ def main() -> None:
                 el.__ppHardened = true;
                 try { el.setAttribute('tabindex', '0'); } catch (e) {}
 
+                // Remove mobile's ~300 ms touch-delay before click fires.
+                // touch-action:manipulation tells the browser "no double-tap-zoom on this element"
+                // → click fires immediately on first tap.
+                try {
+                    el.style.touchAction = 'manipulation';
+                    el.style.webkitTapHighlightColor = 'transparent';
+                    el.style.cursor = 'pointer';
+                } catch (e) {}
+
                 // Optimistic ARIA hint on pointerdown — removes the "dead first click"
                 // perception even before Streamlit finishes its rerender cycle.
                 el.addEventListener('pointerdown', function () {
@@ -7172,6 +7182,33 @@ def main() -> None:
                         el.setAttribute('aria-selected', 'true');
                     } catch (e) {}
                 }, { passive: true, capture: true });
+
+                // Mobile: touchend → synthesise a click ONCE if the natural click
+                // doesn't follow within 80 ms. Catches cases where Streamlit's
+                // pointer handlers swallow the first click on touch devices.
+                var touchStartXY = null;
+                el.addEventListener('touchstart', function (ev) {
+                    if (ev.touches && ev.touches[0]) {
+                        touchStartXY = [ev.touches[0].clientX, ev.touches[0].clientY];
+                    }
+                }, { passive: true });
+                el.addEventListener('touchend', function (ev) {
+                    if (!touchStartXY || !ev.changedTouches || !ev.changedTouches[0]) return;
+                    var dx = Math.abs(ev.changedTouches[0].clientX - touchStartXY[0]);
+                    var dy = Math.abs(ev.changedTouches[0].clientY - touchStartXY[1]);
+                    touchStartXY = null;
+                    // Only synthesise if it was a TAP (not a drag/scroll)
+                    if (dx > 10 || dy > 10) return;
+                    var clickFired = false;
+                    var oneShot = function () { clickFired = true; el.removeEventListener('click', oneShot, true); };
+                    el.addEventListener('click', oneShot, true);
+                    setTimeout(function () {
+                        if (!clickFired) {
+                            try { el.click(); } catch (e) {}
+                        }
+                        try { el.removeEventListener('click', oneShot, true); } catch (e) {}
+                    }, 80);
+                }, { passive: true });
 
                 // Keyboard: Space / Enter should trigger on first press.
                 el.addEventListener('keydown', function (ev) {
