@@ -6400,18 +6400,36 @@ def load_sim_prefs() -> Dict[str, object]:
 
 
 def save_sim_prefs(values: Mapping[str, object]) -> bool:
-    """Persist the simulator input snapshot atomically. Saves EVERY known
-    namespaced key for both modes — switching modes never loses the
-    other mode's data."""
+    """Persist the simulator input snapshot — ADDITIVE merge so that
+    switching modes never overwrites the other mode's saved data.
+
+    If Streamlit's widget GC has cleared the inactive-mode widget keys
+    from session_state, the last known values from disk are preserved."""
     try:
-        # Only persist keys we know about (whitelist)
         whitelist = set(_SIM_GLOBAL_KEYS)
         for mode in ("mine", "clean"):
             for k in _SIM_MODE_KEYS:
                 whitelist.add(_sim_key(mode, k))
-        safe = {k: v for k, v in values.items() if k in whitelist}
+
+        # Load existing file to avoid destroying the OTHER-mode values
+        existing: Dict[str, object] = {}
+        if SIM_PREFS_FILE.exists():
+            try:
+                _raw = json.loads(SIM_PREFS_FILE.read_text(encoding="utf-8"))
+                if isinstance(_raw, dict):
+                    existing = _raw
+            except Exception:
+                pass
+
+        # Merge: start from what's on disk, overlay only the keys the
+        # caller actually provided AND that are non-None
+        merged = {k: v for k, v in existing.items() if k in whitelist}
+        for k, v in values.items():
+            if k in whitelist and v is not None:
+                merged[k] = v
+
         SIM_PREFS_FILE.write_text(
-            json.dumps(safe, ensure_ascii=False, indent=2),
+            json.dumps(merged, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         return True
@@ -6668,7 +6686,9 @@ def render_simulator_page(
 }})();
 </script>""", height=0, width=0)
 
-    # ── Hydrate persisted inputs from disk on first visit ─────────────
+    # ── Hydrate persisted inputs (global once + per-mode re-hydration) ──
+    # Global once: load ALL keys on the very first visit so both modes
+    # start populated.
     if not st.session_state.get("_sim_prefs_hydrated", False):
         try:
             _prefs = load_sim_prefs()
@@ -6697,6 +6717,24 @@ def render_simulator_page(
     )
     use_portfolio = (mode == mode_mine) and has_portfolio
     mode_id = "mine" if (mode == mode_mine) else "clean"
+
+    # ── Per-mode re-hydration ──────────────────────────────────────────
+    # Streamlit ≥1.28 clears widget-key state when widgets are no longer
+    # rendered. Switching from Mine→Clean removes sim_mine_* from session_state.
+    # When the user switches back we must reload those values from disk
+    # before _need() falls back to defaults.
+    _sentinel_keys = ("regular_initial", "regular_monthly", "regular_return", "age_now")
+    _mode_keys_missing = any(
+        _sim_key(mode_id, k) not in st.session_state for k in _sentinel_keys
+    )
+    if _mode_keys_missing:
+        try:
+            _disk_prefs = load_sim_prefs()
+            for _k, _v in _disk_prefs.items():
+                if _k not in st.session_state:
+                    st.session_state[_k] = _v
+        except Exception:
+            pass
 
     # Defensive type-coercion for THIS mode's keys.
     _SIM_TYPES: Dict[str, type] = {
@@ -6943,16 +6981,31 @@ def render_simulator_page(
         + (education_initial + education_monthly * months_total)
     )
 
-    # Persist on every rerun (atomic save of every namespaced key)
+    # Persist on every rerun — only keys currently in session to avoid
+    # overwriting cleaned-up inactive-mode values with None.
+    # save_sim_prefs merges with existing disk file so the other mode's
+    # values are never lost (see additive merge in save_sim_prefs).
     _sim_prefs_snapshot: Dict[str, object] = {}
     try:
-        _sim_prefs_snapshot = {k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")}
+        _sim_prefs_snapshot = {
+            k: v for k, v in
+            {k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")}.items()
+            if v is not None
+        }
         save_sim_prefs(_sim_prefs_snapshot)
     except Exception:
         pass
-    # Also persist to browser localStorage (survives refresh on any device)
+    # Also persist to browser localStorage — use the fully-merged disk
+    # content so mobile/desktop each store the complete state.
     try:
-        _ls_json_str = json.dumps(_sim_prefs_snapshot, ensure_ascii=False, default=str)
+        _ls_merged: Dict[str, object] = {}
+        if SIM_PREFS_FILE.exists():
+            try:
+                _ls_merged = json.loads(SIM_PREFS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        _ls_merged.update(_sim_prefs_snapshot)  # overlay with current session
+        _ls_json_str = json.dumps(_ls_merged, ensure_ascii=False, default=str)
         components.html(f"""<script>
 try {{
   window.parent.localStorage.setItem('pf_os_sim_v2', {json.dumps(_ls_json_str)});
