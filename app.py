@@ -8356,7 +8356,7 @@ def main() -> None:
             tr("📊 Overview", "📊 סקירה"): "dashboard",
             tr("💼 Trades", "💼 עסקאות"): "manage",
             tr("🛡 Risk", "🛡 סיכון"): "risk",
-            tr("🧮 Sim", "🧮 סימולטור"): "simulator",
+            tr("🧮 Sim", "🧮 סים"): "simulator",
         }
         mobile_options = list(mobile_label_to_id.keys())
 
