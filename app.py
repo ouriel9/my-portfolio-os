@@ -109,6 +109,7 @@ DEFAULT_SERVICE_ACCOUNT_FILE = Path(__file__).resolve().parent / "clean-linker-4
 DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7OQVPLflfN2rufBhAT5-fzmjy8iEVFMmNLZlK_CeI4MFvx1dijZF/exec"
 MANUAL_DEPOSITS_FILE = Path(__file__).resolve().parent / "manual_deposits_store.json"
+LOCAL_PORTFOLIO_FILE = Path(__file__).resolve().parent / "portfolio_data.json"
 LOCAL_SNAPSHOT_CACHE_FILE = Path(__file__).resolve().parent / "snapshot_cache.csv"
 VERIFIED_DATA_FALLBACK_FILE = Path(__file__).resolve().parent / "DATA" / "verified_data.csv"
 APPS_SCRIPT_COOLDOWN_FILE = Path(__file__).resolve().parent / "apps_script_cooldown.json"
@@ -3789,6 +3790,310 @@ def is_google_sheet_url(url: str) -> bool:
     return "docs.google.com/spreadsheets" in cleaned
 
 
+# ══════════════════════════════════════════════════════════════════════
+# LOCAL-FIRST PORTFOLIO STORE  (portfolio_data.json)
+# ══════════════════════════════════════════════════════════════════════
+# All trade data lives here.  Google Sheets is an OPTIONAL sync target.
+# Dirty rows have _dirty=True and _dirty_op in {"add","edit","delete"}.
+# ══════════════════════════════════════════════════════════════════════
+
+_PORTFOLIO_TRADE_FIELDS = [
+    "Current_Location", "Platform", "Type", "Ticker",
+    "Purchase_Date", "Sell_Date", "Quantity", "Origin_Buy_Price",
+    "Cost_Origin", "Origin_Currency", "Commission", "Status",
+    "Cost_ILS", "Current_Value_ILS", "Sell_Price_Origin",
+    "Yield_At_Sale", "Yield_Origin", "Yield_ILS", "Trade_ID",
+]
+
+
+def _portfolio_row_to_dict(row: object) -> Dict[str, object]:
+    """Serialise one trade row (Series / dict) to a plain JSON-safe dict."""
+    out: Dict[str, object] = {}
+    for field in _PORTFOLIO_TRADE_FIELDS:
+        if hasattr(row, "get"):
+            val = row.get(field, "")
+        elif hasattr(row, "__getitem__"):
+            try:
+                val = row[field]
+            except (KeyError, IndexError):
+                val = ""
+        else:
+            val = ""
+        if isinstance(val, float) and (val != val):   # NaN
+            val = ""
+        if isinstance(val, (np.integer, np.floating)):
+            val = val.item()
+        out[field] = val
+    return out
+
+
+def load_local_portfolio() -> Tuple["pd.DataFrame", Dict[str, object]]:
+    """Read portfolio from the local JSON store.
+
+    Returns:
+        (df, meta) — df is a normalised DataFrame (may be empty),
+        meta is the _meta dict (empty dict if file missing/corrupt).
+    """
+    if not LOCAL_PORTFOLIO_FILE.exists():
+        return pd.DataFrame(), {}
+    try:
+        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return pd.DataFrame(), {}
+        meta = raw.get("_meta", {})
+        rows = raw.get("rows", [])
+        if not rows:
+            return pd.DataFrame(), meta
+        clean_rows = [
+            {k: v for k, v in r.items() if not k.startswith("_")}
+            for r in rows
+            if isinstance(r, dict) and not r.get("_deleted", False)
+        ]
+        if not clean_rows:
+            return pd.DataFrame(), meta
+        return _normalize_snapshot_df(pd.DataFrame(clean_rows)), meta
+    except Exception:
+        return pd.DataFrame(), {}
+
+
+def save_local_portfolio(
+    df: "pd.DataFrame",
+    *,
+    meta_patch: Optional[Dict[str, object]] = None,
+    preserve_dirty: bool = True,
+) -> bool:
+    """Write portfolio DataFrame to the local JSON store.
+
+    preserve_dirty: keep existing _dirty/_dirty_op flags from the file
+                    (True after a local edit; False after a Google pull).
+    """
+    try:
+        existing_flags: Dict[str, Dict[str, object]] = {}
+        existing_meta: Dict[str, object] = {}
+        if LOCAL_PORTFOLIO_FILE.exists() and preserve_dirty:
+            try:
+                raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    existing_meta = raw.get("_meta", {})
+                    for r in raw.get("rows", []):
+                        if isinstance(r, dict):
+                            tid = _clean(str(r.get("Trade_ID", "")))
+                            if tid:
+                                existing_flags[tid] = {
+                                    "_dirty": bool(r.get("_dirty", False)),
+                                    "_dirty_op": str(r.get("_dirty_op", "")),
+                                    "_deleted": bool(r.get("_deleted", False)),
+                                }
+            except Exception:
+                pass
+
+        new_meta: Dict[str, object] = {**existing_meta}
+        new_meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        if meta_patch:
+            new_meta.update(meta_patch)
+
+        rows_out = []
+        for _, row in df.iterrows():
+            rd = _portfolio_row_to_dict(row)
+            tid = _clean(str(rd.get("Trade_ID", "")))
+            flags = existing_flags.get(tid, {}) if preserve_dirty else {}
+            rd["_dirty"] = bool(flags.get("_dirty", False))
+            rd["_dirty_op"] = str(flags.get("_dirty_op", ""))
+            rd["_deleted"] = bool(flags.get("_deleted", False))
+            rows_out.append(rd)
+
+        LOCAL_PORTFOLIO_FILE.write_text(
+            json.dumps({"_meta": new_meta, "rows": rows_out}, ensure_ascii=False,
+                       indent=2, default=str),
+            encoding="utf-8",
+        )
+        return True
+    except Exception:
+        return False
+
+
+def apply_local_trade(op: str, trade_row: Dict[str, object]) -> bool:
+    """Apply a single trade operation to the local store.
+
+    op: "add" | "edit" | "delete"
+    trade_row must contain Trade_ID (for edit/delete).
+    Returns True on success.
+    """
+    try:
+        existing: Dict[str, object] = {"_meta": {}, "rows": []}
+        if LOCAL_PORTFOLIO_FILE.exists():
+            raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+        meta = dict(existing.get("_meta", {}))
+        meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        rows: List[Dict[str, object]] = list(existing.get("rows", []))
+        tid = _clean(str(trade_row.get("Trade_ID", "")))
+
+        if op == "add":
+            new_r = _portfolio_row_to_dict(trade_row)
+            new_r["_dirty"] = True
+            new_r["_dirty_op"] = "add"
+            new_r["_deleted"] = False
+            rows.append(new_r)
+
+        elif op == "edit":
+            updated = False
+            for i, r in enumerate(rows):
+                if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
+                    updated_r = _portfolio_row_to_dict(trade_row)
+                    updated_r["_dirty"] = True
+                    updated_r["_dirty_op"] = r.get("_dirty_op", "edit") if r.get("_dirty_op") == "add" else "edit"
+                    updated_r["_deleted"] = False
+                    rows[i] = updated_r
+                    updated = True
+                    break
+            if not updated:   # trade not in store yet — treat as add
+                new_r = _portfolio_row_to_dict(trade_row)
+                new_r["_dirty"] = True
+                new_r["_dirty_op"] = "add"
+                new_r["_deleted"] = False
+                rows.append(new_r)
+
+        elif op == "delete":
+            for i, r in enumerate(rows):
+                if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
+                    if r.get("_dirty_op") == "add":
+                        # Never synced → just erase it
+                        rows.pop(i)
+                    else:
+                        rows[i]["_dirty"] = True
+                        rows[i]["_dirty_op"] = "delete"
+                        rows[i]["_deleted"] = True
+                    break
+
+        LOCAL_PORTFOLIO_FILE.write_text(
+            json.dumps({"_meta": meta, "rows": rows}, ensure_ascii=False,
+                       indent=2, default=str),
+            encoding="utf-8",
+        )
+        return True
+    except Exception:
+        return False
+
+
+def count_dirty_local_trades() -> int:
+    """Return the number of local trades pending sync to Google Sheets."""
+    if not LOCAL_PORTFOLIO_FILE.exists():
+        return 0
+    try:
+        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return 0
+        return sum(1 for r in raw.get("rows", []) if isinstance(r, dict) and bool(r.get("_dirty", False)))
+    except Exception:
+        return 0
+
+
+def get_local_portfolio_meta() -> Dict[str, object]:
+    """Return the _meta block of the local store (empty dict if missing)."""
+    if not LOCAL_PORTFOLIO_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        return raw.get("_meta", {}) if isinstance(raw, dict) else {}
+    except Exception:
+        return {}
+
+
+def sync_portfolio_from_google(
+    web_app_url: str,
+    api_token: str,
+    spreadsheet_ref: str,
+    worksheet_name: str,
+    service_account_file: str,
+) -> Tuple[bool, str, int]:
+    """Pull latest data from Google Sheets and save to local store.
+
+    Preserves any existing dirty (locally-modified) rows so they are not
+    overwritten by the remote pull.
+    Returns (ok, message, row_count).
+    """
+    try:
+        df_remote, _src = load_snapshot_data(
+            web_app_url, api_token, spreadsheet_ref, worksheet_name, service_account_file
+        )
+        if df_remote.empty:
+            return False, tr("No rows returned from Google Sheets.", "גוגל שיט לא החזיר נתונים."), 0
+        # Merge: remote rows that are NOT locally dirty override local;
+        # locally dirty rows are kept as-is (they take precedence).
+        dirty_ids: set = set()
+        if LOCAL_PORTFOLIO_FILE.exists():
+            try:
+                raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    dirty_ids = {
+                        _clean(str(r.get("Trade_ID", "")))
+                        for r in raw.get("rows", [])
+                        if isinstance(r, dict) and bool(r.get("_dirty", False))
+                    }
+            except Exception:
+                pass
+
+        # Keep locally-dirty rows as-is; use remote data for all others
+        local_df, _ = load_local_portfolio()
+        dirty_df = local_df[local_df["Trade_ID"].map(lambda t: _clean(str(t))) .isin(dirty_ids)] if not local_df.empty else pd.DataFrame()
+        remote_non_dirty = df_remote[~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)]
+        merged_df = pd.concat([remote_non_dirty, dirty_df], ignore_index=True) if not dirty_df.empty else remote_non_dirty
+
+        save_local_portfolio(merged_df, preserve_dirty=True)
+        _save_local_snapshot_cache(merged_df)
+        return True, tr(f"Pulled {len(df_remote):,} rows from Google Sheets.", f"נשלפו {len(df_remote):,} שורות מגוגל שיט."), len(df_remote)
+    except Exception as exc:
+        return False, str(exc), 0
+
+
+def sync_portfolio_to_google(
+    web_app_url: str,
+    api_token: str,
+) -> Tuple[bool, str, int]:
+    """Push all locally-dirty trades to Google Sheets.
+
+    Returns (ok, message, pushed_count).
+    """
+    if not LOCAL_PORTFOLIO_FILE.exists():
+        return True, tr("Nothing to sync.", "אין שינויים לסנכרן."), 0
+    try:
+        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return True, tr("Nothing to sync.", "אין שינויים לסנכרן."), 0
+        dirty = [r for r in raw.get("rows", []) if isinstance(r, dict) and bool(r.get("_dirty", False))]
+        if not dirty:
+            return True, tr("Nothing to sync.", "אין שינויים לסנכרן."), 0
+
+        pushed = 0
+        errors: List[str] = []
+        for r in dirty:
+            op_code = str(r.get("_dirty_op", "edit"))
+            trade_clean = {k: v for k, v in r.items() if not k.startswith("_")}
+            ok, msg = sync_trade_to_sheet(web_app_url, api_token, op_code, trade_clean)
+            if ok:
+                pushed += 1
+            else:
+                errors.append(f"[{trade_clean.get('Trade_ID', '?')}] {msg}")
+
+        if errors:
+            return False, "; ".join(errors[:3]), pushed
+        # Mark all clean after successful push + record sync timestamp
+        for r in raw.get("rows", []):
+            if isinstance(r, dict):
+                r["_dirty"] = False
+                r["_dirty_op"] = ""
+        raw.setdefault("_meta", {})["_last_synced"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        LOCAL_PORTFOLIO_FILE.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        return True, tr(f"Pushed {pushed:,} changes to Google Sheets.", f"נדחפו {pushed:,} שינויים לגוגל שיט."), pushed
+    except Exception as exc:
+        return False, str(exc), 0
+
+
 def _extract_sheet_id(sheet_ref: str) -> str:
     ref = _clean(sheet_ref)
     if not ref:
@@ -4396,6 +4701,27 @@ def load_snapshot_data(
     worksheet_name: str,
     service_account_file: str,
 ) -> Tuple[pd.DataFrame, str]:
+    """Load portfolio snapshot — LOCAL-FIRST.
+
+    Priority:
+      1. Local portfolio store (portfolio_data.json)  ← primary source of truth
+      2. snapshot_cache.csv / verified_data.csv       ← auto-migrate on first run
+      3. Google Sheets (Apps Script or gspread)       ← used on first run / after sync
+    """
+    # ── 1. Local store (primary) ─────────────────────────────────────
+    local_df, _meta = load_local_portfolio()
+    if not local_df.empty:
+        return local_df, "local_store"
+
+    # ── 1b. Auto-migrate from snapshot_cache / verified_data ─────────
+    # On first run (portfolio_data.json doesn't exist yet but there is an
+    # existing cache), silently migrate so the user sees their data immediately.
+    _backup_df, _backup_mode = _load_emergency_snapshot_backup()
+    if not _backup_df.empty:
+        save_local_portfolio(_backup_df, preserve_dirty=False)
+        return _backup_df, "local_store"
+
+    # ── 2. Google Sheets (only when local store is truly empty) ──────
     clean_url = _clean(web_app_url)
     fallback_ready = _can_use_gspread_fallback(spreadsheet_ref, service_account_file)
 
@@ -4412,6 +4738,7 @@ def load_snapshot_data(
             df_remote = load_google_snapshot_data(clean_url, token)
             _clear_apps_script_cooldown()
             _save_local_snapshot_cache(df_remote)
+            save_local_portfolio(df_remote, preserve_dirty=False)
             return df_remote, "apps_script"
         except Exception as exc:
             err_text = str(exc).lower()
@@ -4430,6 +4757,7 @@ def load_snapshot_data(
                 raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
                 normalized = _normalize_snapshot_df(raw_df)
                 _save_local_snapshot_cache(normalized)
+                save_local_portfolio(normalized, preserve_dirty=False)
                 return normalized, "gspread"
             except Exception:
                 backup_df, backup_mode = _load_emergency_snapshot_backup()
@@ -4437,16 +4765,22 @@ def load_snapshot_data(
                     return backup_df, backup_mode
                 raise
 
-    try:
-        raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
-        normalized = _normalize_snapshot_df(raw_df)
-        _save_local_snapshot_cache(normalized)
-        return normalized, "gspread"
-    except Exception:
-        backup_df, backup_mode = _load_emergency_snapshot_backup()
-        if not backup_df.empty:
-            return backup_df, backup_mode
-        raise
+    if fallback_ready:
+        try:
+            raw_df = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, service_account_file)
+            normalized = _normalize_snapshot_df(raw_df)
+            _save_local_snapshot_cache(normalized)
+            save_local_portfolio(normalized, preserve_dirty=False)
+            return normalized, "gspread"
+        except Exception:
+            pass
+
+    backup_df, backup_mode = _load_emergency_snapshot_backup()
+    if not backup_df.empty:
+        return backup_df, backup_mode
+
+    # ── 3. Truly empty — no data anywhere ────────────────────────────
+    return pd.DataFrame(), "empty"
 
 
 def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Dict[str, object]) -> Tuple[bool, str]:
@@ -7936,6 +8270,78 @@ def main() -> None:
             st.rerun()
 
     connection_state_box = None
+
+    # ── Google Sheets Sync panel (optional — Google is NOT required) ──
+    _has_google = bool(_clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) or DEFAULT_WEB_APP_URL) or _clean(settings.get("spreadsheet_ref", "")))
+    _dirty_badge = count_dirty_local_trades()
+    _sync_expander_label = tr("☁ Sync with Google Sheets", "☁ סנכרון עם גוגל שיט")
+    if _dirty_badge > 0:
+        _sync_expander_label += f" ({_dirty_badge} {'🔴' if _dirty_badge > 0 else ''})"
+    with st.sidebar.expander(_sync_expander_label, expanded=(_dirty_badge > 0)):
+        _sync_web_url = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) or DEFAULT_WEB_APP_URL)
+        _sync_token = _clean(settings.get("api_token", ""))
+        _sync_sheet_ref = _clean(settings.get("spreadsheet_ref", ""))
+        _sync_ws = _clean(settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME
+        _sync_sa = _clean(settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)))
+        _lm = get_local_portfolio_meta()
+        _last_modified = _clean(str(_lm.get("_last_modified", "")))[:16]
+        _last_synced = _clean(str(_lm.get("_last_synced", "")))[:16]
+        st.caption(
+            tr(
+                f"Local data: **{_last_modified or 'never'}**  \n"
+                f"Last synced: **{_last_synced or 'never'}**  \n"
+                f"Pending sync: **{_dirty_badge}** change(s)",
+                f"נתונים מקומיים: **{_last_modified or 'אין'}**  \n"
+                f"סנכרון אחרון: **{_last_synced or 'אף פעם'}**  \n"
+                f"ממתינים לסנכרון: **{_dirty_badge}** שינוי/ים",
+            )
+        )
+        has_google_connection = bool(_sync_web_url) or bool(_sync_sheet_ref)
+        if not has_google_connection:
+            st.info(tr(
+                "Configure a Web App URL or Spreadsheet ID below to enable sync.",
+                "הגדר Web App URL או Spreadsheet ID למטה כדי לאפשר סנכרון.",
+            ))
+        _pull_col, _push_col = st.columns(2)
+        with _pull_col:
+            if st.button(
+                tr("↓ Pull", "↓ שלוף מגוגל"),
+                use_container_width=True,
+                disabled=not has_google_connection,
+                help=tr("Download the latest Google Sheets data and update your local store. Your unsynced local changes are preserved.", "הורד את הנתונים העדכניים מגוגל שיט ועדכן את המאגר המקומי. השינויים המקומיים שלך נשמרים."),
+                key="btn_pull_google",
+            ):
+                with st.spinner(tr("Pulling from Google Sheets…", "שולף מגוגל שיט…")):
+                    _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
+                        _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa
+                    )
+                load_google_snapshot_data.clear()
+                load_google_snapshot_data_via_gspread.clear()
+                if _pull_ok:
+                    st.success(f"✅ {_pull_msg}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {_pull_msg}")
+        with _push_col:
+            if st.button(
+                tr("↑ Push", "↑ דחוף לגוגל"),
+                use_container_width=True,
+                disabled=(not has_google_connection) or (_dirty_badge == 0),
+                help=tr("Upload all locally-changed trades to Google Sheets.", "העלה את כל השינויים המקומיים לגוגל שיט."),
+                key="btn_push_google",
+                type="primary" if _dirty_badge > 0 else "secondary",
+            ):
+                if not is_apps_script_web_app_url(_sync_web_url):
+                    st.error(tr("Apps Script Web App URL required for push.", "נדרש קישור Web App של Apps Script לדחיפה."))
+                else:
+                    with st.spinner(tr("Pushing to Google Sheets…", "דוחף לגוגל שיט…")):
+                        _push_ok, _push_msg, _push_n = sync_portfolio_to_google(_sync_web_url, _sync_token)
+                    if _push_ok:
+                        st.success(f"✅ {_push_msg}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {_push_msg}")
+
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
         web_app_url = st.text_input("Apps Script Web App URL", value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
         api_token = st.text_input("API Token", value=settings.get("api_token", ""), type="password")
@@ -7975,7 +8381,7 @@ def main() -> None:
             else:
                 st.error(tr("Failed to save settings", "שמירת החיבור נכשלה"))
 
-        if st.button(tr("Refresh Google data", "רענון נתונים מגוגל")):
+        if st.button(tr("Refresh local data", "רענן נתונים מקומיים")):
             load_google_snapshot_data.clear()
             load_google_snapshot_data_via_gspread.clear()
             st.rerun()
@@ -7997,8 +8403,8 @@ def main() -> None:
         df, source_mode = build_demo_snapshot_data(), "demo"
     else:
         web_url_clean = _clean(web_app_url)
-        using_apps_script = bool(web_url_clean)
-        if using_apps_script and not is_apps_script_web_app_url(web_url_clean):
+        # Validate Apps Script URL format ONLY if a URL was actually provided
+        if web_url_clean and not is_apps_script_web_app_url(web_url_clean):
             if is_google_sheet_url(web_url_clean):
                 st.error(tr("Google Sheets URL was entered instead of Apps Script Web App URL", "הוזן קישור של Google Sheets במקום קישור Web App של Apps Script"))
                 st.info(tr("Use a URL that starts with https://script.google.com/macros/s/ and ends with /exec", "צריך להדביק קישור שמתחיל ב-https://script.google.com/macros/s/ ומסתיים ב-/exec"))
@@ -8007,25 +8413,30 @@ def main() -> None:
                 st.info("https://script.google.com/macros/s/.../exec")
             st.stop()
 
-        if not using_apps_script and not _clean(spreadsheet_ref):
-            st.error(tr("Missing Google connection: set Web App URL or Spreadsheet URL/ID", "חסר חיבור לגוגל: הזן Web App URL או Spreadsheet URL/ID עבור gspread"))
-            st.stop()
-
+        # LOCAL-FIRST: attempt to load (local store is tried first inside load_snapshot_data)
         try:
             df, source_mode = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
         except Exception as exc:
             exc_text = str(exc)
             if _is_timeout_error(exc):
                 st.error(tr("Google data read failed due to timeout.", "קריאת נתונים מגוגל נכשלה בגלל Timeout."))
-                st.info(
-                    tr(
-                        "Apps Script timed out. The app will auto-use local backup data when available; otherwise retry in a minute.",
-                        "Apps Script חרג מזמן התגובה. האפליקציה תעבור אוטומטית לגיבוי מקומי אם קיים; אחרת נסה שוב בעוד דקה.",
-                    )
-                )
+                st.info(tr(
+                    "Apps Script timed out. The app will auto-use local backup data when available; otherwise retry in a minute.",
+                    "Apps Script חרג מזמן התגובה. האפליקציה תעבור אוטומטית לגיבוי מקומי אם קיים; אחרת נסה שוב בעוד דקה.",
+                ))
                 st.caption(exc_text)
             else:
-                st.error(f"{tr('Google data read failed', 'קריאת נתונים מגוגל נכשלה')}: {exc_text}")
+                st.error(f"{tr('Data read failed', 'קריאת נתונים נכשלה')}: {exc_text}")
+            st.stop()
+
+        # If completely empty with no Google connection configured, show first-run wizard
+        if source_mode == "empty":
+            st.info(tr(
+                "📭 No portfolio data found locally. Configure your Google Sheets connection "
+                "in the sidebar and click **Sync ↓ Pull from Google** to import your data.",
+                "📭 לא נמצאו נתוני תיק מקומיים. הגדר את חיבור גוגל שיט בסרגל הצד ולחץ "
+                "**סנכרן ↓ שלוף מגוגל** כדי לייבא את הנתונים.",
+            ))
             st.stop()
 
     loading_placeholder.empty()
@@ -8033,7 +8444,17 @@ def main() -> None:
     web_url_clean = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) if demo_mode else web_app_url)
 
     if connection_state_box is not None:
-        if source_mode == "gspread":
+        _dirty_count = count_dirty_local_trades() if not demo_mode else 0
+        _local_meta = get_local_portfolio_meta() if not demo_mode else {}
+        _last_sync = _clean(str(_local_meta.get("_last_synced", "")))
+        if source_mode == "local_store":
+            _sync_label = (
+                f"☁️ {_dirty_count} " + tr("unsynced change(s)", "שינוי/ים לא מסונכרנ/ים") + " · "
+                if _dirty_count > 0 else ""
+            )
+            _ts_label = (tr("Last sync:", "סנכרון אחרון:") + " " + _last_sync[:16]) if _last_sync else tr("Never synced with Google", "לא סונכרן עם גוגל")
+            connection_state_box.info(f"💾 {tr('Local store active', 'מאגר מקומי פעיל')} · {_sync_label}{_ts_label}")
+        elif source_mode == "gspread":
             connection_state_box.warning(tr("gspread read mode active (write actions disabled).", "מצב קריאה דרך gspread פעיל (ללא Web App פעיל, פעולות עריכה/מחיקה מושבתות)."))
         elif source_mode == "local_cache":
             connection_state_box.warning(tr("Local backup cache is active (latest remote read was unavailable).", "גיבוי מקומי פעיל (הקריאה האחרונה מהשרת לא היתה זמינה)."))
@@ -8042,10 +8463,10 @@ def main() -> None:
         elif source_mode == "demo":
             connection_state_box.info(tr("Demo mode active - sample data only.", "מצב הדגמה פעיל - נתוני דוגמה בלבד."))
         else:
-            connection_state_box.success(tr("Apps Script mode active (read + write).", "חיבור דרך Apps Script פעיל (קריאה + כתיבה)."))
+            connection_state_box.success(tr("Imported from Google Sheets (saved locally).", "נייבא מגוגל שיט (נשמר מקומית)."))
 
     if df.empty:
-        st.warning(tr("No rows found in Google Sheet snapshot", "לא נמצאו עסקאות ב'תמונת מצב' בגוגל שיט"))
+        st.warning(tr("No portfolio rows found.", "לא נמצאו עסקאות בתיק."))
         st.stop()
 
     core = prepare_core_views(df)
@@ -9335,14 +9756,22 @@ def main() -> None:
 
     elif page == page_manage:
         st.markdown(f"### {tr('Trade Management (Add / Edit / Delete)', 'ניהול עסקאות (הוספה / עריכה / מחיקה)')}")
-        st.caption(tr("Changes are saved directly to Google Sheets via Apps Script (no CSV write).", "שמירה מתבצעת ישירות ל-Google Sheets דרך Apps Script (ללא כתיבה ל-CSV)."))
+        st.caption(tr(
+            "Changes are saved locally first. Use the ☁ Sync panel to push to Google Sheets.",
+            "שינויים נשמרים תחילה מקומית. השתמש בחלונית ☁ סנכרון כדי לדחוף לגוגל שיט.",
+        ))
         if is_demo:
             st.info(tr("Demo trade-desk mode: you can safely explore flows and forms without touching your personal portfolio.", "מצב דמו לחדר מסחר: אפשר לבדוק זרימות וטפסים בבטחה בלי לגעת בתיק האישי שלך."))
-        write_enabled = (not is_demo) and is_apps_script_web_app_url(_clean(web_url_clean))
-        if not write_enabled:
-            st.warning(tr("This page is read-only in current mode. Connect Apps Script Web App to enable write actions.", "הדף במצב קריאה בלבד כי אין Web App URL תקין. כדי לאפשר הוספה/עריכה/מחיקה, חבר Apps Script Web App."))
-        elif source_mode in {"local_cache", "verified_fallback", "gspread"}:
-            st.info(tr("Data view loaded from fallback, but write actions remain enabled via Apps Script.", "התצוגה נטענה מגיבוי, אך פעולות הוספה/עריכה/מחיקה עדיין זמינות דרך Apps Script."))
+        # LOCAL-FIRST: writes are always enabled (we write locally); Google is optional
+        write_enabled = not is_demo
+        has_google_write = (not is_demo) and is_apps_script_web_app_url(_clean(web_url_clean))
+        if not has_google_write and not is_demo:
+            st.info(tr(
+                "💾 Local-only mode — changes are saved on this device. "
+                "Configure a Web App URL to also sync to Google Sheets.",
+                "💾 מצב מקומי בלבד — שינויים נשמרים במכשיר הזה. "
+                "הגדר Web App URL כדי לסנכרן גם עם גוגל שיט.",
+            ))
 
         st.caption(tr(f"Showing {len(trades):,} snapshot transactions, including closed trades.", f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות."))
         trade_view = trades.copy()
@@ -9687,7 +10116,7 @@ def main() -> None:
 
             if submitted:
                 if not write_enabled:
-                    st.error(tr("Cannot save in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן לשמור במצב gspread. הגדר Web App URL תקין בצד שמאל."))
+                    st.error(tr("Cannot save in this mode.", "לא ניתן לשמור במצב זה."))
                 else:
                     add_errors: List[str] = []
                     if float(_num(new_row.get("Quantity", 0.0))) <= 0:
@@ -9707,11 +10136,18 @@ def main() -> None:
                             st.error(e)
                         st.stop()
 
-                    ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
-                    if not ok:
-                        st.error(f"{tr('Add failed', 'הוספה נכשלה')}: {msg}")
+                    if has_google_write:
+                        ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
                     else:
-                        # Partial sell: update the source open lot to remaining quantity/cost.
+                        # No Google connection — write locally only
+                        apply_local_trade("add", new_row)
+                        st.success(tr("Trade saved locally (no Google connection).", "הרשומה נשמרה מקומית (ללא חיבור לגוגל)."))
+                        st.rerun()
+                        ok, msg = False, ""    # ensure we don't fall through
+
+                    if not ok and has_google_write:
+                        st.error(f"{tr('Add failed', 'הוספה נכשלה')}: {msg}")
+                    elif ok:
                         if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
                             src = dict(partial_sell_meta.get("source_row", {}))
                             src_trade_id = _clean(partial_sell_meta.get("source_trade_id", ""))
@@ -9743,12 +10179,25 @@ def main() -> None:
                                     )
                                 )
                                 st.error(msg_edit)
+                            else:
+                                # also apply partial-sell source update locally
+                                apply_local_trade("edit", source_update)
 
-                        st.success(tr("Trade added directly to Google Sheets", "הרשומה נוספה ישירות ל-Google Sheets"))
+                        st.success(tr("Trade added (local + Google Sheets)", "הרשומה נוספה (מקומי + גוגל שיט)"))
                         st.info(msg)
+                        # Refresh local store from Google to get server-assigned Trade_IDs
+                        try:
+                            _fresh_df = load_google_snapshot_data(web_url_clean, api_token)
+                            save_local_portfolio(_fresh_df, preserve_dirty=False)
+                        except Exception:
+                            apply_local_trade("add", new_row)
                         load_google_snapshot_data.clear()
                         load_google_snapshot_data_via_gspread.clear()
                         st.rerun()
+
+                    # Always apply to local store regardless of Google result
+                    if not ok:
+                        apply_local_trade("add", new_row)
 
         elif mode == "edit":
             selected = _clean(st.session_state.get("selected_trade_id", ""))
@@ -9805,15 +10254,17 @@ def main() -> None:
                         st.error(tr("Cannot update in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן לעדכן במצב gspread. הגדר Web App URL תקין בצד שמאל."))
                     else:
                         edited["Trade_ID"] = selected
+                        # Always apply locally first
+                        apply_local_trade("edit", edited)
                         ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "edit", edited)
                         if ok:
-                            st.success(tr("Trade updated directly in Google Sheets", "הרשומה עודכנה ישירות ב-Google Sheets"))
+                            st.success(tr("Trade updated (local + Google Sheets)", "הרשומה עודכנה (מקומי + גוגל שיט)"))
                             st.info(msg)
                             load_google_snapshot_data.clear()
                             load_google_snapshot_data_via_gspread.clear()
                             st.rerun()
                         else:
-                            st.error(f"{tr('Update failed', 'עדכון נכשל')}: {msg}")
+                            st.error(f"{tr('Update failed in Google Sheets (saved locally)', 'עדכון נכשל בגוגל שיט (נשמר מקומית)')}: {msg}")
 
         else:
             selected = _clean(st.session_state.get("selected_trade_id", ""))
@@ -9840,13 +10291,17 @@ def main() -> None:
                         )
                     ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "delete", delete_payload)
                     if ok:
-                        st.success(tr("Trade deleted directly from Google Sheets", "הרשומה נמחקה ישירות מ-Google Sheets"))
+                        # Remove from local store (clean delete — already on Google)
+                        apply_local_trade("delete", delete_payload)
+                        st.success(tr("Trade deleted (local + Google Sheets)", "הרשומה נמחקה (מקומי + גוגל שיט)"))
                         st.info(msg)
                         load_google_snapshot_data.clear()
                         load_google_snapshot_data_via_gspread.clear()
                         st.rerun()
                     else:
-                        st.error(f"{tr('Delete failed', 'מחיקה נכשלה')}: {msg}")
+                        # Google failed → still remove locally (mark dirty)
+                        apply_local_trade("delete", delete_payload)
+                        st.error(f"{tr('Delete failed in Google Sheets (removed locally)', 'מחיקה נכשלה בגוגל שיט (הוסרה מקומית)')}: {msg}")
 
     elif page == page_simulator:
         try:
