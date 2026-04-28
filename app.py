@@ -3,6 +3,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -113,6 +114,86 @@ LOCAL_PORTFOLIO_FILE = Path(__file__).resolve().parent / "portfolio_data.json"
 LOCAL_SNAPSHOT_CACHE_FILE = Path(__file__).resolve().parent / "snapshot_cache.csv"
 VERIFIED_DATA_FALLBACK_FILE = Path(__file__).resolve().parent / "DATA" / "verified_data.csv"
 APPS_SCRIPT_COOLDOWN_FILE = Path(__file__).resolve().parent / "apps_script_cooldown.json"
+
+# ── Thread-safe local portfolio file access ────────────────────────────
+# All reads/writes to LOCAL_PORTFOLIO_FILE go through this lock so that
+# concurrent Streamlit sessions (on the same server) cannot race-corrupt the file.
+_LOCAL_FILE_LOCK = threading.Lock()
+
+
+def _write_portfolio_atomic(data: dict) -> None:
+    """Write portfolio data atomically via temp-file rename + keep 3 rolling backups.
+
+    Backup rotation: portfolio_data.json → .bak1 → .bak2 → .bak3
+    Worst-case: only the most recent write is lost (temp file + 3 backups available).
+    Must be called with _LOCAL_FILE_LOCK held.
+    """
+    parent = LOCAL_PORTFOLIO_FILE.parent
+    # Rotate backups: .bak2 → .bak3, .bak1 → .bak2
+    for i in range(2, 0, -1):
+        src = parent / f"portfolio_data.bak{i}.json"
+        dst = parent / f"portfolio_data.bak{i + 1}.json"
+        if src.exists():
+            try:
+                src.replace(dst)
+            except Exception:
+                pass
+    # Move current file → .bak1
+    if LOCAL_PORTFOLIO_FILE.exists():
+        try:
+            LOCAL_PORTFOLIO_FILE.replace(parent / "portfolio_data.bak1.json")
+        except Exception:
+            pass
+    # Write to .tmp then rename (atomic on Windows + POSIX)
+    tmp = LOCAL_PORTFOLIO_FILE.with_suffix(".ptmp")
+    try:
+        tmp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        tmp.replace(LOCAL_PORTFOLIO_FILE)
+    except Exception:
+        # If rename fails, at least try a direct write
+        try:
+            LOCAL_PORTFOLIO_FILE.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _read_portfolio_file_raw() -> dict:
+    """Read LOCAL_PORTFOLIO_FILE; on parse error, try backups in order.
+    Returns the raw dict or an empty skeleton dict.
+    """
+    candidates = [LOCAL_PORTFOLIO_FILE] + [
+        LOCAL_PORTFOLIO_FILE.parent / f"portfolio_data.bak{i}.json"
+        for i in range(1, 4)
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                return raw
+        except Exception:
+            continue
+    return {"_meta": {}, "rows": []}
+
+
+def get_portfolio_file_mtime() -> float:
+    """Return the last-modified timestamp of LOCAL_PORTFOLIO_FILE (0.0 if missing)."""
+    try:
+        return LOCAL_PORTFOLIO_FILE.stat().st_mtime if LOCAL_PORTFOLIO_FILE.exists() else 0.0
+    except Exception:
+        return 0.0
+
+
 NETWORK_TIMEOUT_SECONDS = 20
 NETWORK_MAX_RETRIES = 3
 NETWORK_RETRY_BACKOFF_SECONDS = 1.4
@@ -3906,16 +3987,23 @@ def _portfolio_row_to_dict(row: object) -> Dict[str, object]:
 def load_local_portfolio() -> Tuple["pd.DataFrame", Dict[str, object]]:
     """Read portfolio from the local JSON store.
 
+    Uses backup-aware _read_portfolio_file_raw() so a corrupted main file
+    automatically falls back to the most-recent good backup.
+
     Returns:
         (df, meta) — df is a normalised DataFrame (may be empty),
         meta is the _meta dict (empty dict if file missing/corrupt).
     """
     if not LOCAL_PORTFOLIO_FILE.exists():
-        return pd.DataFrame(), {}
-    try:
-        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
+        # Also check if any backup exists (main file may have been deleted)
+        has_backup = any(
+            (LOCAL_PORTFOLIO_FILE.parent / f"portfolio_data.bak{i}.json").exists()
+            for i in range(1, 4)
+        )
+        if not has_backup:
             return pd.DataFrame(), {}
+    try:
+        raw = _read_portfolio_file_raw()
         meta = raw.get("_meta", {})
         rows = raw.get("rows", [])
         if not rows:
@@ -3940,16 +4028,17 @@ def save_local_portfolio(
 ) -> bool:
     """Write portfolio DataFrame to the local JSON store.
 
+    Thread-safe (acquires _LOCAL_FILE_LOCK) and atomic (temp-file rename).
     preserve_dirty: keep existing _dirty/_dirty_op flags from the file
                     (True after a local edit; False after a Google pull).
     """
-    try:
-        existing_flags: Dict[str, Dict[str, object]] = {}
-        existing_meta: Dict[str, object] = {}
-        if LOCAL_PORTFOLIO_FILE.exists() and preserve_dirty:
-            try:
-                raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
+    with _LOCAL_FILE_LOCK:
+        try:
+            existing_flags: Dict[str, Dict[str, object]] = {}
+            existing_meta: Dict[str, object] = {}
+            if preserve_dirty:
+                try:
+                    raw = _read_portfolio_file_raw()
                     existing_meta = raw.get("_meta", {})
                     for r in raw.get("rows", []):
                         if isinstance(r, dict):
@@ -3960,97 +4049,89 @@ def save_local_portfolio(
                                     "_dirty_op": str(r.get("_dirty_op", "")),
                                     "_deleted": bool(r.get("_deleted", False)),
                                 }
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
-        new_meta: Dict[str, object] = {**existing_meta}
-        new_meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        if meta_patch:
-            new_meta.update(meta_patch)
+            new_meta: Dict[str, object] = {**existing_meta}
+            new_meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            new_meta["_version"] = int(existing_meta.get("_version", 0)) + 1
+            if meta_patch:
+                new_meta.update(meta_patch)
 
-        rows_out = []
-        for _, row in df.iterrows():
-            rd = _portfolio_row_to_dict(row)
-            tid = _clean(str(rd.get("Trade_ID", "")))
-            flags = existing_flags.get(tid, {}) if preserve_dirty else {}
-            rd["_dirty"] = bool(flags.get("_dirty", False))
-            rd["_dirty_op"] = str(flags.get("_dirty_op", ""))
-            rd["_deleted"] = bool(flags.get("_deleted", False))
-            rows_out.append(rd)
+            rows_out = []
+            for _, row in df.iterrows():
+                rd = _portfolio_row_to_dict(row)
+                tid = _clean(str(rd.get("Trade_ID", "")))
+                flags = existing_flags.get(tid, {}) if preserve_dirty else {}
+                rd["_dirty"] = bool(flags.get("_dirty", False))
+                rd["_dirty_op"] = str(flags.get("_dirty_op", ""))
+                rd["_deleted"] = bool(flags.get("_deleted", False))
+                rows_out.append(rd)
 
-        LOCAL_PORTFOLIO_FILE.write_text(
-            json.dumps({"_meta": new_meta, "rows": rows_out}, ensure_ascii=False,
-                       indent=2, default=str),
-            encoding="utf-8",
-        )
-        return True
-    except Exception:
-        return False
+            _write_portfolio_atomic({"_meta": new_meta, "rows": rows_out})
+            return True
+        except Exception:
+            return False
 
 
 def apply_local_trade(op: str, trade_row: Dict[str, object]) -> bool:
     """Apply a single trade operation to the local store.
 
+    Thread-safe (acquires _LOCAL_FILE_LOCK), atomic write, and version-bumped.
     op: "add" | "edit" | "delete"
     trade_row must contain Trade_ID (for edit/delete).
     Returns True on success.
     """
-    try:
-        existing: Dict[str, object] = {"_meta": {}, "rows": []}
-        if LOCAL_PORTFOLIO_FILE.exists():
-            raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                existing = raw
-        meta = dict(existing.get("_meta", {}))
-        meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        rows: List[Dict[str, object]] = list(existing.get("rows", []))
-        tid = _clean(str(trade_row.get("Trade_ID", "")))
+    with _LOCAL_FILE_LOCK:
+        try:
+            existing = _read_portfolio_file_raw()
+            meta = dict(existing.get("_meta", {}))
+            meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            meta["_version"] = int(meta.get("_version", 0)) + 1
+            rows: List[Dict[str, object]] = list(existing.get("rows", []))
+            tid = _clean(str(trade_row.get("Trade_ID", "")))
 
-        if op == "add":
-            new_r = _portfolio_row_to_dict(trade_row)
-            new_r["_dirty"] = True
-            new_r["_dirty_op"] = "add"
-            new_r["_deleted"] = False
-            rows.append(new_r)
-
-        elif op == "edit":
-            updated = False
-            for i, r in enumerate(rows):
-                if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
-                    updated_r = _portfolio_row_to_dict(trade_row)
-                    updated_r["_dirty"] = True
-                    updated_r["_dirty_op"] = r.get("_dirty_op", "edit") if r.get("_dirty_op") == "add" else "edit"
-                    updated_r["_deleted"] = False
-                    rows[i] = updated_r
-                    updated = True
-                    break
-            if not updated:   # trade not in store yet — treat as add
+            if op == "add":
                 new_r = _portfolio_row_to_dict(trade_row)
                 new_r["_dirty"] = True
                 new_r["_dirty_op"] = "add"
                 new_r["_deleted"] = False
                 rows.append(new_r)
 
-        elif op == "delete":
-            for i, r in enumerate(rows):
-                if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
-                    if r.get("_dirty_op") == "add":
-                        # Never synced → just erase it
-                        rows.pop(i)
-                    else:
-                        rows[i]["_dirty"] = True
-                        rows[i]["_dirty_op"] = "delete"
-                        rows[i]["_deleted"] = True
-                    break
+            elif op == "edit":
+                updated = False
+                for i, r in enumerate(rows):
+                    if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
+                        updated_r = _portfolio_row_to_dict(trade_row)
+                        updated_r["_dirty"] = True
+                        updated_r["_dirty_op"] = r.get("_dirty_op", "edit") if r.get("_dirty_op") == "add" else "edit"
+                        updated_r["_deleted"] = False
+                        rows[i] = updated_r
+                        updated = True
+                        break
+                if not updated:   # trade not in store yet — treat as add
+                    new_r = _portfolio_row_to_dict(trade_row)
+                    new_r["_dirty"] = True
+                    new_r["_dirty_op"] = "add"
+                    new_r["_deleted"] = False
+                    rows.append(new_r)
 
-        LOCAL_PORTFOLIO_FILE.write_text(
-            json.dumps({"_meta": meta, "rows": rows}, ensure_ascii=False,
-                       indent=2, default=str),
-            encoding="utf-8",
-        )
-        return True
-    except Exception:
-        return False
+            elif op == "delete":
+                for i, r in enumerate(rows):
+                    if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
+                        if r.get("_dirty_op") == "add":
+                            # Never synced → just erase it
+                            rows.pop(i)
+                        else:
+                            rows[i]["_dirty"] = True
+                            rows[i]["_dirty_op"] = "delete"
+                            rows[i]["_deleted"] = True
+                        break
+
+            _write_portfolio_atomic({"_meta": meta, "rows": rows})
+            return True
+        except Exception:
+            return False
 
 
 def count_dirty_local_trades() -> int:
@@ -4058,9 +4139,7 @@ def count_dirty_local_trades() -> int:
     if not LOCAL_PORTFOLIO_FILE.exists():
         return 0
     try:
-        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            return 0
+        raw = _read_portfolio_file_raw()
         return sum(1 for r in raw.get("rows", []) if isinstance(r, dict) and bool(r.get("_dirty", False)))
     except Exception:
         return 0
@@ -4071,7 +4150,7 @@ def get_local_portfolio_meta() -> Dict[str, object]:
     if not LOCAL_PORTFOLIO_FILE.exists():
         return {}
     try:
-        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        raw = _read_portfolio_file_raw()
         return raw.get("_meta", {}) if isinstance(raw, dict) else {}
     except Exception:
         return {}
@@ -4099,17 +4178,15 @@ def sync_portfolio_from_google(
         # Merge: remote rows that are NOT locally dirty override local;
         # locally dirty rows are kept as-is (they take precedence).
         dirty_ids: set = set()
-        if LOCAL_PORTFOLIO_FILE.exists():
-            try:
-                raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    dirty_ids = {
-                        _clean(str(r.get("Trade_ID", "")))
-                        for r in raw.get("rows", [])
-                        if isinstance(r, dict) and bool(r.get("_dirty", False))
-                    }
-            except Exception:
-                pass
+        try:
+            raw = _read_portfolio_file_raw()
+            dirty_ids = {
+                _clean(str(r.get("Trade_ID", "")))
+                for r in raw.get("rows", [])
+                if isinstance(r, dict) and bool(r.get("_dirty", False))
+            }
+        except Exception:
+            pass
 
         # Keep locally-dirty rows as-is; use remote data for all others
         local_df, _ = load_local_portfolio()
@@ -4132,12 +4209,8 @@ def sync_portfolio_to_google(
 
     Returns (ok, message, pushed_count).
     """
-    if not LOCAL_PORTFOLIO_FILE.exists():
-        return True, tr("Nothing to sync.", "אין שינויים לסנכרן."), 0
     try:
-        raw = json.loads(LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            return True, tr("Nothing to sync.", "אין שינויים לסנכרן."), 0
+        raw = _read_portfolio_file_raw()
         dirty = [r for r in raw.get("rows", []) if isinstance(r, dict) and bool(r.get("_dirty", False))]
         if not dirty:
             return True, tr("Nothing to sync.", "אין שינויים לסנכרן."), 0
@@ -4161,10 +4234,9 @@ def sync_portfolio_to_google(
                 r["_dirty"] = False
                 r["_dirty_op"] = ""
         raw.setdefault("_meta", {})["_last_synced"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        LOCAL_PORTFOLIO_FILE.write_text(
-            json.dumps(raw, ensure_ascii=False, indent=2, default=str),
-            encoding="utf-8",
-        )
+        raw["_meta"]["_version"] = int(raw["_meta"].get("_version", 0)) + 1
+        with _LOCAL_FILE_LOCK:
+            _write_portfolio_atomic(raw)
         return True, tr(f"Pushed {pushed:,} changes to Google Sheets.", f"נדחפו {pushed:,} שינויים לגוגל שיט."), pushed
     except Exception as exc:
         return False, str(exc), 0
@@ -8584,17 +8656,23 @@ def main() -> None:
 
         # If completely empty with no Google connection configured, show first-run wizard
         if source_mode == "empty":
-            st.info(tr(
-                "📭 No portfolio data found locally. Configure your Google Sheets connection "
-                "in the sidebar and click **Sync ↓ Pull from Google** to import your data.",
-                "📭 לא נמצאו נתוני תיק מקומיים. הגדר את חיבור גוגל שיט בסרגל הצד ולחץ "
-                "**סנכרן ↓ שלוף מגוגל** כדי לייבא את הנתונים.",
-            ))
-            st.stop()
+            _current_page_for_empty = st.session_state.get("active_page_id", "dashboard")
+            if _current_page_for_empty != "trades":
+                st.info(tr(
+                    "📭 No portfolio data found. Go to **Trade Management** in the sidebar to add your first trade "
+                    "(no Google Sheets needed).",
+                    "📭 לא נמצאו נתוני תיק. עבור לדף **ניהול עסקאות** בסרגל הצד כדי להוסיף את העסקה הראשונה "
+                    "(ללא צורך בגוגל שיט).",
+                ))
+                st.stop()
 
     loading_placeholder.empty()
 
     web_url_clean = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) if demo_mode else web_app_url)
+
+    # ── Store file mtime in session_state so the cross-device watcher can detect changes ──
+    if not demo_mode:
+        st.session_state["_portfolio_file_mtime"] = get_portfolio_file_mtime()
 
     if connection_state_box is not None:
         _dirty_count = count_dirty_local_trades() if not demo_mode else 0
@@ -8619,8 +8697,24 @@ def main() -> None:
             connection_state_box.success(tr("Imported from Google Sheets (saved locally).", "נייבא מגוגל שיט (נשמר מקומית)."))
 
     if df.empty:
-        st.warning(tr("No portfolio rows found.", "לא נמצאו עסקאות בתיק."))
-        st.stop()
+        _current_page_for_df = st.session_state.get("active_page_id", "dashboard")
+        if _current_page_for_df != "trades":
+            st.warning(tr("No portfolio rows found.", "לא נמצאו עסקאות בתיק."))
+            st.stop()
+
+    # ── Cross-device change watcher ──────────────────────────────────────
+    # Checks portfolio_data.json mtime every 5 s.  When another session
+    # (different browser tab / device on the same server) modifies the file,
+    # this triggers a full-app rerun so the current session sees the update.
+    if not demo_mode and hasattr(st, "fragment"):
+        @st.fragment(run_every="5s")
+        def _portfolio_sync_watcher() -> None:
+            stored_mtime = float(st.session_state.get("_portfolio_file_mtime", 0.0))
+            current_mtime = get_portfolio_file_mtime()
+            if current_mtime > stored_mtime + 0.5:
+                # File was changed externally — reload the full page
+                st.rerun()
+        _portfolio_sync_watcher()
 
     # ── Live price refresh (non-blocking) ───────────────────────────────
     # Prices are refreshed every 30s by the dashboard fragment.
