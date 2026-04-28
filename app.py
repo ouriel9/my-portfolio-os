@@ -508,6 +508,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     nav_inactive = "#94a3b8" if is_dark else "#64748b"
     hamburger_bg = "rgba(30,30,30,0.92)" if is_dark else "rgba(255,255,255,0.92)"
     hamburger_border = "rgba(255,255,255,0.18)" if is_dark else "rgba(203,213,225,0.9)"
+    badge_color = "#c8d6e5" if is_dark else "#94a3b8"   # help-badge (?) tint – lighter in dark mode
     css = f"""
     <style>
     /* Force the Streamlit root layout container to LTR so the sidebar
@@ -707,7 +708,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         justify-content: center;
         width: 22px; height: 22px;
         border-radius: 50%;
-        color: #94a3b8;
+        color: {badge_color};
         background: transparent;
         transition: background 120ms ease, color 120ms ease, transform 120ms ease;
         -webkit-tap-highlight-color: transparent;
@@ -738,9 +739,9 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         padding: 12px 14px;
         font-size: 0.86rem;
         line-height: 1.55;
-        background: {metric_bg};
-        color: {metric_text};
-        border: 1px solid {metric_border};
+        background: {metric_bg} !important;
+        color: {metric_text} !important;
+        border: 1px solid {metric_border} !important;
         border-radius: 12px;
         box-shadow: 0 14px 32px -8px rgba(0,0,0,0.32);
         unicode-bidi: plaintext;
@@ -749,14 +750,19 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         text-align: start;
         animation: pp-help-fade 120ms ease-out;
     }}
+    /* Ensure all inline elements inside the popup inherit the explicit color,
+       not some cascaded light/dark colour from a parent Streamlit container. */
+    details.pp-help > .pp-help-body *,
+    details.pp-help > .pp-help-body p,
+    details.pp-help > .pp-help-body span,
+    details.pp-help > .pp-help-body li {{
+        color: {metric_text} !important;
+    }}
     @keyframes pp-help-fade {{
         from {{ opacity: 0; transform: translateY(-4px); }}
         to   {{ opacity: 1; transform: translateY(0); }}
     }}
-    /* Mobile: keep popup INLINE near the badge (matching Streamlit's
-       native `help=` tooltip behaviour), NOT a bottom drawer. The popup
-       opens just below the ? badge, capped at viewport-minus-padding for
-       width so long Hebrew text wraps cleanly. */
+    /* Mobile: keep popup INLINE near the badge */
     @media (max-width: 600px) {{
         details.pp-help > .pp-help-body {{
             position: absolute;
@@ -768,6 +774,40 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             font-size: 0.86rem;
             box-shadow: 0 12px 28px -6px rgba(0,0,0,0.35);
             animation: pp-help-fade 120ms ease-out;
+        }}
+    }}
+    /* ── Client-side dark-mode safety net: if the server-side is_dark
+       detection is wrong (e.g. user uses Streamlit native dark theme
+       via hamburger menu), CSS prefers-color-scheme still makes the
+       popup readable.                                                  ── */
+    @media (prefers-color-scheme: dark) {{
+        details.pp-help > .pp-help-body {{
+            background: #1e293b !important;
+            color: #f1f5f9 !important;
+            border-color: #334155 !important;
+        }}
+        details.pp-help > .pp-help-body *,
+        details.pp-help > .pp-help-body p,
+        details.pp-help > .pp-help-body span,
+        details.pp-help > .pp-help-body li {{
+            color: #f1f5f9 !important;
+        }}
+        [data-baseweb="tooltip"],
+        [data-baseweb="tooltip"] > div {{
+            background-color: #1e293b !important;
+            color: #f1f5f9 !important;
+            border: 1px solid #334155 !important;
+            border-radius: 10px !important;
+        }}
+        [data-baseweb="tooltip"] p,
+        [data-baseweb="tooltip"] span,
+        [data-baseweb="tooltip"] div,
+        [data-baseweb="tooltip"] [data-testid="stMarkdownContainer"],
+        [data-baseweb="tooltip"] [data-testid="stMarkdownContainer"] p,
+        [data-testid="stTooltipContent"],
+        [data-testid="stTooltipContent"] p {{
+            color: #f1f5f9 !important;
+            background-color: transparent !important;
         }}
     }}
     /* ── Overlap shields: make sure charts, dataframes and tooltip badges
@@ -2061,6 +2101,65 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     ::-webkit-scrollbar-thumb:hover {{
         background: {dark_muted} !important;
     }}
+    /* ── Checkbox indicators — ensure checkmark is always visible in dark mode ── */
+    [data-baseweb="checkbox"] [role="checkbox"][aria-checked="true"],
+    [data-baseweb="checkbox"] div[data-checked="true"] {{
+        background-color: #6366f1 !important;
+        border-color: #6366f1 !important;
+    }}
+    [data-baseweb="checkbox"] [role="checkbox"][aria-checked="true"] svg,
+    [data-baseweb="checkbox"] div[data-checked="true"] svg {{
+        fill: #ffffff !important;
+        color: #ffffff !important;
+    }}
+    [data-baseweb="checkbox"] [role="checkbox"] {{
+        border-color: {dark_muted} !important;
+    }}
+    [data-testid="stSidebar"] [data-baseweb="checkbox"] span,
+    [data-testid="stSidebar"] [data-baseweb="checkbox"] p {{
+        color: {dark_text} !important;
+    }}
+    /* ── Help-badge: slightly brighter in dark mode for better contrast ── */
+    details.pp-help > summary.pp-help-summary {{
+        color: {badge_color} !important;
+    }}
+    /* ── Help popup: explicit dark colours so the panel is always readable ── */
+    details.pp-help > .pp-help-body,
+    details.pp-help[open] > .pp-help-body {{
+        background: #1e293b !important;
+        color: #f1f5f9 !important;
+        border-color: #334155 !important;
+    }}
+    details.pp-help > .pp-help-body *,
+    details.pp-help > .pp-help-body p,
+    details.pp-help > .pp-help-body span,
+    details.pp-help > .pp-help-body li {{
+        color: #f1f5f9 !important;
+    }}
+    /* ── Native Streamlit help=… tooltip (st.metric, st.selectbox, etc.) ── */
+    [data-baseweb="tooltip"],
+    [data-baseweb="tooltip"] > div {{
+        background-color: #1e293b !important;
+        color: {dark_text} !important;
+        border: 1px solid {dark_border} !important;
+        border-radius: 10px !important;
+    }}
+    [data-baseweb="tooltip"] p,
+    [data-baseweb="tooltip"] span,
+    [data-baseweb="tooltip"] div,
+    [data-baseweb="tooltip"] li {{
+        color: {dark_text} !important;
+        background-color: transparent !important;
+    }}
+    [data-baseweb="tooltip"] [data-testid="stMarkdownContainer"],
+    [data-baseweb="tooltip"] [data-testid="stMarkdownContainer"] p,
+    [data-baseweb="tooltip"] [data-testid="stMarkdownContainer"] span,
+    [data-testid="stTooltipContent"],
+    [data-testid="stTooltipContent"] p,
+    [data-testid="stTooltipContent"] span {{
+        color: {dark_text} !important;
+        background-color: transparent !important;
+    }}
     /* ══════════════ END DARK MODE ══════════════ */
     </style>
     """
@@ -2192,6 +2291,37 @@ body > div[data-baseweb="layer"] li:hover {{
 }}
 body > div[data-baseweb="layer"] li[aria-selected="true"] {{
   background-color: {dark_accent} !important;
+}}
+/* ── Native Streamlit help=… tooltip (st.metric, st.selectbox, etc.) ── */
+/* BaseWeb renders the tooltip via a portal inside [data-baseweb="layer"]. */
+[data-baseweb="tooltip"],
+[data-baseweb="tooltip"] > div,
+body > div[data-baseweb="layer"] [data-baseweb="tooltip"],
+body > div[data-baseweb="layer"] [data-baseweb="tooltip"] > div {{
+  background-color: {dark_bg2} !important;
+  color: {dark_text} !important;
+  border: 1px solid {dark_border} !important;
+  border-radius: 10px !important;
+}}
+[data-baseweb="tooltip"] p,
+[data-baseweb="tooltip"] span,
+[data-baseweb="tooltip"] li,
+[data-baseweb="tooltip"] div,
+body > div[data-baseweb="layer"] [data-baseweb="tooltip"] p,
+body > div[data-baseweb="layer"] [data-baseweb="tooltip"] span,
+body > div[data-baseweb="layer"] [data-baseweb="tooltip"] div {{
+  color: {dark_text} !important;
+  background-color: transparent !important;
+}}
+/* Streamlit wraps the tooltip text in stMarkdownContainer */
+[data-baseweb="tooltip"] [data-testid="stMarkdownContainer"],
+[data-baseweb="tooltip"] [data-testid="stMarkdownContainer"] p,
+[data-baseweb="tooltip"] [data-testid="stMarkdownContainer"] span,
+body > * [data-testid="stTooltipContent"],
+body > * [data-testid="stTooltipContent"] p,
+body > * [data-testid="stTooltipContent"] span {{
+  color: {dark_text} !important;
+  background-color: transparent !important;
 }}
 """
     sidebar_css = f"""
@@ -5641,11 +5771,19 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     }}
     @keyframes pp-shimmer {{ 0%{{background-position:200% 0}} 100%{{background-position:-200% 0}} }}
 
-    /* ── Focus rings: accessible & modern ── */
+    /* ── Focus rings: accessible & modern (main content only) ── */
     :focus-visible {{
         outline: 2px solid #6366f1 !important;
         outline-offset: 2px !important;
         border-radius: 8px;
+    }}
+    /* Suppress focus rings inside the sidebar — sidebar is mouse/touch driven
+       and the colored outline creates a confusing "small hoop" next to Hebrew
+       widget labels (mislabelled as a status indicator by users). */
+    [data-testid="stSidebar"] :focus-visible,
+    [data-testid="stSidebar"] :focus {{
+        outline: none !important;
+        box-shadow: none !important;
     }}
 
     /* ── Sidebar surface: subtle glass ── */
@@ -5860,7 +5998,8 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         [data-testid="stPlotlyChart"] {{ contain-intrinsic-size: 300px; position: relative; }}
         .modebar-container, .modebar {{ display: none !important; }}
 
-        /* Radio buttons: always horizontal, no wrap */
+        /* Radio buttons: always horizontal, no wrap; labels must not shrink
+           below their text width so the gradient bg covers all the text. */
         [data-testid="stRadio"] > div {{
             flex-wrap: nowrap !important;
             gap: 0.35rem !important;
@@ -5869,8 +6008,21 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             white-space: nowrap !important;
             font-size: 13px !important;
             padding: 6px 10px !important;
-            min-width: 0 !important;
-            flex-shrink: 1 !important;
+            min-width: fit-content !important;
+            flex-shrink: 0 !important;
+        }}
+        /* Page-nav 4-pill bar: allow hidden horizontal scroll so Hebrew labels
+           that are longer than the allocated space don't overflow the colored frame */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) > div,
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child) > div {{
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            -webkit-overflow-scrolling: touch !important;
+            scrollbar-width: none !important;
+        }}
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child) > div::-webkit-scrollbar,
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(5):last-child) > div::-webkit-scrollbar {{
+            display: none !important;
         }}
 
         /* DataFrame: card-like */
@@ -7771,6 +7923,16 @@ def main() -> None:
             header[data-testid="stHeader"] button {
                 pointer-events: auto !important;   /* but its buttons do */
             }
+            /* Hide the app-running status widget on desktop — it shows as a
+               small coloured dot/spinner on every rerun and confuses users.
+               The JS injection in inject_client_fixes tries to hide it but can
+               race; this CSS rule is the belt-and-suspenders guarantee. */
+            [data-testid="stStatusWidget"] {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
         }
         /* Explicitly ensure the collapse/expand sidebar control AND the
            3-dots Main-Menu stay visible in all viewports. */
@@ -8421,8 +8583,13 @@ def main() -> None:
             div[data-testid="stExpander"]:hover {{
                 border-color: {_accent}88 !important;
             }}
-            details[data-testid="stExpander"] svg,
-            div[data-testid="stExpander"] svg {{
+            /* Expander SVG accent: main content only — NOT sidebar.
+               The sidebar chevrons are row-reversed to the left side and
+               a coloured arrow near the top looks like a stray dot to users. */
+            section.main details[data-testid="stExpander"] svg,
+            section.main div[data-testid="stExpander"] svg,
+            .main details[data-testid="stExpander"] svg,
+            .main div[data-testid="stExpander"] svg {{
                 color: {_accent} !important;
             }}
 
@@ -8431,8 +8598,9 @@ def main() -> None:
                 border-top: 2px solid {_accent}55 !important;
             }}
 
-            /* Focus rings + accessible outlines */
-            :focus-visible {{
+            /* Focus rings: apply accent only in main content, NOT sidebar */
+            section.main :focus-visible,
+            .main :focus-visible {{
                 outline-color: {_accent} !important;
             }}
 
@@ -8501,7 +8669,7 @@ def main() -> None:
     _dirty_badge = count_dirty_local_trades()
     _sync_expander_label = tr("☁ Sync with Google Sheets", "☁ סנכרון עם גוגל שיט")
     if _dirty_badge > 0:
-        _sync_expander_label += f" ({_dirty_badge} {'🔴' if _dirty_badge > 0 else ''})"
+        _sync_expander_label += f" · {_dirty_badge} {tr('pending', 'ממתינ/ים')}"
     with st.sidebar.expander(_sync_expander_label, expanded=(_dirty_badge > 0)):
         _sync_web_url = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) or DEFAULT_WEB_APP_URL)
         _sync_token = _clean(settings.get("api_token", ""))
@@ -10179,6 +10347,10 @@ def main() -> None:
             "Changes are saved locally first. Use the ☁ Sync panel to push to Google Sheets.",
             "שינויים נשמרים תחילה מקומית. השתמש בחלונית ☁ סנכרון כדי לדחוף לגוגל שיט.",
         ))
+        # Show persisted Google-sync error from previous rerun (set when add fails on Google)
+        if "_add_trade_google_error" in st.session_state:
+            _prev_err = st.session_state.pop("_add_trade_google_error")
+            st.warning(f"⚠️ {_prev_err}")
         if is_demo:
             st.info(tr("Demo trade-desk mode: you can safely explore flows and forms without touching your personal portfolio.", "מצב דמו לחדר מסחר: אפשר לבדוק זרימות וטפסים בבטחה בלי לגעת בתיק האישי שלך."))
         # LOCAL-FIRST: writes are always enabled (we write locally); Google is optional
@@ -10590,7 +10762,8 @@ def main() -> None:
                         ok, msg = False, ""    # ensure we don't fall through
 
                     if not ok and has_google_write:
-                        st.error(f"{tr('Add failed', 'הוספה נכשלה')}: {msg}")
+                        # Store error in session_state so it survives the upcoming rerun
+                        st.session_state["_add_trade_google_error"] = f"{tr('Add failed — saved locally. Use ☁ Sync to push when ready.', 'הוספה נכשלה בגוגל — נשמר מקומית. השתמש ב-☁ סנכרון כדי לדחוף.')}\n{msg}"
                     elif ok:
                         if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
                             src = dict(partial_sell_meta.get("source_row", {}))
@@ -10629,10 +10802,11 @@ def main() -> None:
 
                         st.success(tr("Trade added (local + Google Sheets)", "הרשומה נוספה (מקומי + גוגל שיט)"))
                         st.info(msg)
-                        # Refresh local store from Google to get server-assigned Trade_IDs
+                        # Refresh local store from Google to get server-assigned Trade_IDs.
+                        # preserve_dirty=True keeps any OTHER pending dirty trades intact.
                         try:
                             _fresh_df = load_google_snapshot_data(web_url_clean, api_token)
-                            save_local_portfolio(_fresh_df, preserve_dirty=False)
+                            save_local_portfolio(_fresh_df, preserve_dirty=True)
                         except Exception:
                             apply_local_trade("add", new_row)
                         load_google_snapshot_data.clear()
@@ -10642,6 +10816,8 @@ def main() -> None:
                     # Always apply to local store regardless of Google result
                     if not ok:
                         apply_local_trade("add", new_row)
+                        # Rerun so the sidebar dirty-badge refreshes and Push button activates
+                        st.rerun()
 
         elif mode == "edit":
             selected = _clean(st.session_state.get("selected_trade_id", ""))
