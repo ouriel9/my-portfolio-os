@@ -6985,45 +6985,34 @@ def render_simulator_page(
         "מסים ודמי-ניהול.",
     ))
 
-    # ── LocalStorage READ — restores inputs from browser on first visit ──
-    _SIM_LS_KEY = "pf_os_sim_v2"
-    if "ls_sim" in st.query_params and not st.session_state.get("_sim_ls_loaded", False):
-        # Returned here after the JS redirect carrying localStorage data
-        try:
-            import base64 as _b64
-            _raw_enc = st.query_params["ls_sim"]
-            _padded = _raw_enc + "=" * (4 - len(_raw_enc) % 4)
-            _ls_prefs = json.loads(_b64.b64decode(_padded).decode("utf-8"))
-            for _k, _v in _ls_prefs.items():
-                if _k not in st.session_state:
-                    st.session_state[_k] = _v
-            del st.query_params["ls_sim"]
-        except Exception:
-            pass
-        st.session_state["_sim_ls_loaded"] = True
-    elif "ls_sim" not in st.query_params and not st.session_state.get("_sim_ls_loaded", False):
-        # First visit in this session — inject JS to read localStorage and redirect back
-        st.session_state["_sim_ls_loaded"] = True
-        components.html(f"""<script>
-(function(){{
-    try {{
-        var v = window.parent.localStorage.getItem('{_SIM_LS_KEY}');
-        if (v && v.length > 2) {{
-            var enc = btoa(unescape(encodeURIComponent(v)));
-            var url = new URL(window.parent.location.href);
-            if (!url.searchParams.has('ls_sim')) {{
-                url.searchParams.set('ls_sim', enc);
-                window.parent.location.replace(url.toString());
-            }}
-        }}
-    }} catch(e) {{}}
-}})();
-</script>""", height=0, width=0)
+    # ── Browser LocalStorage (device-local, mobile-compatible) ──────────
+    # Uses streamlit-local-storage which sends data via Streamlit's own
+    # bidirectional component messaging — no window.parent access needed,
+    # works on iOS Safari and Android Chrome.
+    _sim_ls: object = None
+    try:
+        from streamlit_local_storage import LocalStorage as _LSClass
+        _sim_ls = _LSClass(key="_sim_prefs_ls")
+    except Exception:
+        _sim_ls = None
 
     # ── Hydrate persisted inputs (global once + per-mode re-hydration) ──
     # Global once: load ALL keys on the very first visit so both modes
-    # start populated.
+    # start populated from browser localStorage OR disk (in that priority).
     if not st.session_state.get("_sim_prefs_hydrated", False):
+        # 1. Browser localStorage — device-local, survives refresh on any device
+        if _sim_ls is not None:
+            try:
+                _ls_raw = _sim_ls.getItem("sim_prefs")
+                if _ls_raw:
+                    _ls_dict = json.loads(_ls_raw) if isinstance(_ls_raw, str) else _ls_raw
+                    if isinstance(_ls_dict, dict):
+                        for _k, _v in _ls_dict.items():
+                            if _k not in st.session_state:
+                                st.session_state[_k] = _v
+            except Exception:
+                pass
+        # 2. Disk fallback (sim_user_prefs.json) — server-side, shared between sessions
         try:
             _prefs = load_sim_prefs()
             for _k, _v in _prefs.items():
@@ -7331,22 +7320,17 @@ def render_simulator_page(
         pass
     # Also persist to browser localStorage — use the fully-merged disk
     # content so mobile/desktop each store the complete state.
-    try:
-        _ls_merged: Dict[str, object] = {}
-        if SIM_PREFS_FILE.exists():
-            try:
-                _ls_merged = json.loads(SIM_PREFS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        _ls_merged.update(_sim_prefs_snapshot)  # overlay with current session
-        _ls_json_str = json.dumps(_ls_merged, ensure_ascii=False, default=str)
-        components.html(f"""<script>
-try {{
-  window.parent.localStorage.setItem('pf_os_sim_v2', {json.dumps(_ls_json_str)});
-}} catch(e) {{}}
-</script>""", height=0, width=0)
-    except Exception:
-        pass
+    # Also save to browser localStorage via streamlit-local-storage
+    # (device-local; uses Streamlit's bidirectional component messaging
+    # → works on iOS Safari / Android Chrome without iframe restrictions)
+    if _sim_ls is not None:
+        try:
+            _ls_json_str = json.dumps(_sim_prefs_snapshot, ensure_ascii=False, default=str)
+            # Use a content-hash suffix so Streamlit re-renders when value changes
+            _ls_save_key = f"_sim_ls_save_{abs(hash(_ls_json_str)) % 1_000_000}"
+            _sim_ls.setItem("sim_prefs", _ls_json_str, key=_ls_save_key)
+        except Exception:
+            pass
 
     # ── KPI row — NET totals (after tax + fees) ────────────────────────
     st.markdown(f"### 💰 {tr('Net results (after tax + fees)', 'תוצאות נטו (אחרי מס ודמי-ניהול)')}")
