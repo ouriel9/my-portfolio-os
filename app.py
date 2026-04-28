@@ -1626,8 +1626,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             left: 50% !important;
             right: auto !important;
             transform: translateX(-50%) !important;
-            width: clamp(220px, 64vw, 340px) !important;
-            max-width: calc(100vw - 8.8rem) !important;
+            width: clamp(260px, 76vw, 420px) !important;
+            max-width: calc(100vw - 5rem) !important;
             z-index: 100001 !important;
             margin: 0 !important;
         }}
@@ -1651,11 +1651,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             width: 100% !important;
             margin: 0 !important;
             padding: 0 !important;
-            gap: 2px !important;
-        }}
-        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
-        [data-baseweb="radio"] {{
-            flex: 1 !important;
+            gap: 1px !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
@@ -8356,7 +8352,7 @@ def main() -> None:
             tr("📊 Overview", "📊 סקירה"): "dashboard",
             tr("💼 Trades", "💼 עסקאות"): "manage",
             tr("🛡 Risk", "🛡 סיכון"): "risk",
-            tr("🧮 Sim", "🧮 סים"): "simulator",
+            tr("🧮 Sim", "🧮 סימולטור"): "simulator",
         }
         mobile_options = list(mobile_label_to_id.keys())
 
