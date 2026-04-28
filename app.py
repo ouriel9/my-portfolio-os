@@ -1626,8 +1626,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             left: 50% !important;
             right: auto !important;
             transform: translateX(-50%) !important;
-            width: clamp(260px, 76vw, 420px) !important;
-            max-width: calc(100vw - 5rem) !important;
+            width: clamp(260px, 72vw, 400px) !important;
+            max-width: calc(100vw - 6rem) !important;
             z-index: 100001 !important;
             margin: 0 !important;
         }}
@@ -1658,7 +1658,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
-            padding: 5px 1px !important;
+            padding: 6px 2px !important;
             margin: 0 !important;
             border: none !important;
             border-radius: 9px !important;
@@ -1678,7 +1678,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] p {{
             white-space: nowrap !important;
-            font-size: 10.5px !important;
+            font-size: 11.5px !important;
             font-weight: 500 !important;
             color: {nav_inactive} !important;
             line-height: 1.2 !important;
