@@ -6633,6 +6633,41 @@ def render_simulator_page(
         "מסים ודמי-ניהול.",
     ))
 
+    # ── LocalStorage READ — restores inputs from browser on first visit ──
+    _SIM_LS_KEY = "pf_os_sim_v2"
+    if "ls_sim" in st.query_params and not st.session_state.get("_sim_ls_loaded", False):
+        # Returned here after the JS redirect carrying localStorage data
+        try:
+            import base64 as _b64
+            _raw_enc = st.query_params["ls_sim"]
+            _padded = _raw_enc + "=" * (4 - len(_raw_enc) % 4)
+            _ls_prefs = json.loads(_b64.b64decode(_padded).decode("utf-8"))
+            for _k, _v in _ls_prefs.items():
+                if _k not in st.session_state:
+                    st.session_state[_k] = _v
+            del st.query_params["ls_sim"]
+        except Exception:
+            pass
+        st.session_state["_sim_ls_loaded"] = True
+    elif "ls_sim" not in st.query_params and not st.session_state.get("_sim_ls_loaded", False):
+        # First visit in this session — inject JS to read localStorage and redirect back
+        st.session_state["_sim_ls_loaded"] = True
+        components.html(f"""<script>
+(function(){{
+    try {{
+        var v = window.parent.localStorage.getItem('{_SIM_LS_KEY}');
+        if (v && v.length > 2) {{
+            var enc = btoa(unescape(encodeURIComponent(v)));
+            var url = new URL(window.parent.location.href);
+            if (!url.searchParams.has('ls_sim')) {{
+                url.searchParams.set('ls_sim', enc);
+                window.parent.location.replace(url.toString());
+            }}
+        }}
+    }} catch(e) {{}}
+}})();
+</script>""", height=0, width=0)
+
     # ── Hydrate persisted inputs from disk on first visit ─────────────
     if not st.session_state.get("_sim_prefs_hydrated", False):
         try:
@@ -6909,8 +6944,20 @@ def render_simulator_page(
     )
 
     # Persist on every rerun (atomic save of every namespaced key)
+    _sim_prefs_snapshot: Dict[str, object] = {}
     try:
-        save_sim_prefs({k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")})
+        _sim_prefs_snapshot = {k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")}
+        save_sim_prefs(_sim_prefs_snapshot)
+    except Exception:
+        pass
+    # Also persist to browser localStorage (survives refresh on any device)
+    try:
+        _ls_json_str = json.dumps(_sim_prefs_snapshot, ensure_ascii=False, default=str)
+        components.html(f"""<script>
+try {{
+  window.parent.localStorage.setItem('pf_os_sim_v2', {json.dumps(_ls_json_str)});
+}} catch(e) {{}}
+</script>""", height=0, width=0)
     except Exception:
         pass
 
@@ -6938,12 +6985,17 @@ def render_simulator_page(
         ),
     )
     k3.metric(
-        tr("Monthly pension (NET)", "פנסיה חודשית (NET)"),
+        tr("Monthly pension (NET)", "קצבה חודשית (NET)"),
         f"₪{monthly_pension:,.0f}",
-        delta=f"₪{annual_pension:,.0f} / {tr('year', 'שנה')}",
+        delta=(
+            f"₪{sim_safe_withdrawal_monthly(total_real, swr_pct):,.0f} "
+            + tr("real/month (inflation-adj.)", "ריאלי/חודש (מותאם אינפלציה)")
+        ) if inflation_pct > 0 else f"₪{monthly_pension * 12:,.0f} / {tr('year', 'שנה')}",
         help=tr(
-            "Sustainable monthly withdrawal at your chosen SWR%, computed on the NET total.",
-            "משיכה חודשית ברת-קיימא לפי שיעור SWR שנבחר — מחושב על השווי הנקי.",
+            "Nominal monthly withdrawal at your chosen SWR% (on NET total). "
+            "The green delta shows the real purchasing-power equivalent today.",
+            "משיכה חודשית נומינלית לפי שיעור SWR שנבחר (על השווי הנקי). "
+            "הדלתא הירוקה מציגה את הערך הריאלי – כוח הקנייה בערכי היום.",
         ),
     )
     k4.metric(
@@ -8541,16 +8593,17 @@ def main() -> None:
                         localized_df = localize_dataframe_columns(report_df, language)
                         fmt_map: Dict[str, str] = {}
                         for col in localized_df.columns:
-                            if "Yield" in str(col) or "תשואה" in str(col):
+                            col_s = str(col)
+                            if any(t in col_s for t in ["Yield", "Return", "תשואה"]):
                                 fmt_map[col] = "{:.2%}"
-                            elif "Qty" in str(col) or "כמות" in str(col):
+                            elif "Qty" in col_s or "כמות" in col_s:
                                 fmt_map[col] = "{:.8f}"
-                            elif any(token in str(col) for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
+                            elif any(token in col_s for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
                                 fmt_map[col] = "{:,.0f}"
                         report_styled = localized_df.style
                         if fmt_map:
                             report_styled = report_styled.format(fmt_map)
-                        signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "pnl", "תשואה", "רווח"])]
+                        signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "תשואה", "רווח"])]
                         if signed_cols:
                             report_styled = _apply_signed_color(report_styled, signed_cols)
                         _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
