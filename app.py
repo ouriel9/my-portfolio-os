@@ -1623,11 +1623,11 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stElementContainer"]:has([data-testid="stRadio"] [data-baseweb="radio"]:nth-child(4):last-child) {{
             position: fixed !important;
             top: calc(0.55rem + env(safe-area-inset-top)) !important;
-            left: 50% !important;
-            right: auto !important;
-            transform: translateX(-50%) !important;
-            width: clamp(260px, 72vw, 400px) !important;
-            max-width: calc(100vw - 6rem) !important;
+            left: 3.2rem !important;
+            right: 3.2rem !important;
+            transform: none !important;
+            width: auto !important;
+            max-width: none !important;
             z-index: 100001 !important;
             margin: 0 !important;
         }}
