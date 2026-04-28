@@ -9380,7 +9380,7 @@ def main() -> None:
                 _render_report_section(_rep_title, _rep_key)
 
             # ── Live Market Rates — live fragment (updates every 20s) ──────────
-            st.markdown(f"### {tr('Live Market Rates', 'שערים חיים מהשוק')}")
+            st.markdown(f"### {tr('Exchange Rates', 'שערי מטבע')}")
             if live_updates and hasattr(st, "fragment"):
                 @st.fragment(run_every="20s")
                 def _reports_live_rates_fragment() -> None:
@@ -9388,28 +9388,23 @@ def main() -> None:
                     _mob_r = st.session_state.get("_tx_frag_mobile", False)
                     try:
                         _rates: Dict[str, float] = {}
-                        _tickers_watch = ["BTC-USD", "ETH-USD", "SOL-USD", "IBIT", "ETHA", "MSTR", "INTC", "VOO", "QQQ"]
-                        _lp = fetch_live_prices(tuple(_tickers_watch))
+                        # Only crypto/USD pairs — no stocks/ETFs
+                        _crypto_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD"]
+                        _lp = fetch_live_prices(tuple(_crypto_tickers))
                         _fx = _safe_quote("USDILS=X")
                         if _fx > 0:
-                            _rates[("USD/ILS" if _lang_r == LANG_EN else "דולר/שקל")] = _fx
-                        for _tk in _tickers_watch:
-                            _key = _tk.replace("-USD", "")
-                            _p = _lp.get(_tk, _lp.get(_key, 0.0))
+                            _rates[("USD/ILS" if _lang_r == LANG_EN else "דולר/שקל")] = round(_fx, 4)
+                        for _tk in _crypto_tickers:
+                            _label = _tk.replace("-USD", "") + "/USD"
+                            _p = _lp.get(_tk, 0.0)
                             if _p and _p > 0:
-                                _rates[_key] = round(_p, 4)
+                                _rates[_label] = round(_p, 2)
                         if _rates:
                             _rdf = pd.DataFrame([{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in _rates.items()])
-                            _rs = _rdf.style.format({tr("Rate", "שער"): "{:,.4f}"})
+                            _rs = _rdf.style.format({tr("Rate", "שער"): "{:,.2f}"})
                             _render_dataframe_adaptive(_rs, _mob_r, use_container_width=True, hide_index=True)
                         else:
-                            # Fallback: static rates from reports_payload
-                            _static_rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
-                            if _static_rates:
-                                _rdf2 = pd.DataFrame([{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in _static_rates.items()])
-                                _render_dataframe_adaptive(_rdf2.style.format({tr("Rate", "שער"): "{:,.4f}"}), _mob_r, use_container_width=True, hide_index=True)
-                            else:
-                                st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+                            st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
                     except Exception:
                         st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
                 _reports_live_rates_fragment()
