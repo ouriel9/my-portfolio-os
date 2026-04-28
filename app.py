@@ -1648,18 +1648,20 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [role="radiogroup"] {{
             display: flex !important;
             flex-direction: row !important;
+            flex-wrap: nowrap !important;
             width: 100% !important;
             margin: 0 !important;
             padding: 0 !important;
-            gap: 1px !important;
+            gap: 0px !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] {{
-            flex: 1 !important;
+            flex: 1 1 0% !important;
+            min-width: 0 !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
-            padding: 7px 1px !important;
+            padding: 7px 2px !important;
             margin: 0 !important;
             border: none !important;
             border-radius: 9px !important;
@@ -1679,7 +1681,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] p {{
             white-space: nowrap !important;
-            font-size: 11px !important;
+            font-size: 10.5px !important;
             font-weight: 500 !important;
             color: {nav_inactive} !important;
             line-height: 1.2 !important;
