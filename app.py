@@ -7312,10 +7312,7 @@ def render_simulator_page(
             ))
 
     # ── Pension fund (TAX-EXEMPT) ───────────────────────────────────────
-    with st.container(border=True):
-        st.markdown(
-            f"**🏦 {tr('Pension fund (קרן פנסיה) — tax-exempt', 'קרן פנסיה — פטורה ממס')}**"
-        )
+    with st.expander(f"🏦 {tr('Pension fund (קרן פנסיה) — tax-exempt', 'קרן פנסיה — פטורה ממס')}", expanded=False):
         col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
         with col_l:
             k = _need("pension_initial")
@@ -7354,10 +7351,7 @@ def render_simulator_page(
             ))
 
     # ── Education fund (TAX-EXEMPT after 6 yr vest) ─────────────────────
-    with st.container(border=True):
-        st.markdown(
-            f"**🎓 {tr('Education fund (קרן השתלמות) — tax-exempt', 'קרן השתלמות — פטורה ממס')}**"
-        )
+    with st.expander(f"🎓 {tr('Education fund (קרן השתלמות) — tax-exempt', 'קרן השתלמות — פטורה ממס')}", expanded=False):
         col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
         with col_l:
             k = _need("education_initial")
@@ -7514,7 +7508,7 @@ def render_simulator_page(
     )
 
     # ── Per-bucket breakdown ───────────────────────────────────────────
-    with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=True):
+    with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=False):
         b1, b2, b3 = st.columns(3)
         b1.metric(
             tr("Regular (gross)", "רגיל (לפני מס)"),
@@ -8010,6 +8004,24 @@ def main() -> None:
         index=list(theme_label_to_value.keys()).index(default_theme_label),
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
+
+    # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
+    # share the same preference on next page load — writes to the shared server-side JSON.
+    if language != language_default or theme_mode != theme_default:
+        try:
+            save_local_settings(
+                settings.get("web_app_url", ""),
+                settings.get("api_token", ""),
+                settings.get("spreadsheet_ref", ""),
+                settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME),
+                settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)),
+                language,
+                theme_mode,
+                bool(settings.get("demo_mode", False)),
+                settings.get("followed_symbols", ""),
+            )
+        except Exception:
+            pass
     _default_chart_lock = _is_mobile_client()
     chart_lock = st.sidebar.checkbox(
         tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
@@ -8141,6 +8153,11 @@ def main() -> None:
         page_options = [page_id_to_label[p] for p in page_order]
         active_page_index = page_order.index(active_page_id) if active_page_id in page_order else 0
         if option_menu is not None:
+            # Reset stored option_menu value when language changes (labels changed).
+            # Without this, option_menu falls back to index 0 instead of the correct page.
+            _nav_key = "main_nav_option_menu"
+            if st.session_state.get(_nav_key) not in page_options:
+                st.session_state[_nav_key] = page_options[active_page_index]
             nav_container_bg = "#1E1E1E" if is_dark else "#f8f9fa"
             nav_container_border = "0px solid transparent"
             nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
@@ -8771,11 +8788,7 @@ def main() -> None:
                         f"{len(open_trades)} {tr('open', 'פתוחות')}",
                     )
                 style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
-                _ts = datetime.now().strftime("%H:%M:%S")
-                st.caption(
-                    f"🟢 {tr('Live prices updated', 'שערים חיים עודכנו')}: **{_ts}** · "
-                    f"{tr('auto-refresh every 20s', 'רענון אוטומטי כל 20 שניות')}"
-                )
+                pass  # live prices via fragment (no timestamp caption)
 
             _kpi_live_fragment()
 
@@ -9336,47 +9349,80 @@ def main() -> None:
                 tr("Crypto Concentration", "ריכוזיות קריפטו"): "concentration_table",
                 tr("Winner / Loser", "המנצח / המפסיד"): "winner_loser_table",
                 tr("Net Investment by Platform", "השקעה נטו לפי פלטפורמה"): "net_investment_table",
-                tr("Live Market Rates", "שערים חיים מהשוק"): "live_rates",
             }
 
             def _render_report_section(title: str, key: str) -> None:
                 st.markdown(f"### {title}")
-                if key == "live_rates":
-                    rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
-                    if not rates:
-                        st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
-                    else:
-                        rates_df = pd.DataFrame(
-                            [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
-                        )
-                        rates_styled = rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"})
-                        _render_dataframe_adaptive(rates_styled, is_mobile, use_container_width=True, hide_index=True)
+                report_df = reports_payload.get(key, pd.DataFrame()) if isinstance(reports_payload, dict) else pd.DataFrame()
+                if not isinstance(report_df, pd.DataFrame) or report_df.empty:
+                    st.info(tr("No data available for this report.", "אין נתונים זמינים לדוח זה."))
                 else:
-                    report_df = reports_payload.get(key, pd.DataFrame()) if isinstance(reports_payload, dict) else pd.DataFrame()
-                    if not isinstance(report_df, pd.DataFrame) or report_df.empty:
-                        st.info(tr("No data available for this report.", "אין נתונים זמינים לדוח זה."))
-                    else:
-                        localized_df = localize_dataframe_columns(report_df, language)
-                        fmt_map: Dict[str, str] = {}
-                        for col in localized_df.columns:
-                            col_s = str(col)
-                            if any(t in col_s for t in ["Yield", "Return", "תשואה"]):
-                                fmt_map[col] = "{:.2%}"
-                            elif "Qty" in col_s or "כמות" in col_s:
-                                fmt_map[col] = "{:.8f}"
-                            elif any(token in col_s for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
-                                fmt_map[col] = "{:,.0f}"
-                        report_styled = localized_df.style
-                        if fmt_map:
-                            report_styled = report_styled.format(fmt_map)
-                        signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "תשואה", "רווח"])]
-                        if signed_cols:
-                            report_styled = _apply_signed_color(report_styled, signed_cols)
-                        _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
+                    localized_df = localize_dataframe_columns(report_df, language)
+                    fmt_map: Dict[str, str] = {}
+                    for col in localized_df.columns:
+                        col_s = str(col)
+                        if any(t in col_s for t in ["Yield", "Return", "תשואה"]):
+                            fmt_map[col] = "{:.2%}"
+                        elif "Qty" in col_s or "כמות" in col_s:
+                            fmt_map[col] = "{:.8f}"
+                        elif any(token in col_s for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
+                            fmt_map[col] = "{:,.0f}"
+                    report_styled = localized_df.style
+                    if fmt_map:
+                        report_styled = report_styled.format(fmt_map)
+                    signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "תשואה", "רווח"])]
+                    if signed_cols:
+                        report_styled = _apply_signed_color(report_styled, signed_cols)
+                    _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
                 _render_report_section(_rep_title, _rep_key)
+
+            # ── Live Market Rates — live fragment (updates every 20s) ──────────
+            st.markdown(f"### {tr('Live Market Rates', 'שערים חיים מהשוק')}")
+            if live_updates and hasattr(st, "fragment"):
+                @st.fragment(run_every="20s")
+                def _reports_live_rates_fragment() -> None:
+                    _lang_r = st.session_state.get("_tx_frag_lang", LANG_HE)
+                    _mob_r = st.session_state.get("_tx_frag_mobile", False)
+                    try:
+                        _rates: Dict[str, float] = {}
+                        _tickers_watch = ["BTC-USD", "ETH-USD", "SOL-USD", "IBIT", "ETHA", "MSTR", "INTC", "VOO", "QQQ"]
+                        _lp = fetch_live_prices(tuple(_tickers_watch))
+                        _fx = _safe_quote("USDILS=X")
+                        if _fx > 0:
+                            _rates[("USD/ILS" if _lang_r == LANG_EN else "דולר/שקל")] = _fx
+                        for _tk in _tickers_watch:
+                            _key = _tk.replace("-USD", "")
+                            _p = _lp.get(_tk, _lp.get(_key, 0.0))
+                            if _p and _p > 0:
+                                _rates[_key] = round(_p, 4)
+                        if _rates:
+                            _rdf = pd.DataFrame([{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in _rates.items()])
+                            _rs = _rdf.style.format({tr("Rate", "שער"): "{:,.4f}"})
+                            _render_dataframe_adaptive(_rs, _mob_r, use_container_width=True, hide_index=True)
+                        else:
+                            # Fallback: static rates from reports_payload
+                            _static_rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
+                            if _static_rates:
+                                _rdf2 = pd.DataFrame([{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in _static_rates.items()])
+                                _render_dataframe_adaptive(_rdf2.style.format({tr("Rate", "שער"): "{:,.4f}"}), _mob_r, use_container_width=True, hide_index=True)
+                            else:
+                                st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+                    except Exception:
+                        st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+                _reports_live_rates_fragment()
+            else:
+                rates = reports_payload.get("live_rates", {}) if isinstance(reports_payload, dict) else {}
+                if not rates:
+                    st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
+                else:
+                    rates_df = pd.DataFrame(
+                        [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
+                    )
+                    _render_dataframe_adaptive(rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}), is_mobile, use_container_width=True, hide_index=True)
+            st.divider()
 
         with _ov_equity_slot:
             if can_show_build_up:
@@ -9589,278 +9635,228 @@ def main() -> None:
                     tx_view["__sort_date__"] = _parse_dates_flexible(tx_view["Purchase_Date"])
                     tx_view = tx_view.sort_values("__sort_date__", ascending=False, na_position="last").drop(columns=["__sort_date__"])
 
-                # Show current market price/returns for both open and closed rows.
-                if "Ticker" in tx_view.columns:
-                    fx_now = _safe_quote("USDILS=X")
-                    if fx_now <= 0:
-                        fx_now = 3.6
-                    tickers_for_price = tuple(sorted({_clean(v).upper() for v in tx_view["Ticker"].tolist() if _clean(v)}))
-                    live_price_map = fetch_prices(tickers_for_price) if tickers_for_price else {}
+                # Store tx_view snapshot for live-price fragment (auto-refreshes every 20s)
+                st.session_state["_tx_frag_base"] = tx_view.copy()
+                st.session_state["_tx_frag_is_open"] = is_open_only
+            # ── Transactions table: live-price fragment refreshes every 20s ─────────
+            # Mutable display state must live in session_state so the fragment
+            # auto-reruns are self-contained (independent of the full-page run).
+            st.session_state["_tx_frag_lang"] = language
+            st.session_state["_tx_frag_mobile"] = is_mobile
 
-                    def _market_price_origin(row: pd.Series) -> float:
-                        t = _clean(row.get("Ticker", "")).upper()
-                        if not t:
-                            return np.nan
-                        p_usd = float(_num(live_price_map.get(t, 0.0)))
-                        if p_usd <= 0:
-                            return np.nan
-                        cur = _normalize_currency_code(row.get("Origin_Currency", ""))
-                        return p_usd if cur == "USD" else (p_usd * fx_now if cur == "ILS" else p_usd)
+            def _render_tx_table(
+                _tx: pd.DataFrame,
+                _lang: str,
+                _mob: bool,
+                _open: bool,
+            ) -> None:
+                """Shared rendering helper used by both the fragment and the static fallback."""
+                def _nrm_hdr(col: str) -> str:
+                    c = _clean(col)
+                    return {"\u05e2\u05dc\u05d5\u05ea \u05e9\u05e7\u05dc\u05d9\u05ea": "\u05e2\u05dc\u05d5\u05ea ILS"}.get(c, c)
 
-                    def _sell_price_origin(row: pd.Series) -> float:
-                        if not _is_closed_status(row.get("Status", "")):
-                            return np.nan
-                        qty = float(_num(row.get("Quantity", 0.0)))
-                        val_ils = float(_num(row.get("Current_Value_ILS", 0.0)))
-                        if qty > 1e-9 and val_ils > 0:
-                            cur = _normalize_currency_code(row.get("Origin_Currency", ""))
-                            unit_ils = val_ils / qty
-                            return unit_ils / fx_now if cur == "USD" else unit_ils
-                        return np.nan
+                def _is_hid(cn: object) -> bool:
+                    low = re.sub(r"\s+", " ", re.sub(r"\s*\(\d+\)$", "", _clean(cn)).lower().replace("_", " ").replace("-", " ")).strip()
+                    return low in {"origin buy price", "buy price", "\u05e9\u05e2\u05e8 \u05e7\u05e0\u05d9\u05d9\u05d4", "\u05e9\u05e2\u05e8 \u05e7\u05e0\u05d9\u05d4", "sell status", "sale status", "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05de\u05db\u05d9\u05e8\u05d4"}
 
-                    tx_view["Market_Price_Origin"] = tx_view.apply(_market_price_origin, axis=1)
-
-                    sell_from_market = tx_view.apply(_sell_price_origin, axis=1)
-                    if "Sell_Price_Origin" in tx_view.columns:
-                        existing_sell = tx_view["Sell_Price_Origin"].map(_num)
-                        tx_view["Sell_Price_Origin"] = np.where(existing_sell > 0, existing_sell, sell_from_market)
-                    else:
-                        tx_view["Sell_Price_Origin"] = sell_from_market
-
-                    if "Origin_Buy_Price" in tx_view.columns:
-                        buy_price = tx_view["Origin_Buy_Price"].map(_num)
-                        tx_view["Yield_Current"] = np.where(buy_price > 0, (tx_view["Market_Price_Origin"] - buy_price) / buy_price, np.nan)
-
-                        sale_yield_calc = np.where(buy_price > 0, (tx_view["Sell_Price_Origin"] - buy_price) / buy_price, np.nan)
-                        if "Yield_At_Sale" in tx_view.columns:
-                            existing_yield_sale = tx_view["Yield_At_Sale"]
-                            has_existing_yield = ~existing_yield_sale.map(lambda v: pd.isna(v) or _clean(v) == "")
-                            tx_view["Yield_At_Sale"] = np.where(has_existing_yield, existing_yield_sale, sale_yield_calc)
-                        else:
-                            tx_view["Yield_At_Sale"] = sale_yield_calc
-
-                    # Backfill current-yield columns if sheet formulas are missing/blank.
-                    cost_ils_series = tx_view["Cost_ILS"].map(_num) if "Cost_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
-                    value_ils_series = tx_view["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
-                    yield_ils_calc = np.where(cost_ils_series > 0, (value_ils_series - cost_ils_series) / cost_ils_series, np.nan)
-
-                    cost_origin_series = tx_view["Cost_Origin"].map(_num) if "Cost_Origin" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
-                    value_origin_series = np.where(
-                        tx_view["Origin_Currency"].map(_normalize_currency_code) == "USD",
-                        np.where(fx_now > 0, value_ils_series / fx_now, np.nan),
-                        value_ils_series,
-                    )
-                    yield_origin_calc = np.where(cost_origin_series > 0, (value_origin_series - cost_origin_series) / cost_origin_series, np.nan)
-
-                    if "Yield_ILS" in tx_view.columns:
-                        existing_yield_ils = tx_view["Yield_ILS"]
-                        has_existing_ils = ~existing_yield_ils.map(lambda v: pd.isna(v) or _clean(v) == "")
-                        tx_view["Yield_ILS"] = np.where(has_existing_ils, existing_yield_ils, yield_ils_calc)
-                    else:
-                        tx_view["Yield_ILS"] = yield_ils_calc
-
-                    if "Yield_Origin" in tx_view.columns:
-                        existing_yield_origin = tx_view["Yield_Origin"]
-                        has_existing_origin = ~existing_yield_origin.map(lambda v: pd.isna(v) or _clean(v) == "")
-                        tx_view["Yield_Origin"] = np.where(has_existing_origin, existing_yield_origin, yield_origin_calc)
-                    else:
-                        tx_view["Yield_Origin"] = yield_origin_calc
-
-
-                    # Hide dedicated helper column (user requested).
-                    tx_view = tx_view.drop(columns=["Yield_Current"], errors="ignore")
-                yield_ils_cols = [
-                    c for c in tx_view.columns
-                    if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())
-                    and ("שקל" in str(c) or "ils" in str(c).lower())
-                ]
-                yield_origin_cols = [
-                    c for c in tx_view.columns
-                    if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())
-                    and ("מקור" in str(c) or "origin" in str(c).lower())
-                ]
-                yield_cols = []
-                for col in yield_ils_cols + yield_origin_cols:
-                    if col not in yield_cols:
-                        yield_cols.append(col)
-                if not yield_cols:
-                    yield_cols = [c for c in tx_view.columns if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())]
-                if yield_cols:
-                    non_yield_cols = [c for c in tx_view.columns if c not in yield_cols]
-                    tx_view = tx_view[non_yield_cols + yield_cols]
-
-            tx_view = localize_snapshot_view(tx_view, language)
-
-            def _normalize_header_text(col: str) -> str:
-                c = _clean(col)
-                fixed = {
-                    "עלות שקלית": "עלותILS",
-                }
-                if c in fixed:
-                    return fixed[c]
-                return c
-
-            tx_view = tx_view.rename(columns=lambda c: _normalize_header_text(str(c)))
-
-            def _is_hidden_tx_column(col_name: object) -> bool:
-                c = _clean(col_name)
-                c_base = re.sub(r"\s*\(\d+\)$", "", c)
-                low = c_base.lower().replace("_", " ").replace("-", " ")
-                low = re.sub(r"\s+", " ", low).strip()
-                buy_price_dup_aliases = {
-                    "origin buy price", "buy price", "שער קנייה", "שער קניה",
-                }
-                sell_status_aliases = {
-                    "sell status", "sale status", "סטטוס מכירה",
-                }
-                return (low in buy_price_dup_aliases) or (low in sell_status_aliases)
-
-            tx_view = tx_view.drop(columns=[c for c in tx_view.columns if _is_hidden_tx_column(c)], errors="ignore")
-
-            if is_open_only and not tx_view.empty:
-                # Final guard: remove sale-only fields that may be reintroduced by computed/localized columns.
-                def _open_only_hide_col(col_name: object) -> bool:
-                    c = _clean(col_name)
-                    low = c.lower()
-                    if c in {"Status", "Action", "Sell_Date", "Sell_Price_Origin", "Yield_At_Sale", "סטטוס", "פעולה", "תאריך מכירה", "שער מכירה", "מחיר מכירה", "תשואה במכירה"}:
+                def _oo_hid(cn: object) -> bool:
+                    c = _clean(cn)
+                    if c in {"Status", "Action", "Sell_Date", "Sell_Price_Origin", "Yield_At_Sale",
+                             "\u05e1\u05d8\u05d8\u05d5\u05e1", "\u05e4\u05e2\u05d5\u05dc\u05d4", "\u05ea\u05d0\u05e8\u05d9\u05da \u05de\u05db\u05d9\u05e8\u05d4", "\u05e9\u05e2\u05e8 \u05de\u05db\u05d9\u05e8\u05d4", "\u05de\u05d7\u05d9\u05e8 \u05de\u05db\u05d9\u05e8\u05d4", "\u05ea\u05e9\u05d5\u05d0\u05d4 \u05d1\u05de\u05db\u05d9\u05e8\u05d4"}:
                         return True
-                    return low in {"sell price", "sale price", "sell date", "return at sale"}
+                    return c.lower() in {"sell price", "sale price", "sell date", "return at sale"}
 
-                tx_view = tx_view.drop(columns=[c for c in tx_view.columns if _open_only_hide_col(c)], errors="ignore")
+                def _is_blank(v: object) -> bool:
+                    if pd.isna(v): return True
+                    return _clean(v).lower() in {"", "nan", "nat", "none"}
 
-            tx_view, _ = _with_calendar_purchase_date(tx_view, language)
-            if tx_view.empty:
-                st.info(tr("No transactions to display", "אין עסקאות להצגה"))
-            else:
-                display_view = tx_view.copy()
-                display_view = display_view.reset_index(drop=True)
-                if not display_view.columns.is_unique:
-                    seen_cols: Dict[str, int] = {}
-                    unique_cols: List[str] = []
-                    for col in display_view.columns:
-                        base = str(col)
-                        seen_cols[base] = seen_cols.get(base, 0) + 1
-                        unique_cols.append(base if seen_cols[base] == 1 else f"{base} ({seen_cols[base]})")
-                    display_view.columns = unique_cols
+                def _nck(cn: object) -> str:
+                    return re.sub(r"\s+", " ", re.sub(r"\s*\(\d+\)$", "", _clean(cn)).lower().replace("_", " ").replace("-", " ")).strip()
 
-                def _is_blank_like(v: object) -> bool:
-                    if pd.isna(v):
-                        return True
-                    s = _clean(v).lower()
-                    return s in {"", "nan", "nat", "none"}
+                def _coalesce_tx(df: pd.DataFrame, aliases: List[str]) -> pd.DataFrame:
+                    akeys = {_nck(a) for a in aliases}
+                    cands = [c for c in df.columns if _nck(c) in akeys]
+                    if len(cands) <= 1: return df
+                    tgt = next((c for a in aliases for c in cands if _nck(c) == _nck(a)), cands[0])
+                    merged = df[cands].copy()
+                    for c in cands:
+                        merged[c] = merged[c].map(lambda v: np.nan if _is_blank(v) else v)
+                    df[tgt] = merged.bfill(axis=1).iloc[:, 0]
+                    extras = [c for c in cands if c != tgt]
+                    if extras: df = df.drop(columns=extras, errors="ignore")
+                    return df
 
-                def _base_col_name(col_name: object) -> str:
-                    c = _clean(col_name)
-                    c = re.sub(r"\s*\(\d+\)$", "", c)
-                    return re.sub(r"\s+", " ", c).strip()
+                _tx = localize_snapshot_view(_tx, _lang)
+                _tx = _tx.rename(columns=lambda c: _nrm_hdr(str(c)))
+                _tx = _tx.drop(columns=[c for c in _tx.columns if _is_hid(c)], errors="ignore")
+                if _open and not _tx.empty:
+                    _tx = _tx.drop(columns=[c for c in _tx.columns if _oo_hid(c)], errors="ignore")
+                _tx, _ = _with_calendar_purchase_date(_tx, _lang)
 
-                def _normalized_col_key(col_name: object) -> str:
-                    return _base_col_name(col_name).lower().replace("_", " ").replace("-", " ")
+                if _tx.empty:
+                    st.info(tr("No transactions to display", "\u05d0\u05d9\u05df \u05e2\u05e1\u05e7\u05d0\u05d5\u05ea \u05dc\u05d4\u05e6\u05d2\u05d4"))
+                    return
 
-                def _coalesce_alias_columns(df_in: pd.DataFrame, aliases: List[str]) -> pd.DataFrame:
-                    alias_keys = {_normalized_col_key(a) for a in aliases}
-                    candidates = [c for c in df_in.columns if _normalized_col_key(c) in alias_keys]
-                    if len(candidates) <= 1:
-                        return df_in
+                _dv = _tx.copy().reset_index(drop=True)
+                if not _dv.columns.is_unique:
+                    _seen2: Dict[str, int] = {}; _uniq2: List[str] = []
+                    for c in _dv.columns:
+                        b = str(c); _seen2[b] = _seen2.get(b, 0) + 1
+                        _uniq2.append(b if _seen2[b] == 1 else f"{b} ({_seen2[b]})")
+                    _dv.columns = _uniq2
 
-                    target_col: Optional[str] = None
-                    for alias in aliases:
-                        alias_key = _normalized_col_key(alias)
-                        for c in candidates:
-                            if _normalized_col_key(c) == alias_key:
-                                target_col = c
-                                break
-                        if target_col is not None:
-                            break
-                    if target_col is None:
-                        target_col = candidates[0]
+                for _ag in [
+                    ["Sell_Price_Origin", "Sell Price", "Sale Price", "\u05de\u05d7\u05d9\u05e8 \u05de\u05db\u05d9\u05e8\u05d4", "\u05e9\u05e2\u05e8 \u05de\u05db\u05d9\u05e8\u05d4"],
+                    ["Yield_ILS", "Return ILS", "\u05ea\u05e9\u05d5\u05d0\u05d4 ILS", "\u05ea\u05e9\u05d5\u05d0\u05d4 \u05e9\u05e7\u05dc\u05d9\u05ea", "\u05ea\u05e9\u05d5\u05d0\u05d4 \u05e0\u05d8\u05d5 (\u20aa)", "Net Return (ILS)"],
+                    ["Yield_Origin", "Return (Origin)", "\u05ea\u05e9\u05d5\u05d0\u05d4 \u05d1\u05e9\u05e2\u05e8 \u05de\u05e7\u05d5\u05e8", "\u05ea\u05e9\u05d5\u05d0\u05d4 \u05de\u05e7\u05d5\u05e8", "\u05ea\u05e9\u05d5\u05d0\u05d4 \u05e0\u05d8\u05d5 (\u05de\u05e7\u05d5\u05e8)", "Net Return (Origin)"],
+                    ["Current_Value_ILS", "Value ILS", "Current Value (ILS)", "\u05e9\u05d5\u05d5\u05d9 ILS", "\u05e9\u05d5\u05d5\u05d9 \u05e9\u05e7\u05dc\u05d9", "\u05e9\u05d5\u05d5\u05d9 \u05e2\u05d3\u05db\u05e0\u05d9 (\u20aa)"],
+                    ["Value USD", "Current Value (USD)", "\u05e9\u05d5\u05d5\u05d9 USD", "\u05e9\u05d5\u05d5\u05d9 \u05d1\u05d3\u05d5\u05dc\u05e8", "\u05e9\u05d5\u05d5\u05d9 \u05e2\u05d3\u05db\u05e0\u05d9 (USD)"],
+                ]:
+                    _dv = _coalesce_tx(_dv, _ag)
 
-                    merged = df_in[candidates].copy()
-                    for c in candidates:
-                        merged[c] = merged[c].map(lambda v: np.nan if _is_blank_like(v) else v)
-                    df_in[target_col] = merged.bfill(axis=1).iloc[:, 0]
+                _drop_c2: List[str] = []
+                for col in _dv.columns:
+                    ct2 = _clean(col); cl2 = ct2.lower()
+                    if cl2.startswith("unnamed:"): _drop_c2.append(col); continue
+                    if ("usd" in cl2 and "ils" in cl2) or ("\u05e9\u05e2\u05e8" in ct2 and "\u05d3\u05d5\u05dc\u05e8" in ct2 and "\u05e9\u05e7\u05dc" in ct2): _drop_c2.append(col); continue
+                    if _dv[col].map(_is_blank).all(): _drop_c2.append(col)
+                if _drop_c2: _dv = _dv.drop(columns=_drop_c2, errors="ignore")
 
-                    extras = [c for c in candidates if c != target_col]
-                    if extras:
-                        df_in = df_in.drop(columns=extras, errors="ignore")
-                    return df_in
-
-                alias_groups = [
-                    ["Sell_Price_Origin", "Sell Price", "Sale Price", "מחיר מכירה", "שער מכירה"],
-                    ["Yield_ILS", "Return ILS", "תשואה ILS", "תשואה שקלית", "תשואה נטו (₪)", "Net Return (ILS)"],
-                    ["Yield_Origin", "Return (Origin)", "תשואה בשער מקור", "תשואה מקור", "תשואה נטו (מקור)", "Net Return (Origin)"],
-                    ["Current_Value_ILS", "Value ILS", "Current Value (ILS)", "שווי ILS", "שווי שקלי", "שווי עדכני (₪)"],
-                    ["Value USD", "Current Value (USD)", "שווי USD", "שווי בדולר", "שווי עדכני (USD)"],
-                ]
-                for aliases in alias_groups:
-                    display_view = _coalesce_alias_columns(display_view, aliases)
-
-                drop_cols: List[str] = []
-                keep_even_if_blank: set[str] = set()
-                for col in display_view.columns:
-                    col_text = _clean(col)
-                    col_lower = col_text.lower()
-                    if col_lower.startswith("unnamed:"):
-                        drop_cols.append(col)
-                        continue
-                    if (("usd" in col_lower and "ils" in col_lower) or ("שער" in col_text and "דולר" in col_text and "שקל" in col_text)):
-                        drop_cols.append(col)
-                        continue
-                    if col_text in keep_even_if_blank:
-                        continue
-                    if display_view[col].map(_is_blank_like).all():
-                        drop_cols.append(col)
-                if drop_cols:
-                    display_view = display_view.drop(columns=drop_cols, errors="ignore")
-
-                def _to_ratio_for_display(v: object) -> float:
+                def _to_ratio2(v: object) -> float:
                     s = _clean(v)
-                    if not s:
-                        return np.nan
+                    if not s: return np.nan
                     n = _num(v)
                     return n / 100.0 if "%" in s else n
 
-                yield_cols = [c for c in display_view.columns if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())]
-                for col in yield_cols:
-                    display_view[col] = display_view[col].map(_to_ratio_for_display)
-
-                def _safe_date_display(v: object) -> str:
-                    if pd.isna(v):
-                        return ""
+                def _dfmt2(v: object) -> str:
+                    if pd.isna(v): return ""
                     if hasattr(v, "strftime"):
-                        try:
-                            return v.strftime("%d/%m/%Y")
-                        except Exception:
-                            pass
+                        try: return v.strftime("%d/%m/%Y")
+                        except Exception: pass
                     s = _clean(v)
-                    if not s:
-                        return ""
-                    parsed_one = _parse_dates_flexible(pd.Series([s])).iloc[0]
-                    if pd.notna(parsed_one):
-                        return parsed_one.strftime("%d/%m/%Y")
-                    return s
+                    if not s: return ""
+                    p = _parse_dates_flexible(pd.Series([s])).iloc[0]
+                    return p.strftime("%d/%m/%Y") if pd.notna(p) else s
 
-                style_format: Dict[str, object] = {}
-                for date_col in ["Purchase_Date", "תאריך רכישה", "Sell_Date", "תאריך מכירה"]:
-                    if date_col in display_view.columns:
-                        style_format[date_col] = _safe_date_display
-                for ycol in yield_cols:
-                    if ycol in display_view.columns:
-                        style_format[ycol] = "{:.2%}"
+                _yc2 = [c for c in _dv.columns if "\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()]
+                for c in _yc2:
+                    _dv[c] = _dv[c].map(_to_ratio2)
 
-                tx_styled = display_view.style
-                if style_format:
-                    tx_styled = tx_styled.format(style_format, na_rep="")
-                if yield_cols:
-                    tx_styled = _apply_signed_color(tx_styled, yield_cols)
+                _sfmt2: Dict[str, object] = {}
+                for dc in ["Purchase_Date", "\u05ea\u05d0\u05e8\u05d9\u05da \u05e8\u05db\u05d9\u05e9\u05d4", "Sell_Date", "\u05ea\u05d0\u05e8\u05d9\u05da \u05de\u05db\u05d9\u05e8\u05d4"]:
+                    if dc in _dv.columns: _sfmt2[dc] = _dfmt2
+                for yc in _yc2:
+                    if yc in _dv.columns: _sfmt2[yc] = "{:.2%}"
 
-                _render_dataframe_adaptive(
-                    tx_styled,
-                    is_mobile,
-                    force_same_render_path=True,
-                    use_container_width=True,
-                    hide_index=True,
-                )
+                _styled2 = _dv.style
+                if _sfmt2: _styled2 = _styled2.format(_sfmt2, na_rep="")
+                if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
+                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, use_container_width=True, hide_index=True)
+
+            if live_updates and hasattr(st, "fragment"):
+                @st.fragment(run_every="20s")
+                def _tx_live_fragment() -> None:
+                    _base = st.session_state.get("_tx_frag_base", pd.DataFrame())
+                    _lang_f = st.session_state.get("_tx_frag_lang", LANG_HE)
+                    _mob_f = st.session_state.get("_tx_frag_mobile", False)
+                    _open_f = st.session_state.get("_tx_frag_is_open", False)
+                    if _base is None or (isinstance(_base, pd.DataFrame) and _base.empty):
+                        st.info(tr("No transactions to display", "\u05d0\u05d9\u05df \u05e2\u05e1\u05e7\u05d0\u05d5\u05ea \u05dc\u05d4\u05e6\u05d2\u05d4"))
+                        return
+                    _tx = _base.copy()
+                    # Re-fetch live prices (TTL=25 s — yfinance 1-min intraday data)
+                    if "Ticker" in _tx.columns:
+                        _fx = _safe_quote("USDILS=X") or 3.6
+                        _tks = tuple(sorted({_clean(v).upper() for v in _tx["Ticker"].tolist() if _clean(v)}))
+                        _lpm = fetch_live_prices(_tks) if _tks else {}
+
+                        def _mpo(row: pd.Series) -> float:
+                            t = _clean(row.get("Ticker", "")).upper()
+                            if not t: return np.nan
+                            p = float(_num(_lpm.get(t, 0.0)))
+                            if p <= 0: return np.nan
+                            cur = _normalize_currency_code(row.get("Origin_Currency", ""))
+                            return p if cur == "USD" else (p * _fx if cur == "ILS" else p)
+
+                        def _spo(row: pd.Series) -> float:
+                            if not _is_closed_status(row.get("Status", "")): return np.nan
+                            qty = float(_num(row.get("Quantity", 0.0)))
+                            val = float(_num(row.get("Current_Value_ILS", 0.0)))
+                            if qty > 1e-9 and val > 0:
+                                cur = _normalize_currency_code(row.get("Origin_Currency", ""))
+                                unit = val / qty
+                                return unit / _fx if cur == "USD" else unit
+                            return np.nan
+
+                        _tx["Market_Price_Origin"] = _tx.apply(_mpo, axis=1)
+                        _sfm = _tx.apply(_spo, axis=1)
+                        if "Sell_Price_Origin" in _tx.columns:
+                            _es = _tx["Sell_Price_Origin"].map(_num)
+                            _tx["Sell_Price_Origin"] = np.where(_es > 0, _es, _sfm)
+                        else:
+                            _tx["Sell_Price_Origin"] = _sfm
+
+                        if "Origin_Buy_Price" in _tx.columns:
+                            _bp = _tx["Origin_Buy_Price"].map(_num)
+                            _tx["Yield_Current"] = np.where(_bp > 0, (_tx["Market_Price_Origin"] - _bp) / _bp, np.nan)
+                            _syc = np.where(_bp > 0, (_tx["Sell_Price_Origin"] - _bp) / _bp, np.nan)
+                            if "Yield_At_Sale" in _tx.columns:
+                                _hys = ~_tx["Yield_At_Sale"].map(lambda v: pd.isna(v) or _clean(v) == "")
+                                _tx["Yield_At_Sale"] = np.where(_hys, _tx["Yield_At_Sale"], _syc)
+                            else:
+                                _tx["Yield_At_Sale"] = _syc
+
+                        _ci = _tx["Cost_ILS"].map(_num) if "Cost_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        _vi = _tx["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        _yic = np.where(_ci > 0, (_vi - _ci) / _ci, np.nan)
+                        _co = _tx["Cost_Origin"].map(_num) if "Cost_Origin" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        _vo = np.where(
+                            _tx["Origin_Currency"].map(_normalize_currency_code) == "USD",
+                            np.where(_fx > 0, _vi / _fx, np.nan), _vi,
+                        )
+                        _yoc = np.where(_co > 0, (_vo - _co) / _co, np.nan)
+                        if "Yield_ILS" in _tx.columns:
+                            _hyi = ~_tx["Yield_ILS"].map(lambda v: pd.isna(v) or _clean(v) == "")
+                            _tx["Yield_ILS"] = np.where(_hyi, _tx["Yield_ILS"], _yic)
+                        else:
+                            _tx["Yield_ILS"] = _yic
+                        if "Yield_Origin" in _tx.columns:
+                            _hyo = ~_tx["Yield_Origin"].map(lambda v: pd.isna(v) or _clean(v) == "")
+                            _tx["Yield_Origin"] = np.where(_hyo, _tx["Yield_Origin"], _yoc)
+                        else:
+                            _tx["Yield_Origin"] = _yoc
+                        _tx = _tx.drop(columns=["Yield_Current"], errors="ignore")
+
+                    # Reorder yield columns to the right
+                    _yils_f = [c for c in _tx.columns if ("\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()) and ("\u05e9\u05e7\u05dc" in str(c) or "ils" in str(c).lower())]
+                    _yorig_f = [c for c in _tx.columns if ("\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()) and ("\u05de\u05e7\u05d5\u05e8" in str(c) or "origin" in str(c).lower())]
+                    _ycols_f: List[str] = []
+                    for c in _yils_f + _yorig_f:
+                        if c not in _ycols_f: _ycols_f.append(c)
+                    if not _ycols_f:
+                        _ycols_f = [c for c in _tx.columns if "\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()]
+                    if _ycols_f:
+                        _tx = _tx[[c for c in _tx.columns if c not in _ycols_f] + _ycols_f]
+
+                    _render_tx_table(_tx, _lang_f, _mob_f, _open_f)
+
+                _tx_live_fragment()
+            else:
+                # Static fallback: use the tx_view with prices already computed
+                _base_static = st.session_state.get("_tx_frag_base", tx_view)
+                if isinstance(_base_static, pd.DataFrame) and not _base_static.empty:
+                    # Reorder yield columns
+                    _ys1 = [c for c in _base_static.columns if ("\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()) and ("\u05e9\u05e7\u05dc" in str(c) or "ils" in str(c).lower())]
+                    _ys2 = [c for c in _base_static.columns if ("\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()) and ("\u05de\u05e7\u05d5\u05e8" in str(c) or "origin" in str(c).lower())]
+                    _ys: List[str] = []
+                    for c in _ys1 + _ys2:
+                        if c not in _ys: _ys.append(c)
+                    if not _ys:
+                        _ys = [c for c in _base_static.columns if "\u05ea\u05e9\u05d5\u05d0\u05d4" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower()]
+                    if _ys:
+                        _base_static = _base_static[[c for c in _base_static.columns if c not in _ys] + _ys]
+                _render_tx_table(_base_static if isinstance(_base_static, pd.DataFrame) else tx_view, st.session_state.get("_tx_frag_lang", language), st.session_state.get("_tx_frag_mobile", is_mobile), st.session_state.get("_tx_frag_is_open", is_open_only))
+
 
     elif page == page_risk:
         # Desktop sessions can stay open for long periods; refresh risk inputs so FIFO stays current.
@@ -10083,7 +10079,7 @@ def main() -> None:
         _manage_tickers = tuple(sorted({
             _clean(v).upper() for v in trade_view.get("Ticker", pd.Series([], dtype=str)).tolist() if _clean(v)
         }))
-        _manage_live_prices = fetch_prices(_manage_tickers) if _manage_tickers else {}
+        _manage_live_prices = fetch_live_prices(_manage_tickers) if _manage_tickers else {}
 
         def _manage_live_unit_price(row: pd.Series) -> float:
             t = _clean(row.get("Ticker", "")).upper()
