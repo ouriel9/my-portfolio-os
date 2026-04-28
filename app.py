@@ -1635,10 +1635,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             background: {nav_bg} !important;
             border: 1px solid {nav_border} !important;
             border-radius: 12px !important;
-            padding: 3px !important;
-            margin: 0 !important;
-            width: 100% !important;
-            box-sizing: border-box !important;
+            padding: 2px !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-testid="stWidgetLabel"] {{
@@ -1661,7 +1658,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
-            padding: 7px 2px !important;
+            padding: 5px 1px !important;
             margin: 0 !important;
             border: none !important;
             border-radius: 9px !important;
