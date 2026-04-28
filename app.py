@@ -6080,7 +6080,10 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
             z-index: 998 !important;
             padding: 5px 6px !important;
             border-radius: 14px !important;
-            margin-right: 56px !important;  /* gutter for 3-dots */
+            margin-right: 0 !important;
+            margin-left: 0 !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
         }}
         /* Each pill — neutral by default; ACTIVE uses a deep charcoal-to-
            sapphire gradient (premium, not "kindergarten purple"). The same
