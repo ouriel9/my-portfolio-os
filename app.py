@@ -162,7 +162,7 @@ SNAPSHOT_HEADERS = {
     "Quantity": {LANG_EN: "Quantity", LANG_HE: "כמות"},
     "Origin_Buy_Price": {LANG_EN: "Buy Price", LANG_HE: "שער קנייה"},
     "Cost_Origin": {LANG_EN: "Cost (Origin)", LANG_HE: "עלות מקור"},
-    "Cost_ILS": {LANG_EN: "Cost ILS", LANG_HE: "עלותILS"},
+    "Cost_ILS": {LANG_EN: "Cost ILS", LANG_HE: "עלות ILS"},
     "Current_Value_ILS": {LANG_EN: "Value ILS", LANG_HE: "שווי ILS"},
     "Origin_Currency": {LANG_EN: "Purchase Currency", LANG_HE: "מטבע קנייה"},
     "Market_Price_Origin": {LANG_EN: "Current Price", LANG_HE: "שער נוכחי"},
@@ -187,6 +187,10 @@ VALUE_LABELS = {
         "קריפטו": {LANG_EN: "Crypto", LANG_HE: "קריפטו"},
         "שוק ההון": {LANG_EN: "Capital Market", LANG_HE: "שוק ההון"},
         "ETF": {LANG_EN: "ETF", LANG_HE: "קרן סל"},
+    },
+    "Category": {
+        "Winner": {LANG_EN: "Winner", LANG_HE: "מנצח"},
+        "Loser": {LANG_EN: "Loser", LANG_HE: "מפסיד"},
     },
 }
 
@@ -6543,6 +6547,9 @@ def render_advanced_analytics(
 
     st.markdown("&nbsp;", unsafe_allow_html=True)
 
+    st.divider()
+    st.subheader(tr("📉 Drawdown & Returns", "📉 משיכה ותשואות"))
+
     # Drawdown (underwater) chart
     row_a = st.columns(2) if not is_mobile else [st.container(), st.container()]
     with row_a[0]:
@@ -6592,6 +6599,8 @@ def render_advanced_analytics(
         st.plotly_chart(_apply_plotly_theme(hist_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
     # Rolling 30-day annualized volatility
+    st.divider()
+    st.subheader(tr("📊 Volatility & Benchmark", "📊 תנודתיות ובנצ'מרק"))
     row_b = st.columns(2) if not is_mobile else [st.container(), st.container()]
     with row_b[0]:
         _chart_help("Rolling 30-day volatility annualized: how 'noisy' the portfolio has been over recent months.",
@@ -6651,6 +6660,8 @@ def render_advanced_analytics(
     if not open_trades.empty and "Ticker" in open_trades.columns:
         held = sorted({_clean(t).upper() for t in open_trades["Ticker"].tolist() if _clean(t)})
         if 2 <= len(held) <= 25:
+            st.divider()
+            st.subheader(tr("🔗 Correlation Heatmap", "🔗 מפת מתאמים"))
             _chart_help("Correlation heatmap: values near +1 = assets move together, near -1 = opposite, near 0 = independent.",
                         "מפת מתאמים: ערכים קרובים ל-+1 = נכסים נעים יחד, ל-1- = הפוכים, ל-0 = בלתי תלויים.", language)
             try:
@@ -6730,6 +6741,8 @@ def render_advanced_analytics(
                 st.caption(f"⚠️ Heatmap error: {_hm_exc}")
 
     # Monte Carlo projection (1 year)
+    st.divider()
+    st.subheader(tr("🎲 Monte Carlo Projection", "🎲 הדמיית מונטה-קרלו"))
     _chart_help("Monte Carlo simulation: 1,000 random paths based on historical daily returns. Shows the range of possible portfolio values in 1 year.",
                 "סימולציית מונטה-קרלו: 1,000 מסלולים אקראיים על בסיס תשואות יומיות היסטוריות. טווח שווי אפשרי לתיק בעוד שנה.", language)
     try:
@@ -7636,7 +7649,15 @@ def render_simulator_page(
 
 
 def main() -> None:
-    st.set_page_config(page_title="מערכת ניהול תיק", page_icon="📈", layout="wide", initial_sidebar_state="auto")
+    # Determine saved language early so page_title can be bilingual
+    _early_lang = LANG_HE
+    try:
+        _early_cfg = json.loads(Path("app_local_config.json").read_text(encoding="utf-8"))
+        _early_lang = _early_cfg.get("language", LANG_HE)
+    except Exception:
+        pass
+    _page_title = "Portfolio Manager" if _early_lang == LANG_EN else "מערכת ניהול תיק"
+    st.set_page_config(page_title=_page_title, page_icon="📈", layout="wide", initial_sidebar_state="auto")
 
     # ══════════════════════════════════════════════════════════════════════
     # Premium CSS — Bug fixes, mobile-only enhancements, sidebar polish
@@ -9358,6 +9379,17 @@ def main() -> None:
                     st.info(tr("No data available for this report.", "אין נתונים זמינים לדוח זה."))
                 else:
                     localized_df = localize_dataframe_columns(report_df, language)
+                    # Translate cell values using VALUE_LABELS (e.g. "Winner"→"מנצח", "קריפטו"→"Crypto")
+                    for raw_col, val_map in VALUE_LABELS.items():
+                        # Find the localized column name for this raw column key
+                        vis_col_en = COLUMN_LABELS.get(raw_col, {}).get(language, raw_col)
+                        vis_col_he = COLUMN_LABELS.get(raw_col, {}).get(LANG_HE, raw_col)
+                        for col_candidate in [raw_col, vis_col_en, vis_col_he]:
+                            if col_candidate in localized_df.columns:
+                                localized_df[col_candidate] = localized_df[col_candidate].map(
+                                    lambda v, vm=val_map: vm.get(_clean(str(v)) if pd.notna(v) else "", {}).get(language, v) if pd.notna(v) else v
+                                )
+                                break
                     fmt_map: Dict[str, str] = {}
                     for col in localized_df.columns:
                         col_s = str(col)
@@ -9389,11 +9421,14 @@ def main() -> None:
                     try:
                         _rates: Dict[str, float] = {}
                         # Only crypto/USD pairs — no stocks/ETFs
-                        _crypto_tickers = ["BTC-USD", "ETH-USD", "SOL-USD", "XRP-USD", "BNB-USD"]
+                        _crypto_tickers = ["BTC-USD", "ETH-USD", "SOL-USD"]
                         _lp = fetch_live_prices(tuple(_crypto_tickers))
                         _fx = _safe_quote("USDILS=X")
                         if _fx > 0:
                             _rates[("USD/ILS" if _lang_r == LANG_EN else "דולר/שקל")] = round(_fx, 4)
+                        _eur_ils = _safe_quote("EURILS=X")
+                        if _eur_ils > 0:
+                            _rates[("EUR/ILS" if _lang_r == LANG_EN else "יורו/שקל")] = round(_eur_ils, 4)
                         for _tk in _crypto_tickers:
                             _label = _tk.replace("-USD", "") + "/USD"
                             _p = _lp.get(_tk, 0.0)
@@ -9938,6 +9973,9 @@ def main() -> None:
                 hide_index=True,
             )
 
+        st.divider()
+        st.subheader(tr("📊 Risk Metrics", "📊 מדדי סיכון"))
+
         holdings = open_trades.groupby("Ticker", as_index=False)["Quantity"].sum()
         value_series = portfolio_price_history(tuple(holdings["Ticker"]), tuple(holdings["Quantity"]), days=365)
         metrics = risk_metrics(value_series)
@@ -9965,6 +10003,8 @@ def main() -> None:
                   ))
 
         if not value_series.empty:
+            st.divider()
+            st.subheader(tr("📈 Historical Portfolio Value", "📈 שווי תיק היסטורי"))
             _hist_color = "#4f46e5"
             _chart_help("Historical portfolio value estimated from market prices. Uses current holdings * historical closing prices.",
                         "שווי התיק ההיסטורי מוערך לפי מחירי שוק. מחשב את האחזקות הנוכחיות לפי מחירי הסגירה ההיסטוריים.", language)
@@ -9990,6 +10030,7 @@ def main() -> None:
             st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
         if total_value > 0:
+            st.divider()
             st.markdown(f"#### {tr('Scenario Lab', 'מעבדת תרחישים')}")
             _chart_help("Scenario Lab: simulates portfolio value and P/L under various market shock levels applied uniformly to all holdings.",
                         "מעבדת תרחישים: מדמה את שווי התיק ורווח/הפסד תחת רמות הלם שוק שונות המופעלות באחידות על כל האחזקות.", language)
@@ -10181,7 +10222,14 @@ def main() -> None:
             "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID",
         ]
         platforms = trades["Platform"].dropna().astype(str).tolist() if "Platform" in trades.columns else []
-        types = trades["Type"].dropna().astype(str).tolist() if "Type" in trades.columns else []
+        types_raw = trades["Type"].dropna().astype(str).tolist() if "Type" in trades.columns else []
+        # Translate type values for display (Hebrew → EN in EN mode)
+        _type_vl = VALUE_LABELS.get("Type", {})
+        _type_raw_to_disp = {raw: langs.get(language, raw) for raw, langs in _type_vl.items()}
+        _type_disp_to_raw = {v: k for k, v in _type_raw_to_disp.items()}
+        types = [_type_raw_to_disp.get(t, t) for t in types_raw]
+        # Default type label in current language
+        _default_type = _type_raw_to_disp.get("קריפטו", tr("Crypto", "קריפטו"))
         tickers = trades["Ticker"].dropna().astype(str).tolist() if "Ticker" in trades.columns else []
         currencies = trades["Origin_Currency"].dropna().astype(str).tolist() if "Origin_Currency" in trades.columns else []
         locations = trades["Current_Location"].dropna().astype(str).tolist() if "Current_Location" in trades.columns else []
@@ -10233,7 +10281,7 @@ def main() -> None:
                 with _fc2:
                     _field_plat = _select_or_type(tr("Platform", "פלטפורמה"), platforms, "Bit2C", "add_platform", tr, help_text=field_help["Platform"])
                 with _fc3:
-                    _field_type = _select_or_type(tr("Asset type", "סוג נכס"), types, "קריפטו", "add_type", tr, help_text=field_help["Type"])
+                    _field_type = _select_or_type(tr("Asset type", "סוג נכס"), types, _default_type, "add_type", tr, help_text=field_help["Type"])
                 # ── Row 2: Ticker / Currency ──
                 _fc4, _fc5, _fc6 = st.columns([2, 1, 1]) if not is_mobile else (st.container(), st.container(), st.container())
                 with _fc4:
@@ -10245,7 +10293,7 @@ def main() -> None:
                 new_row = {
                     "Current_Location": _field_loc,
                     "Platform": _field_plat,
-                    "Type": _field_type,
+                    "Type": _type_disp_to_raw.get(_field_type, _field_type),  # translate back to canonical Hebrew
                     "Ticker": _field_ticker,
                     "Origin_Currency": _field_currency,
                     "Action": selected_side,
@@ -10538,13 +10586,20 @@ def main() -> None:
                         elif col == "Current_Location":
                             edited[col] = _select_or_type(tr("Current location", "מיקום נוכחי"), locations, _clean(val), f"edit_{selected}_location", tr)
                         elif col == "Type":
-                            edited[col] = _select_or_type(tr("Asset type", "סוג נכס"), types, _clean(val), f"edit_{selected}_type", tr)
+                            # Translate current val to display form, show translated options, store back as canonical
+                            _type_val_disp = _type_raw_to_disp.get(_clean(val), _clean(val))
+                            _type_result = _select_or_type(tr("Asset type", "סוג נכס"), types, _type_val_disp, f"edit_{selected}_type", tr)
+                            edited[col] = _type_disp_to_raw.get(_type_result, _type_result)
                         elif col == "Ticker":
                             edited[col] = _select_or_type(tr("Ticker", "טיקר"), tickers, _clean(val), f"edit_{selected}_ticker", tr).upper()
                         elif col == "Origin_Currency":
                             edited[col] = _select_or_type(tr("Origin currency", "מטבע מקור"), currencies, _clean(val), f"edit_{selected}_currency", tr).upper()
                         elif col == "Status":
-                            edited[col] = st.selectbox(col, ["פתוח", "סגור"], index=0 if _clean(val) != "סגור" else 1, key=f"e_{col}")
+                            _status_opts = [tr("Open", "פתוח"), tr("Closed", "סגור")]
+                            _status_idx = 1 if _clean(val) in {"סגור", "closed", "close", "sold", "נמכר"} else 0
+                            _status_sel = st.selectbox(tr("Status", "סטטוס"), _status_opts, index=_status_idx, key=f"e_{col}")
+                            # Always store in canonical Hebrew form (consistent with the data sheet)
+                            edited[col] = "סגור" if _status_sel == tr("Closed", "סגור") else "פתוח"
                         elif col == "Action":
                             edited[col] = st.selectbox(col, ["BUY", "SELL"], index=0 if _clean(val) != "SELL" else 1, key=f"e_{col}")
                         else:
