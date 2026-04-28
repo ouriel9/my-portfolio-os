@@ -3222,7 +3222,7 @@ def _download_close_matrix(symbols: Tuple[str, ...], days: int = 365) -> pd.Data
     return pd.concat(out.values(), axis=1)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=120, show_spinner=False)
 def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
     clean = tuple(dict.fromkeys([_clean(t).upper() for t in tickers if _clean(t)]))
     if not clean:
@@ -3242,6 +3242,78 @@ def fetch_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
         if val <= 0:
             val = float(_safe_quote(sym))
         out[t] = val if val > 0 else 0.0
+    return out
+
+
+@st.cache_data(ttl=25, show_spinner=False)
+def fetch_live_prices(tickers: Tuple[str, ...]) -> Dict[str, float]:
+    """Live intraday prices via yf.download(period='1d', interval='1m').
+
+    Used by the 20-second auto-refresh fragment for near-real-time prices
+    without a full page reload.  Falls back to fetch_prices() when intraday
+    data is unavailable (market closed, ticker not found, etc.).
+
+    TTL=25s — slightly longer than fragment's 20s interval to avoid redundant
+    yfinance calls within a single fragment cycle.
+    """
+    clean = tuple(dict.fromkeys([_clean(t).upper() for t in tickers if _clean(t)]))
+    if not clean:
+        return {}
+
+    symbol_map = {t: _market_symbol(t) for t in clean}
+    syms = list(dict.fromkeys(symbol_map.values()))
+    out: Dict[str, float] = {}
+
+    try:
+        raw = yf.download(
+            syms,
+            period="1d",
+            interval="1m",
+            progress=False,
+            auto_adjust=False,
+            threads=True,
+        )
+        if raw is not None and not getattr(raw, "empty", True):
+            if isinstance(raw.columns, pd.MultiIndex):
+                level_zero = {str(v) for v in raw.columns.get_level_values(0)}
+                if "Close" in level_zero:
+                    for t in clean:
+                        sym = symbol_map[t]
+                        try:
+                            s = pd.to_numeric(raw["Close"][sym], errors="coerce").dropna()
+                            if not s.empty:
+                                out[t] = float(s.iloc[-1])
+                        except Exception:
+                            continue
+                else:
+                    for t in clean:
+                        sym = symbol_map[t]
+                        try:
+                            part = raw[sym]
+                            if isinstance(part, pd.DataFrame) and "Close" in part.columns:
+                                s = pd.to_numeric(part["Close"], errors="coerce").dropna()
+                                if not s.empty:
+                                    out[t] = float(s.iloc[-1])
+                        except Exception:
+                            continue
+            elif isinstance(raw, pd.DataFrame) and "Close" in raw.columns and len(syms) == 1:
+                s = pd.to_numeric(raw["Close"], errors="coerce").dropna()
+                if not s.empty:
+                    out[clean[0]] = float(s.iloc[-1])
+    except Exception:
+        pass
+
+    # Fallback: use daily-close cache for any ticker with no intraday data
+    missing = tuple(t for t in clean if out.get(t, 0) <= 0)
+    if missing:
+        try:
+            fallback = fetch_prices(missing)
+            for t in missing:
+                if fallback.get(t, 0) > 0:
+                    out[t] = fallback[t]
+        except Exception:
+            pass
+
     return out
 
 
@@ -4890,9 +4962,72 @@ def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
     out = open_trades.copy()
     tickers = tuple(sorted(t for t in out["Ticker"].dropna().unique() if _clean(t))) if "Ticker" in out.columns else tuple()
     live_prices = fetch_prices(tickers)
+    usd_ils = _safe_quote("USDILS=X")
+    if usd_ils <= 0:
+        usd_ils = 3.6
     out["מחיר שוק"] = out["Ticker"].map(live_prices).fillna(0.0) if "Ticker" in out.columns else 0.0
     qty_series = out["Quantity"].map(_num) if "Quantity" in out.columns else 0.0
     out["שווי שוק (יחסי מטבע מקור)"] = qty_series * out["מחיר שוק"]
+    # Recalculate Current_Value_ILS using live prices + FX
+    if "Origin_Currency" in out.columns:
+        cur_series = out["Origin_Currency"].map(lambda c: _normalize_currency_code(c) or "ILS")
+    else:
+        cur_series = pd.Series(["ILS"] * len(out), index=out.index)
+    live_value_ils = qty_series * out["מחיר שוק"] * cur_series.map(lambda c: usd_ils if c == "USD" else 1.0)
+    # Only override where we actually got a live price (>0)
+    has_live = out["מחיר שוק"] > 0
+    out.loc[has_live, "Current_Value_ILS"] = live_value_ils[has_live]
+    return out
+
+
+def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Refresh Current_Value_ILS for all open trades using live yfinance prices.
+
+    Should be called once after loading portfolio data from local store so that
+    KPI totals (total_value, total_profit) reflect real-time market prices instead
+    of the stale values persisted in portfolio_data.json.
+    """
+    if df.empty:
+        return df
+
+    out = df.copy()
+
+    # Identify open trades
+    if "Status" in out.columns:
+        status_norm = out["Status"].map(_clean).str.lower()
+        closed_values = {"סגור", "closed", "close", "sold", "נמכר"}
+        open_mask = ~status_norm.isin(closed_values)
+    else:
+        open_mask = pd.Series([True] * len(out), index=out.index)
+
+    open_idx = out.index[open_mask]
+    if len(open_idx) == 0:
+        return out
+
+    tickers = tuple(sorted(t for t in out.loc[open_idx, "Ticker"].dropna().unique() if _clean(t))) if "Ticker" in out.columns else tuple()
+    if not tickers:
+        return out
+
+    live_prices = fetch_prices(tickers)
+    usd_ils = _safe_quote("USDILS=X")
+    if usd_ils <= 0:
+        usd_ils = 3.6
+
+    for idx in open_idx:
+        row = out.loc[idx]
+        ticker = _clean(str(row.get("Ticker", "")))
+        if not ticker:
+            continue
+        price = live_prices.get(ticker, 0.0)
+        if price <= 0:
+            continue
+        qty = float(_num(row.get("Quantity", 0)))
+        if abs(qty) < 1e-12:
+            continue
+        cur = _normalize_currency_code(row.get("Origin_Currency", "")) or "ILS"
+        fx = usd_ils if cur == "USD" else 1.0
+        out.at[idx, "Current_Value_ILS"] = qty * price * fx
+
     return out
 
 
@@ -7886,13 +8021,9 @@ def main() -> None:
         value=bool(st.session_state.get("demo_mode_persist", False)),
         key="demo_mode_persist",
     )
-    live_updates = st.sidebar.checkbox(tr("Live updates", "עדכון חי"), value=False)
-    refresh_seconds = st.sidebar.selectbox(
-        tr("Refresh every", "רענון כל"),
-        [5, 10, 15, 30, 60],
-        index=2,
-        disabled=not live_updates,
-    )
+    # Live updates always-on: fragment refreshes every 30s without full-page reload
+    live_updates = True
+    refresh_seconds = 30
 
     inject_global_styles(language, theme_mode)
     inject_client_fixes()
@@ -8453,6 +8584,44 @@ def main() -> None:
         st.warning(tr("No portfolio rows found.", "לא נמצאו עסקאות בתיק."))
         st.stop()
 
+    # ── Live price refresh (non-blocking) ───────────────────────────────
+    # Prices are refreshed every 30s by the dashboard fragment.
+    # The main render uses stored values so the page loads instantly.
+    # If a fresh fetch is already cached (TTL=120s still valid), use it.
+    _price_status_placeholder = st.empty()
+    if source_mode != "demo":
+        try:
+            tickers_tuple = tuple(sorted(
+                t for t in df["Ticker"].dropna().unique() if _clean(t)
+            )) if "Ticker" in df.columns else ()
+            if tickers_tuple:
+                with _price_status_placeholder:
+                    with st.spinner(tr("🔄 Fetching live prices…", "🔄 טוען שערים חיים…")):
+                        cached_prices = fetch_prices(tickers_tuple)
+                if cached_prices:
+                    usd_ils_val = _safe_quote("USDILS=X") or 3.6
+                    has_status = "Status" in df.columns
+                    if has_status:
+                        status_norm = df["Status"].map(_clean).str.lower()
+                        closed_values = {"סגור", "closed", "close", "sold", "נמכר"}
+                        open_mask = ~status_norm.isin(closed_values)
+                    else:
+                        open_mask = pd.Series([True] * len(df), index=df.index)
+                    for idx in df.index[open_mask]:
+                        row = df.loc[idx]
+                        ticker = _clean(str(row.get("Ticker", "")))
+                        price = cached_prices.get(ticker, 0.0) if ticker else 0.0
+                        if price > 0:
+                            qty = float(_num(row.get("Quantity", 0)))
+                            if abs(qty) > 1e-12:
+                                cur = _normalize_currency_code(row.get("Origin_Currency", "")) or "ILS"
+                                fx = usd_ils_val if cur == "USD" else 1.0
+                                df.at[idx, "Current_Value_ILS"] = qty * price * fx
+        except Exception:
+            pass  # Fall back to stored values silently
+        finally:
+            _price_status_placeholder.empty()  # Remove spinner when done
+
     core = prepare_core_views(df)
     trades = core["trades"]
     open_trades = core["open_trades"].copy()
@@ -8523,44 +8692,92 @@ def main() -> None:
         if not pnl_by_asset.empty:
             pnl_by_asset["Net_PnL_ILS"] = pnl_by_asset["Current_Value_ILS"] - pnl_by_asset["Cost_ILS"]
 
-        total_value_txt = f"{total_value:,.0f}"
-        total_cost_txt = f"{total_cost:,.0f}"
-        total_return_txt = f"{total_return:.2%}"
-        top_holding_value_txt = "--"
-        top_holding_delta_txt = tr("No open assets", "אין נכסים פתוחים")
-        if not summary.empty:
-            total_summary_value = float(summary["Value_ILS"].sum())
-            if total_summary_value > 0:
-                top_row = summary.loc[summary["Value_ILS"].idxmax()]
-                top_weight = float(top_row["Value_ILS"]) / total_summary_value
-                top_ticker = _clean(top_row.get("Ticker", "")) or "-"
-                top_holding_value_txt = f"{top_weight:.1%}"
-                top_holding_delta_txt = f"{top_ticker} | ₪{float(top_row['Value_ILS']):,.0f}"
-        total_profit_txt = f"{total_profit:+,.0f} ₪"
-        if is_mobile:
-            # ── Mobile: 2x2 compact grid ──
-            kpi_r1 = st.columns(2)
-            kpi_r1[0].metric(tr("Total Value", "שווי כולל"), total_value_txt, f"{total_profit:,.0f} ₪")
-            kpi_r1[1].metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), total_profit_txt)
-            kpi_r2 = st.columns(2)
-            kpi_r2[0].metric(tr("Return", "תשואה כוללת"), total_return_txt, f"{total_profit:,.0f} ₪")
-            kpi_r2[1].metric(
-                tr("Top Holding", "אחזקה מובילה"),
-                top_holding_value_txt,
-                top_holding_delta_txt,
-            )
-        else:
-            # ── Desktop: 4 columns in a row ──
-            kpi_cols = st.columns(4)
-            kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), total_value_txt, f"{total_profit:,.0f} ₪")
-            kpi_cols[1].metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), total_profit_txt)
-            kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), total_return_txt)
-            kpi_cols[3].metric(
-                tr("Closed Positions", "פוזיציות סגורות"),
-                str(len(closed_trades)),
-                f"{len(open_trades)} {tr('open', 'פתוחות')}",
-            )
-        style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
+        # ── KPI metrics — live fragment updates every 20s ─────────────────
+        _kpi_slot = st.container()
+        with _kpi_slot:
+            @st.fragment(run_every="20s")
+            def _kpi_live_fragment() -> None:
+                _tv = total_value
+                _tp = total_profit
+                _tc_val = total_cost
+                _live_sum = summary.copy() if not summary.empty else summary
+                if not is_demo and not open_trades.empty:
+                    try:
+                        _tks = tuple(sorted(
+                            t for t in open_trades["Ticker"].dropna().unique() if _clean(t)
+                        ))
+                        _lpx = fetch_live_prices(_tks)
+                        _ufx = _safe_quote("USDILS=X") or 3.6
+                        if _lpx:
+                            _enriched_kpi = open_trades.copy()
+                            _enriched_kpi["מחיר שוק"] = _enriched_kpi["Ticker"].map(_lpx).fillna(0.0)
+                            _qty_k = _enriched_kpi["Quantity"].map(_num)
+                            _cur_k = _enriched_kpi["Origin_Currency"].map(
+                                lambda c: _normalize_currency_code(c) or "ILS"
+                            )
+                            _vk = _qty_k * _enriched_kpi["מחיר שוק"] * _cur_k.map(
+                                lambda c: _ufx if c == "USD" else 1.0
+                            )
+                            _has_k = _enriched_kpi["מחיר שוק"] > 0
+                            _enriched_kpi.loc[_has_k, "Current_Value_ILS"] = _vk[_has_k]
+                            _tv = float(_enriched_kpi["Current_Value_ILS"].map(_num).sum())
+                            if "Cost_ILS" in _enriched_kpi.columns:
+                                _tc_val = float(_enriched_kpi["Cost_ILS"].map(_num).sum())
+                            _tp = _tv - _tc_val
+                            # Rebuild summary for top-holding display
+                            _enriched_kpi["Cost_Origin_With_Fee"] = _enriched_kpi["Cost_Origin"] + _enriched_kpi["Commission"]
+                            _enriched_kpi["Value_Origin_Est"] = np.where(
+                                _enriched_kpi["Origin_Currency"].str.upper() == "USD",
+                                _enriched_kpi["Current_Value_ILS"] / _ufx,
+                                _enriched_kpi["Current_Value_ILS"],
+                            )
+                            _live_sum = _enriched_kpi.groupby("Ticker", as_index=False).agg(
+                                Value_ILS=("Current_Value_ILS", "sum"),
+                            )
+                    except Exception:
+                        pass
+
+                _tv_txt = f"{_tv:,.0f}"
+                _tp_txt = f"{_tp:+,.0f} ₪"
+                _tr_val = (_tp / _tc_val) if _tc_val > 0 else 0.0
+                _tr_txt = f"{_tr_val:.2%}"
+                _top_val_txt, _top_delta_txt = "--", tr("No open assets", "אין נכסים פתוחים")
+                if not _live_sum.empty and "Value_ILS" in _live_sum.columns:
+                    _tot_s = float(_live_sum["Value_ILS"].sum())
+                    if _tot_s > 0:
+                        _top_row = _live_sum.loc[_live_sum["Value_ILS"].idxmax()]
+                        _top_val_txt = f"{float(_top_row['Value_ILS']) / _tot_s:.1%}"
+                        _top_delta_txt = f"{_clean(_top_row.get('Ticker', ''))} | ₪{float(_top_row['Value_ILS']):,.0f}"
+
+                if is_mobile:
+                    kpi_r1 = st.columns(2)
+                    kpi_r1[0].metric(tr("Total Value", "שווי כולל"), _tv_txt, f"{_tp:,.0f} ₪")
+                    kpi_r1[1].metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), _tp_txt)
+                    kpi_r2 = st.columns(2)
+                    kpi_r2[0].metric(tr("Return", "תשואה כוללת"), _tr_txt, f"{_tp:,.0f} ₪")
+                    kpi_r2[1].metric(
+                        tr("Top Holding", "אחזקה מובילה"),
+                        _top_val_txt,
+                        _top_delta_txt,
+                    )
+                else:
+                    kpi_cols = st.columns(4)
+                    kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), _tv_txt, f"{_tp:,.0f} ₪")
+                    kpi_cols[1].metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), _tp_txt)
+                    kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), _tr_txt)
+                    kpi_cols[3].metric(
+                        tr("Closed Positions", "פוזיציות סגורות"),
+                        str(len(closed_trades)),
+                        f"{len(open_trades)} {tr('open', 'פתוחות')}",
+                    )
+                style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
+                _ts = datetime.now().strftime("%H:%M:%S")
+                st.caption(
+                    f"🟢 {tr('Live prices updated', 'שערים חיים עודכנו')}: **{_ts}** · "
+                    f"{tr('auto-refresh every 20s', 'רענון אוטומטי כל 20 שניות')}"
+                )
+
+            _kpi_live_fragment()
 
         class_mix = pd.DataFrame(columns=["Asset_Class", "Current_Value_ILS", "Assets"])
         if not open_trades.empty and {"Ticker", "Type", "Current_Value_ILS"}.issubset(open_trades.columns):
@@ -8877,26 +9094,68 @@ def main() -> None:
                         )
                         st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
 
-            if live_updates and hasattr(st, "fragment"):
-                @st.fragment(run_every=f"{int(refresh_seconds)}s")
+        # ── Exposure table with live-price fragment ──────────────────────────
+        # Fragment MUST be anchored inside the target container (_alloc_exposure_slot)
+        # to satisfy Streamlit's "no widgets outside fragment boundary" rule.
+        if live_updates and hasattr(st, "fragment") and page != page_manage:
+            with _alloc_exposure_slot:
+                @st.fragment(run_every="20s")
                 def _exposure_fragment() -> None:
                     live_summary = summary
-                    live_open_for_watchlist = open_trades
-                    if not is_demo:
+                    if not is_demo and not open_trades.empty:
                         try:
-                            live_df, _ = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
-                            live_core = prepare_core_views(live_df)
-                            live_open_for_watchlist = live_core["open_trades"].copy()
-                            live_summary = _build_summary_for_exposure(live_open_for_watchlist)
+                            # Use intraday 1-min prices (TTL=25s) for near-real-time display
+                            _live_tickers = tuple(sorted(
+                                t for t in open_trades["Ticker"].dropna().unique() if _clean(t)
+                            ))
+                            _live_px = fetch_live_prices(_live_tickers)
+                            if _live_px:
+                                _fx = _safe_quote("USDILS=X") or 3.6
+                                _enriched = open_trades.copy()
+                                _enriched["מחיר שוק"] = _enriched["Ticker"].map(_live_px).fillna(0.0)
+                                _qty = _enriched["Quantity"].map(_num)
+                                _cur = _enriched["Origin_Currency"].map(
+                                    lambda c: _normalize_currency_code(c) or "ILS"
+                                )
+                                _live_val = _qty * _enriched["מחיר שוק"] * _cur.map(
+                                    lambda c: _fx if c == "USD" else 1.0
+                                )
+                                _has = _enriched["מחיר שוק"] > 0
+                                _enriched.loc[_has, "Current_Value_ILS"] = _live_val[_has]
+                                # Build summary directly from enriched data (skip re-enrichment)
+                                _enriched["Cost_Origin_With_Fee"] = _enriched["Cost_Origin"] + _enriched["Commission"]
+                                _enriched["Value_Origin_Est"] = np.where(
+                                    _enriched["Origin_Currency"].str.upper() == "USD",
+                                    _enriched["Current_Value_ILS"] / _fx,
+                                    _enriched["Current_Value_ILS"],
+                                )
+                                live_summary = _enriched.groupby("Ticker", as_index=False).agg(
+                                    Current_Price=("מחיר שוק", "max"),
+                                    Open_Qty=("Quantity", "sum"),
+                                    Cost_ILS=("Cost_ILS", "sum"),
+                                    Value_ILS=("Current_Value_ILS", "sum"),
+                                    Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+                                    Value_Origin=("Value_Origin_Est", "sum"),
+                                )
+                                live_summary["Net_PnL_ILS"] = live_summary["Value_ILS"] - live_summary["Cost_ILS"]
+                                live_summary["Yield_Origin"] = np.where(
+                                    live_summary["Cost_Origin"] > 0,
+                                    (live_summary["Value_Origin"] - live_summary["Cost_Origin"]) / live_summary["Cost_Origin"],
+                                    0.0,
+                                )
+                                live_summary["Yield_ILS"] = np.where(
+                                    live_summary["Cost_ILS"] > 0,
+                                    live_summary["Net_PnL_ILS"] / live_summary["Cost_ILS"],
+                                    0.0,
+                                )
                         except Exception:
                             pass
-                    with _alloc_exposure_slot:
-                        render_exposure_section(live_summary, widget_prefix="overview")
+                    render_exposure_section(live_summary, widget_prefix="overview")
 
                 _exposure_fragment()
-            else:
-                with _alloc_exposure_slot:
-                    render_exposure_section(summary, widget_prefix="overview")
+        else:
+            with _alloc_exposure_slot:
+                render_exposure_section(summary, widget_prefix="overview")
 
         # ── Mirror headline widgets into Overview tab (duplicates — do NOT remove from Allocation) ──
         with _ov_body_slot:
@@ -8916,12 +9175,61 @@ def main() -> None:
                         theme="streamlit",
                         key="ov_mirror_bar",
                     )
-            # Exposure table mirrored into Overview too (uses distinct widget prefix
-            # so all internal Streamlit keys stay unique).
-            try:
-                render_exposure_section(summary, widget_prefix="overview_body")
-            except Exception:
-                pass
+            # Exposure table mirrored into Overview tab — live fragment updates every 20s
+            _ov_exposure_slot = st.container()
+            with _ov_exposure_slot:
+                @st.fragment(run_every="20s")
+                def _ov_exposure_fragment() -> None:
+                    _ov_summary = summary
+                    if not is_demo and not open_trades.empty:
+                        try:
+                            _tks_ov = tuple(sorted(
+                                t for t in open_trades["Ticker"].dropna().unique() if _clean(t)
+                            ))
+                            _lpx_ov = fetch_live_prices(_tks_ov)
+                            if _lpx_ov:
+                                _fx_ov = _safe_quote("USDILS=X") or 3.6
+                                _ov_e = open_trades.copy()
+                                _ov_e["מחיר שוק"] = _ov_e["Ticker"].map(_lpx_ov).fillna(0.0)
+                                _qty_ov = _ov_e["Quantity"].map(_num)
+                                _cur_ov = _ov_e["Origin_Currency"].map(
+                                    lambda c: _normalize_currency_code(c) or "ILS"
+                                )
+                                _vov = _qty_ov * _ov_e["מחיר שוק"] * _cur_ov.map(
+                                    lambda c: _fx_ov if c == "USD" else 1.0
+                                )
+                                _hov = _ov_e["מחיר שוק"] > 0
+                                _ov_e.loc[_hov, "Current_Value_ILS"] = _vov[_hov]
+                                _ov_e["Cost_Origin_With_Fee"] = _ov_e["Cost_Origin"] + _ov_e["Commission"]
+                                _ov_e["Value_Origin_Est"] = np.where(
+                                    _ov_e["Origin_Currency"].str.upper() == "USD",
+                                    _ov_e["Current_Value_ILS"] / _fx_ov,
+                                    _ov_e["Current_Value_ILS"],
+                                )
+                                _ov_summary = _ov_e.groupby("Ticker", as_index=False).agg(
+                                    Current_Price=("מחיר שוק", "max"),
+                                    Open_Qty=("Quantity", "sum"),
+                                    Cost_ILS=("Cost_ILS", "sum"),
+                                    Value_ILS=("Current_Value_ILS", "sum"),
+                                    Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+                                    Value_Origin=("Value_Origin_Est", "sum"),
+                                )
+                                _ov_summary["Net_PnL_ILS"] = _ov_summary["Value_ILS"] - _ov_summary["Cost_ILS"]
+                                _ov_summary["Yield_Origin"] = np.where(
+                                    _ov_summary["Cost_Origin"] > 0,
+                                    (_ov_summary["Value_Origin"] - _ov_summary["Cost_Origin"]) / _ov_summary["Cost_Origin"],
+                                    0.0,
+                                )
+                                _ov_summary["Yield_ILS"] = np.where(
+                                    _ov_summary["Cost_ILS"] > 0,
+                                    _ov_summary["Net_PnL_ILS"] / _ov_summary["Cost_ILS"],
+                                    0.0,
+                                )
+                        except Exception:
+                            pass
+                    render_exposure_section(_ov_summary, widget_prefix="overview_body")
+
+                _ov_exposure_fragment()
 
         # Compute once and share across both Allocation and Reports tabs.
         _shared_reports_payload = build_home_inspired_reports(open_trades)
@@ -9282,7 +9590,7 @@ def main() -> None:
                     tx_view = tx_view.sort_values("__sort_date__", ascending=False, na_position="last").drop(columns=["__sort_date__"])
 
                 # Show current market price/returns for both open and closed rows.
-                if "Ticker" in tx_view.columns and "Origin_Buy_Price" in tx_view.columns:
+                if "Ticker" in tx_view.columns:
                     fx_now = _safe_quote("USDILS=X")
                     if fx_now <= 0:
                         fx_now = 3.6
@@ -9319,16 +9627,17 @@ def main() -> None:
                     else:
                         tx_view["Sell_Price_Origin"] = sell_from_market
 
-                    buy_price = tx_view["Origin_Buy_Price"].map(_num)
-                    tx_view["Yield_Current"] = np.where(buy_price > 0, (tx_view["Market_Price_Origin"] - buy_price) / buy_price, np.nan)
+                    if "Origin_Buy_Price" in tx_view.columns:
+                        buy_price = tx_view["Origin_Buy_Price"].map(_num)
+                        tx_view["Yield_Current"] = np.where(buy_price > 0, (tx_view["Market_Price_Origin"] - buy_price) / buy_price, np.nan)
 
-                    sale_yield_calc = np.where(buy_price > 0, (tx_view["Sell_Price_Origin"] - buy_price) / buy_price, np.nan)
-                    if "Yield_At_Sale" in tx_view.columns:
-                        existing_yield_sale = tx_view["Yield_At_Sale"]
-                        has_existing_yield = ~existing_yield_sale.map(lambda v: pd.isna(v) or _clean(v) == "")
-                        tx_view["Yield_At_Sale"] = np.where(has_existing_yield, existing_yield_sale, sale_yield_calc)
-                    else:
-                        tx_view["Yield_At_Sale"] = sale_yield_calc
+                        sale_yield_calc = np.where(buy_price > 0, (tx_view["Sell_Price_Origin"] - buy_price) / buy_price, np.nan)
+                        if "Yield_At_Sale" in tx_view.columns:
+                            existing_yield_sale = tx_view["Yield_At_Sale"]
+                            has_existing_yield = ~existing_yield_sale.map(lambda v: pd.isna(v) or _clean(v) == "")
+                            tx_view["Yield_At_Sale"] = np.where(has_existing_yield, existing_yield_sale, sale_yield_calc)
+                        else:
+                            tx_view["Yield_At_Sale"] = sale_yield_calc
 
                     # Backfill current-yield columns if sheet formulas are missing/blank.
                     cost_ils_series = tx_view["Cost_ILS"].map(_num) if "Cost_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
@@ -9765,15 +10074,33 @@ def main() -> None:
         trade_qty_abs = trade_view.get("Quantity", 0).map(_num).abs()
         trade_origin_currency = trade_view.get("Origin_Currency", "").map(_normalize_currency_code)
         trade_current_ils = trade_view.get("Current_Value_ILS", 0).map(_num)
-        trade_current_origin = np.where(
+        trade_current_origin = pd.Series(np.where(
             trade_origin_currency == "USD",
             trade_current_ils / manage_fx,
             trade_current_ils,
-        )
-        trade_view["Current_Asset_Value_Display"] = pd.Series(
-            np.where(trade_qty_abs > 1e-9, trade_current_origin / trade_qty_abs, 0.0),
-            index=trade_view.index,
-        )
+        ), index=trade_view.index)
+        # Prefer live market prices over stored snapshot price
+        _manage_tickers = tuple(sorted({
+            _clean(v).upper() for v in trade_view.get("Ticker", pd.Series([], dtype=str)).tolist() if _clean(v)
+        }))
+        _manage_live_prices = fetch_prices(_manage_tickers) if _manage_tickers else {}
+
+        def _manage_live_unit_price(row: pd.Series) -> float:
+            t = _clean(row.get("Ticker", "")).upper()
+            cur = _normalize_currency_code(row.get("Origin_Currency", ""))
+            if t and t in _manage_live_prices:
+                p_usd = float(_num(_manage_live_prices.get(t, 0.0)))
+                if p_usd > 0:
+                    return p_usd if cur == "USD" else (p_usd * manage_fx if cur == "ILS" else p_usd)
+            # Fallback: derive from stored current value / qty
+            try:
+                cur_orig = float(trade_current_origin.loc[row.name])
+            except Exception:
+                cur_orig = 0.0
+            qty_abs = abs(float(_num(row.get("Quantity", 0))))
+            return cur_orig / qty_abs if qty_abs > 1e-9 else 0.0
+
+        trade_view["Current_Asset_Value_Display"] = trade_view.apply(_manage_live_unit_price, axis=1)
         trade_view["Current_Asset_Value_Display"] = trade_view.apply(
             lambda r: _format_currency_value(float(r["Current_Asset_Value_Display"]), r.get("Origin_Currency", "")),
             axis=1,
@@ -10396,7 +10723,21 @@ def main() -> None:
                 c for c in recent_view.columns
                 if any(token in str(c).lower() for token in ["yield", "return", "תשואה", "pnl", "רווח"])
             ]
-            recent_styled = recent_view.style.format(na_rep="")
+            # Normalize yield/return values to ratio then format as %
+            pct_cols = [
+                c for c in recent_view.columns
+                if ("תשואה" in str(c) or "yield" in str(c).lower() or "return" in str(c).lower())
+            ]
+            def _to_ratio_for_display_dq(v: object) -> float:
+                s = _clean(v)
+                if not s:
+                    return np.nan
+                n = _num(v)
+                return n / 100.0 if "%" in s else n
+            for _pc in pct_cols:
+                recent_view[_pc] = recent_view[_pc].map(_to_ratio_for_display_dq)
+            recent_fmt: Dict[str, object] = {c: "{:.2%}" for c in pct_cols if c in recent_view.columns}
+            recent_styled = recent_view.style.format(recent_fmt, na_rep="")
             if signed_cols:
                 recent_styled = _apply_signed_color(recent_styled, signed_cols)
             _render_dataframe_adaptive(
@@ -10423,11 +10764,8 @@ def main() -> None:
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
         _render_recent_data_table(df)
 
-    if live_updates:
-        if page == page_manage:
-            st.sidebar.caption(tr("Live updates are paused on Trade Management page.", "עדכון חי מושהה בדף ניהול עסקאות."))
-        else:
-            st.sidebar.caption(tr("Live updates run on table fragments only.", "עדכון חי פועל רק על מקטעי טבלאות."))
+    if live_updates and page == page_manage:
+        st.sidebar.caption(tr("⏸ Live price refresh paused while editing trades.", "⏸ רענון חי מושהה בזמן עריכת עסקאות."))
 
 
 if __name__ == "__main__":
