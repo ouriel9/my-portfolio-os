@@ -8988,6 +8988,27 @@ def main() -> None:
                 "Configure a Web App URL or Spreadsheet ID below to enable sync.",
                 "הגדר Web App URL או Spreadsheet ID למטה כדי לאפשר סנכרון.",
             ))
+        # Warn when there are unsynced local changes that might confuse the pull result
+        if _dirty_badge > 0:
+            st.warning(tr(
+                f"⚠ **{_dirty_badge}** local change(s) pending. "
+                "Normal pull keeps them. Use **Force pull** to fully replace with Google data.",
+                f"⚠ **{_dirty_badge}** שינוי/ים מקומיים ממתינים לסנכרון. "
+                "שליפה רגילה שומרת אותם. השתמש ב**שליפה כפויה** להחלפה מוחלטת עם נתוני גוגל.",
+            ))
+        _force_pull = st.checkbox(
+            tr("Force pull (fully replace with Google data)",
+               "שליפה כפויה (החלף הכל בנתוני גוגל)"),
+            value=False,
+            key="chk_force_pull",
+            disabled=not has_google_connection,
+            help=tr(
+                "Ignores any unsynced local additions/edits and replaces the local store "
+                "with exactly what Google Sheets contains. Use this to fix a mismatch.",
+                "מתעלם מהוספות/עריכות מקומיות שלא סונכרנו ומחליף את המאגר המקומי "
+                "בדיוק לפי מה שיש בגוגל שיט. השתמש כשיש חוסר התאמה.",
+            ),
+        )
         if st.button(
             tr("↓ Pull from Google Sheets", "↓ שלוף מגוגל שיט"),
             use_container_width=True,
@@ -9000,7 +9021,8 @@ def main() -> None:
         ):
             with st.spinner(tr("Pulling from Google Sheets…", "שולף מגוגל שיט…")):
                 _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
-                    _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa, tr=tr
+                    _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa,
+                    tr=tr, force_full_replace=_force_pull,
                 )
             load_google_snapshot_data.clear()
             load_google_snapshot_data_via_gspread.clear()
@@ -11201,6 +11223,9 @@ def main() -> None:
                     st.success(tr("Trade added (local + Google Sheets)", "הרשומה נוספה (מקומי + גוגל שיט)"))
                     st.info(msg)
                     # Refresh local store from Google to get server-assigned Trade_IDs.
+                    # IMPORTANT: clear cache FIRST so we get the post-add snapshot (not stale).
+                    load_google_snapshot_data.clear()
+                    load_google_snapshot_data_via_gspread.clear()
                     try:
                         _fresh_df = load_google_snapshot_data(web_url_clean, api_token)
                         save_local_portfolio(
@@ -11210,8 +11235,6 @@ def main() -> None:
                         )
                     except Exception:
                         pass
-                    load_google_snapshot_data.clear()
-                    load_google_snapshot_data_via_gspread.clear()
                     st.rerun()
 
         elif mode == "edit":
