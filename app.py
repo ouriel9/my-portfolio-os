@@ -4040,18 +4040,23 @@ def load_local_settings() -> Dict[str, str]:
 
 
 def save_local_settings(
-    web_app_url: str,
-    api_token: str,
-    spreadsheet_ref: str,
-    worksheet_name: str,
-    service_account_file: str,
-    language: str,
-    theme_mode: str,
-    demo_mode: bool,
-    followed_symbols: str,
+    web_app_url: str = "",
+    api_token: str = "",
+    spreadsheet_ref: str = "",
+    worksheet_name: str = "",
+    service_account_file: str = "",
+    language: str = "",
+    theme_mode: str = "",
+    demo_mode: bool = False,
+    followed_symbols: str = "",
+    **extra: object,
 ) -> bool:
+    """Persist settings. Known fields are cleaned/typed; any extra kwargs
+    (e.g. github_repo, github_pat, github_branch, github_data_path) are
+    written through verbatim so the GitHub-sync UI can store its config
+    here without needing a separate file."""
     try:
-        payload = {
+        payload: Dict[str, object] = {
             "web_app_url": _clean(web_app_url),
             "api_token": _clean(api_token),
             "spreadsheet_ref": _clean(spreadsheet_ref),
@@ -4062,6 +4067,9 @@ def save_local_settings(
             "demo_mode": bool(demo_mode),
             "followed_symbols": _clean(followed_symbols),
         }
+        # Merge extras (GitHub config + any future fields)
+        for k, v in (extra or {}).items():
+            payload[k] = v
         LOCAL_SETTINGS_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return True
     except Exception:
@@ -4369,6 +4377,206 @@ def sync_portfolio_to_google(
         with _LOCAL_FILE_LOCK:
             _write_portfolio_atomic(raw)
         return True, tr(f"Pushed {pushed:,} changes to Google Sheets.", f"נדחפו {pushed:,} שינויים לגוגל שיט."), pushed
+    except Exception as exc:
+        return False, str(exc), 0
+
+
+# ───────────────────────────────────────────────────────────────────
+# GitHub-based portfolio sync (Google-Sheets-free cross-device sync)
+# ───────────────────────────────────────────────────────────────────
+#
+# Why: the user already pushes app.py to GitHub to get it onto their
+# phone. We piggyback on that workflow: the data file lives in the
+# SAME repo. Reads use the public raw URL (works without a token).
+# Writes use the GitHub Contents API + a fine-grained Personal Access
+# Token (PAT) the user pastes once into the Settings expander.
+#
+# A pull from device A overrides the local file; a push from device B
+# commits the merged JSON. There's a small "last-pulled-sha" stored in
+# the meta so we can detect cross-device conflicts (user can resolve
+# by force-push).
+GITHUB_REPO_DEFAULT = "ourielda/my-portfolio-os"  # owner/repo (override per user)
+GITHUB_DATA_PATH_DEFAULT = "portfolio_data.json"
+GITHUB_BRANCH_DEFAULT = "main"
+
+
+def _github_raw_url(repo: str, branch: str, path: str) -> str:
+    """Public raw URL for a file in a GitHub repo."""
+    return f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+
+
+def _github_contents_url(repo: str, path: str) -> str:
+    """API URL for the Contents endpoint of a single file."""
+    return f"https://api.github.com/repos/{repo}/contents/{path}"
+
+
+def sync_portfolio_from_github(
+    repo: str,
+    branch: str,
+    path: str,
+    pat: str = "",
+) -> Tuple[bool, str, int]:
+    """Pull `portfolio_data.json` from GitHub and replace the local file.
+
+    PAT is OPTIONAL: public repos work without it via the raw URL.
+    Private repos require the PAT (sent as Bearer token to the API).
+
+    Returns (ok, message, row_count).
+    """
+    try:
+        repo = _clean(repo) or GITHUB_REPO_DEFAULT
+        branch = _clean(branch) or GITHUB_BRANCH_DEFAULT
+        path = _clean(path) or GITHUB_DATA_PATH_DEFAULT
+        pat = _clean(pat)
+
+        if pat:
+            # Authenticated read via API (works for private repos too)
+            req = urlrequest.Request(_github_contents_url(repo, path) + f"?ref={branch}")
+            req.add_header("Authorization", f"Bearer {pat}")
+            req.add_header("Accept", "application/vnd.github+json")
+            req.add_header("X-GitHub-Api-Version", "2022-11-28")
+            with urlrequest.urlopen(req, timeout=15) as resp:
+                meta = json.loads(resp.read().decode("utf-8"))
+            content_b64 = meta.get("content", "")
+            sha = meta.get("sha", "")
+            import base64 as _b64
+            raw_text = _b64.b64decode(content_b64).decode("utf-8")
+        else:
+            # Public read via raw URL
+            with urlrequest.urlopen(_github_raw_url(repo, branch, path), timeout=15) as resp:
+                raw_text = resp.read().decode("utf-8")
+            sha = ""
+
+        payload = json.loads(raw_text)
+        if not isinstance(payload, dict) or "rows" not in payload:
+            return False, tr("Remote file is not a valid portfolio JSON.", "הקובץ ברימוט אינו JSON תיק תקין."), 0
+
+        # Normalize back into a DataFrame and use the same save pipeline.
+        rows = [r for r in payload.get("rows", []) if isinstance(r, dict) and not r.get("_deleted", False)]
+        if not rows:
+            return False, tr("Remote file has no rows.", "הקובץ ברימוט ריק."), 0
+        clean_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+        df_remote = _normalize_snapshot_df(pd.DataFrame(clean_rows))
+
+        # Same merge strategy as Google: keep locally-dirty rows.
+        dirty_ids: set = set()
+        try:
+            raw_local = _read_portfolio_file_raw()
+            dirty_ids = {
+                _clean(str(r.get("Trade_ID", "")))
+                for r in raw_local.get("rows", [])
+                if isinstance(r, dict) and bool(r.get("_dirty", False))
+            }
+        except Exception:
+            pass
+        local_df, _ = load_local_portfolio()
+        dirty_df = local_df[local_df["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)] if not local_df.empty else pd.DataFrame()
+        remote_non_dirty = df_remote[~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)]
+        merged_df = pd.concat([remote_non_dirty, dirty_df], ignore_index=True) if not dirty_df.empty else remote_non_dirty
+
+        save_local_portfolio(
+            merged_df,
+            preserve_dirty=True,
+            meta_patch={"_github_last_pulled_sha": sha, "_github_repo": repo, "_github_branch": branch, "_github_path": path},
+        )
+        _save_local_snapshot_cache(merged_df)
+        return True, tr(f"Pulled {len(df_remote):,} rows from GitHub.", f"נשלפו {len(df_remote):,} שורות מ-GitHub."), len(df_remote)
+    except urlerror.HTTPError as exc:
+        return False, tr(f"GitHub HTTP {exc.code}: {exc.reason}", f"שגיאת HTTP {exc.code} מ-GitHub: {exc.reason}"), 0
+    except Exception as exc:
+        return False, str(exc), 0
+
+
+def sync_portfolio_to_github(
+    repo: str,
+    branch: str,
+    path: str,
+    pat: str,
+    commit_message: str = "Update portfolio data via app",
+) -> Tuple[bool, str, int]:
+    """Push the local `portfolio_data.json` to GitHub via the Contents API.
+
+    Requires PAT (write scope: `contents:write` for fine-grained, or `repo`
+    for classic). Returns (ok, message, row_count).
+    """
+    try:
+        repo = _clean(repo) or GITHUB_REPO_DEFAULT
+        branch = _clean(branch) or GITHUB_BRANCH_DEFAULT
+        path = _clean(path) or GITHUB_DATA_PATH_DEFAULT
+        pat = _clean(pat)
+        if not pat:
+            return False, tr("GitHub PAT (Personal Access Token) is required for push.", "נדרש Personal Access Token של GitHub כדי לדחוף."), 0
+
+        # Read current local payload
+        if not LOCAL_PORTFOLIO_FILE.exists():
+            return False, tr("Local portfolio file is missing — nothing to push.", "אין קובץ תיק מקומי לדחיפה."), 0
+        local_text = LOCAL_PORTFOLIO_FILE.read_text(encoding="utf-8")
+
+        # Get current SHA from GitHub (needed for update)
+        sha = ""
+        try:
+            req_get = urlrequest.Request(_github_contents_url(repo, path) + f"?ref={branch}")
+            req_get.add_header("Authorization", f"Bearer {pat}")
+            req_get.add_header("Accept", "application/vnd.github+json")
+            req_get.add_header("X-GitHub-Api-Version", "2022-11-28")
+            with urlrequest.urlopen(req_get, timeout=15) as resp:
+                meta = json.loads(resp.read().decode("utf-8"))
+                sha = meta.get("sha", "")
+        except urlerror.HTTPError as exc:
+            if exc.code != 404:
+                raise  # Anything other than "file doesn't exist yet" → propagate
+
+        import base64 as _b64
+        body = {
+            "message": _clean(commit_message) or "Update portfolio data",
+            "content": _b64.b64encode(local_text.encode("utf-8")).decode("ascii"),
+            "branch": branch,
+        }
+        if sha:
+            body["sha"] = sha
+
+        req_put = urlrequest.Request(
+            _github_contents_url(repo, path),
+            data=json.dumps(body).encode("utf-8"),
+            method="PUT",
+        )
+        req_put.add_header("Authorization", f"Bearer {pat}")
+        req_put.add_header("Accept", "application/vnd.github+json")
+        req_put.add_header("X-GitHub-Api-Version", "2022-11-28")
+        req_put.add_header("Content-Type", "application/json")
+
+        with urlrequest.urlopen(req_put, timeout=20) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+
+        new_sha = (result.get("content") or {}).get("sha", "")
+
+        # Clear all _dirty flags + bump version (same flow as Google push)
+        try:
+            raw = _read_portfolio_file_raw()
+            for r in raw.get("rows", []):
+                if isinstance(r, dict):
+                    r.pop("_dirty", None)
+                    r.pop("_dirty_op", None)
+            raw.setdefault("_meta", {})
+            raw["_meta"]["_last_synced"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            raw["_meta"]["_github_last_pulled_sha"] = new_sha
+            raw["_meta"]["_github_repo"] = repo
+            raw["_meta"]["_github_branch"] = branch
+            raw["_meta"]["_github_path"] = path
+            raw["_meta"]["_version"] = int(raw["_meta"].get("_version", 0)) + 1
+            with _LOCAL_FILE_LOCK:
+                _write_portfolio_atomic(raw)
+        except Exception:
+            pass
+
+        rows_count = local_text.count('"Trade_ID"')  # rough row count
+        return True, tr(f"Pushed to GitHub ({rows_count:,} rows).", f"נדחף ל-GitHub ({rows_count:,} שורות)."), rows_count
+    except urlerror.HTTPError as exc:
+        try:
+            err_body = exc.read().decode("utf-8")
+        except Exception:
+            err_body = ""
+        return False, tr(f"GitHub HTTP {exc.code}: {exc.reason}. {err_body[:200]}", f"שגיאת HTTP {exc.code} מ-GitHub: {exc.reason}. {err_body[:200]}"), 0
     except Exception as exc:
         return False, str(exc), 0
 
@@ -6383,6 +6591,17 @@ def _pp_inject_productivity_layer(language: str) -> None:
             return;
           }}
           if (typing) return;
+          // Check the g-buffered "go to page" shortcuts FIRST so g→t doesn't
+          // get intercepted by the standalone "t = toggle theme" handler.
+          if (gBuffer && (Date.now() - gBuffer) < 900) {{
+            gBuffer = 0;
+            if (e.key === 'd') {{ runCommand('nav-dashboard'); return; }}
+            else if (e.key === 't') {{ runCommand('nav-manage'); return; }}
+            else if (e.key === 'r') {{ runCommand('nav-risk'); return; }}
+            else if (e.key === 's') {{ runCommand('nav-simulator'); return; }}
+            else if (e.key === 'q') {{ runCommand('nav-quality'); return; }}
+            // unknown second key → just clear the buffer and fall through
+          }}
           if (e.key === '/') {{ e.preventDefault(); runCommand('focus-search'); return; }}
           if (e.key === '?') {{ e.preventDefault(); runCommand('help'); return; }}
           if (e.key === 't') {{ runCommand('toggle-theme'); return; }}
@@ -6392,14 +6611,6 @@ def _pp_inject_productivity_layer(language: str) -> None:
             return;
           }}
           if (e.key === 'g') {{ gBuffer = Date.now(); return; }}
-          if (gBuffer && (Date.now() - gBuffer) < 900) {{
-            gBuffer = 0;
-            if (e.key === 'd') runCommand('nav-dashboard');
-            else if (e.key === 't') runCommand('nav-manage');
-            else if (e.key === 'r') runCommand('nav-risk');
-            else if (e.key === 's') runCommand('nav-simulator');
-            else if (e.key === 'q') runCommand('nav-quality');
-          }}
         }}, true);
       }} catch(e) {{}}
     }})();
@@ -8759,6 +8970,96 @@ def main() -> None:
                     else:
                         st.error(f"❌ {_push_msg}")
 
+    # ── GitHub sync (Google-Sheets-free cross-device sync) ─────────────
+    # The user already pushes app.py to GitHub. Now portfolio_data.json
+    # rides along — a Pull on the phone fetches the same JSON the PC
+    # last pushed, and vice versa. Public-repo reads need no token;
+    # writes need a fine-grained PAT (contents:write).
+    _gh_repo = _clean(settings.get("github_repo", GITHUB_REPO_DEFAULT)) or GITHUB_REPO_DEFAULT
+    _gh_branch = _clean(settings.get("github_branch", GITHUB_BRANCH_DEFAULT)) or GITHUB_BRANCH_DEFAULT
+    _gh_path = _clean(settings.get("github_data_path", GITHUB_DATA_PATH_DEFAULT)) or GITHUB_DATA_PATH_DEFAULT
+    _gh_pat = _clean(settings.get("github_pat", ""))
+    _gh_label = tr("🐙 Sync via GitHub", "🐙 סנכרון דרך GitHub")
+    if _dirty_badge > 0:
+        _gh_label += f" · {_dirty_badge} {tr('pending', 'ממתינ/ים')}"
+    with st.sidebar.expander(_gh_label, expanded=False):
+        st.caption(tr(
+            f"Repo: **{_gh_repo}** · branch: **{_gh_branch}** · file: **{_gh_path}**",
+            f"מאגר: **{_gh_repo}** · ענף: **{_gh_branch}** · קובץ: **{_gh_path}**",
+        ))
+        if not _gh_pat:
+            st.info(tr(
+                "Public-repo PULL works without a token. To PUSH, paste a "
+                "fine-grained Personal Access Token below (Settings → Developer settings).",
+                "ניתן לבצע PULL ממאגר ציבורי ללא טוקן. לביצוע PUSH יש להדביק "
+                "Personal Access Token מ-Settings → Developer settings.",
+            ))
+        _gh_pull_col, _gh_push_col = st.columns(2)
+        with _gh_pull_col:
+            if st.button(
+                tr("↓ Pull from GitHub", "↓ שלוף מ-GitHub"),
+                use_container_width=True,
+                key="btn_pull_github",
+                help=tr("Replace local data with the latest committed JSON in the repo. Locally-dirty rows are preserved.", "החלף את הנתונים המקומיים בקובץ JSON שנדחף לאחרונה למאגר. שורות עם שינויים מקומיים נשמרות."),
+            ):
+                with st.spinner(tr("Pulling from GitHub…", "שולף מ-GitHub…")):
+                    _gh_ok, _gh_msg, _gh_n = sync_portfolio_from_github(_gh_repo, _gh_branch, _gh_path, _gh_pat)
+                if _gh_ok:
+                    st.success(f"✅ {_gh_msg}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {_gh_msg}")
+        with _gh_push_col:
+            if st.button(
+                tr("↑ Push to GitHub", "↑ דחוף ל-GitHub"),
+                use_container_width=True,
+                key="btn_push_github",
+                disabled=(not _gh_pat),
+                type="primary" if _dirty_badge > 0 else "secondary",
+                help=tr("Commit the local portfolio JSON to the repo. Requires a PAT with contents:write.", "מבצע commit של ה-JSON המקומי למאגר. דורש PAT עם contents:write."),
+            ):
+                with st.spinner(tr("Pushing to GitHub…", "דוחף ל-GitHub…")):
+                    _gh_ok, _gh_msg, _gh_n = sync_portfolio_to_github(_gh_repo, _gh_branch, _gh_path, _gh_pat)
+                if _gh_ok:
+                    st.success(f"✅ {_gh_msg}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {_gh_msg}")
+        # Inline editable settings (so the user can swap repo/PAT here w/o
+        # opening a separate Settings panel).
+        with st.popover(tr("⚙ GitHub settings", "⚙ הגדרות GitHub"), use_container_width=True):
+            _gh_repo_in = st.text_input(
+                tr("Repository (owner/name)", "מאגר (owner/name)"),
+                value=_gh_repo, key="gh_repo_input",
+            )
+            _gh_branch_in = st.text_input(
+                tr("Branch", "ענף"), value=_gh_branch, key="gh_branch_input",
+            )
+            _gh_path_in = st.text_input(
+                tr("Data file path", "נתיב הקובץ"),
+                value=_gh_path, key="gh_path_input",
+            )
+            _gh_pat_in = st.text_input(
+                tr("Personal Access Token (PAT)", "Personal Access Token"),
+                value=_gh_pat, type="password", key="gh_pat_input",
+                help=tr(
+                    "Create at github.com → Settings → Developer settings → Personal access tokens → Fine-grained → Repository access: select this repo → Permissions: Contents: Read and write.",
+                    "ניתן ליצור ב-github.com → Settings → Developer settings → Personal access tokens → Fine-grained → גישה למאגר זה → Contents: Read and write.",
+                ),
+            )
+            if st.button(tr("Save GitHub settings", "שמור הגדרות GitHub"), key="btn_save_gh_settings"):
+                try:
+                    _existing = load_local_settings() or {}
+                    _existing["github_repo"] = _clean(_gh_repo_in)
+                    _existing["github_branch"] = _clean(_gh_branch_in)
+                    _existing["github_data_path"] = _clean(_gh_path_in)
+                    _existing["github_pat"] = _clean(_gh_pat_in)
+                    save_local_settings(**_existing)
+                    st.success(tr("Saved.", "נשמר."))
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
         web_app_url = st.text_input("Apps Script Web App URL", value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
         api_token = st.text_input("API Token", value=settings.get("api_token", ""), type="password")
@@ -10518,13 +10819,10 @@ def main() -> None:
             if selected_trade_id:
                 st.caption(f"{tr('Selected Trade_ID', 'Trade_ID נבחר')}: `{selected_trade_id}`")
 
-        mode_label_map = {
-            tr("Add", "הוספה"): "add",
-            tr("Edit", "עריכה"): "edit",
-            tr("Delete", "מחיקה"): "delete",
-        }
-        mode_label = st.radio(tr("Action", "פעולה"), list(mode_label_map.keys()), horizontal=True)
-        mode = mode_label_map[mode_label]
+        # `mode` was already chosen above (Action radio at the top of the
+        # page — see "manage_top_action" key). Reuse that value instead of
+        # rendering a second radio (which would crash on duplicate widget id).
+        mode = st.session_state.get("_manage_mode", "add")
         editable_cols = [
             "Current_Location", "Platform", "Type", "Ticker", "Purchase_Date", "Quantity",
             "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Sell_Date",
@@ -10795,18 +11093,25 @@ def main() -> None:
                             st.error(e)
                         st.stop()
 
+                    # LOCAL-FIRST: ALWAYS write to the local store first so
+                    # the row is immediately visible AND the _dirty flag is
+                    # set. Then optionally try the Google round-trip; on
+                    # success we'd clear the dirty flag (Google sync_trade_to_sheet
+                    # already handles this internally on success).
+                    apply_local_trade("add", new_row)
+
                     if has_google_write:
                         ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
                     else:
-                        # No Google connection — write locally only
-                        apply_local_trade("add", new_row)
                         st.success(tr("Trade saved locally (no Google connection).", "הרשומה נשמרה מקומית (ללא חיבור לגוגל)."))
                         st.rerun()
                         ok, msg = False, ""    # ensure we don't fall through
 
                     if not ok and has_google_write:
-                        # Store error in session_state so it survives the upcoming rerun
-                        st.session_state["_add_trade_google_error"] = f"{tr('Add failed — saved locally. Use ☁ Sync to push when ready.', 'הוספה נכשלה בגוגל — נשמר מקומית. השתמש ב-☁ סנכרון כדי לדחוף.')}\n{msg}"
+                        # Stay calm — local store already has it (with _dirty=True),
+                        # so the Sync expander will show "1 pending" + the user
+                        # can hit Push later when Google is reachable again.
+                        st.session_state["_add_trade_google_error"] = f"{tr('Add failed on Google — saved locally. Use ☁ Sync to push when ready.', 'הוספה נכשלה בגוגל — נשמר מקומית. השתמש ב-☁ סנכרון כדי לדחוף.')}\n{msg}"
                     elif ok:
                         if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
                             src = dict(partial_sell_meta.get("source_row", {}))
