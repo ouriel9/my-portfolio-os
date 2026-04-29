@@ -4213,12 +4213,14 @@ def save_local_portfolio(
             return False
 
 
-def apply_local_trade(op: str, trade_row: Dict[str, object]) -> bool:
+def apply_local_trade(op: str, trade_row: Dict[str, object], *, mark_dirty: bool = True) -> bool:
     """Apply a single trade operation to the local store.
 
     Thread-safe (acquires _LOCAL_FILE_LOCK), atomic write, and version-bumped.
     op: "add" | "edit" | "delete"
     trade_row must contain Trade_ID (for edit/delete).
+    mark_dirty: True for offline-first (marks rows as unsynced);
+                False for Google-first atomic (trade already pushed, just mirror locally).
     Returns True on success.
     """
     with _LOCAL_FILE_LOCK:
@@ -4232,8 +4234,8 @@ def apply_local_trade(op: str, trade_row: Dict[str, object]) -> bool:
 
             if op == "add":
                 new_r = _portfolio_row_to_dict(trade_row)
-                new_r["_dirty"] = True
-                new_r["_dirty_op"] = "add"
+                new_r["_dirty"] = mark_dirty
+                new_r["_dirty_op"] = "add" if mark_dirty else ""
                 new_r["_deleted"] = False
                 rows.append(new_r)
 
@@ -4242,23 +4244,30 @@ def apply_local_trade(op: str, trade_row: Dict[str, object]) -> bool:
                 for i, r in enumerate(rows):
                     if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
                         updated_r = _portfolio_row_to_dict(trade_row)
-                        updated_r["_dirty"] = True
-                        updated_r["_dirty_op"] = r.get("_dirty_op", "edit") if r.get("_dirty_op") == "add" else "edit"
+                        if mark_dirty:
+                            updated_r["_dirty"] = True
+                            updated_r["_dirty_op"] = r.get("_dirty_op", "edit") if r.get("_dirty_op") == "add" else "edit"
+                        else:
+                            updated_r["_dirty"] = False
+                            updated_r["_dirty_op"] = ""
                         updated_r["_deleted"] = False
                         rows[i] = updated_r
                         updated = True
                         break
                 if not updated:   # trade not in store yet — treat as add
                     new_r = _portfolio_row_to_dict(trade_row)
-                    new_r["_dirty"] = True
-                    new_r["_dirty_op"] = "add"
+                    new_r["_dirty"] = mark_dirty
+                    new_r["_dirty_op"] = "add" if mark_dirty else ""
                     new_r["_deleted"] = False
                     rows.append(new_r)
 
             elif op == "delete":
                 for i, r in enumerate(rows):
                     if isinstance(r, dict) and _clean(str(r.get("Trade_ID", ""))) == tid:
-                        if r.get("_dirty_op") == "add":
+                        if not mark_dirty:
+                            # Google-first: already deleted on Google → remove locally entirely
+                            rows.pop(i)
+                        elif r.get("_dirty_op") == "add":
                             # Never synced → just erase it
                             rows.pop(i)
                         else:
@@ -11136,8 +11145,8 @@ def main() -> None:
                         st.error(f"{tr('Push to Google failed — no changes saved.', 'הדחיפה לגוגל נכשלה — לא נשמר שום שינוי.')}: {msg}")
                         st.stop()
 
-                    # Google succeeded → save locally
-                    apply_local_trade("add", new_row)
+                    # Google succeeded → save locally (mark_dirty=False: already on Google)
+                    apply_local_trade("add", new_row, mark_dirty=False)
 
                     if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
                         src = dict(partial_sell_meta.get("source_row", {}))
@@ -11171,14 +11180,18 @@ def main() -> None:
                             )
                             st.error(msg_edit)
                         else:
-                            apply_local_trade("edit", source_update)
+                            apply_local_trade("edit", source_update, mark_dirty=False)
 
                     st.success(tr("Trade added (local + Google Sheets)", "הרשומה נוספה (מקומי + גוגל שיט)"))
                     st.info(msg)
                     # Refresh local store from Google to get server-assigned Trade_IDs.
                     try:
                         _fresh_df = load_google_snapshot_data(web_url_clean, api_token)
-                        save_local_portfolio(_fresh_df, preserve_dirty=True)
+                        save_local_portfolio(
+                            _fresh_df,
+                            preserve_dirty=False,
+                            meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
+                        )
                     except Exception:
                         pass
                     load_google_snapshot_data.clear()
@@ -11255,7 +11268,7 @@ def main() -> None:
                         # GOOGLE-FIRST ATOMIC: push to Google first; save locally only on success.
                         ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "edit", edited)
                         if ok:
-                            apply_local_trade("edit", edited)
+                            apply_local_trade("edit", edited, mark_dirty=False)
                             st.success(tr("Trade updated (local + Google Sheets)", "הרשומה עודכנה (מקומי + גוגל שיט)"))
                             st.info(msg)
                             load_google_snapshot_data.clear()
@@ -11290,7 +11303,7 @@ def main() -> None:
                     ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "delete", delete_payload)
                     if ok:
                         # Remove from local store (clean delete — already on Google)
-                        apply_local_trade("delete", delete_payload)
+                        apply_local_trade("delete", delete_payload, mark_dirty=False)
                         st.success(tr("Trade deleted (local + Google Sheets)", "הרשומה נמחקה (מקומי + גוגל שיט)"))
                         st.info(msg)
                         load_google_snapshot_data.clear()
