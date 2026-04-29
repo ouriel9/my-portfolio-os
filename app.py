@@ -10388,6 +10388,25 @@ def main() -> None:
                 "הגדר Web App URL כדי לסנכרן גם עם גוגל שיט.",
             ))
 
+        # ── Action radio FIRST (Add / Edit / Delete) ───────────────────────
+        # Per UX overhaul: form ON TOP, full snapshot table at the BOTTOM.
+        # For "Add" we don't need the row-selector at all — show only the
+        # form. For Edit/Delete the row-selector + the edit/delete form
+        # appear together (selection still required to act on a row).
+        _action_label_map = {
+            tr("➕ Add", "➕ הוספה"): "add",
+            tr("✏ Edit", "✏ עריכה"): "edit",
+            tr("🗑 Delete", "🗑 מחיקה"): "delete",
+        }
+        _action_label = st.radio(
+            tr("Action", "פעולה"),
+            list(_action_label_map.keys()),
+            horizontal=True,
+            key="manage_top_action",
+        )
+        mode = _action_label_map[_action_label]
+        st.session_state["_manage_mode"] = mode
+
         st.caption(tr(f"Showing {len(trades):,} snapshot transactions, including closed trades.", f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות."))
         trade_view = trades.copy()
         manage_fx = _safe_quote("USDILS=X")
