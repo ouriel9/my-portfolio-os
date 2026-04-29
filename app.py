@@ -4301,6 +4301,7 @@ def sync_portfolio_from_google(
     spreadsheet_ref: str,
     worksheet_name: str,
     service_account_file: str,
+    tr=None,
 ) -> Tuple[bool, str, int]:
     """Pull latest data from Google Sheets and save to local store.
 
@@ -4308,6 +4309,8 @@ def sync_portfolio_from_google(
     overwritten by the remote pull.
     Returns (ok, message, row_count).
     """
+    if tr is None:
+        tr = lambda en, he: en
     try:
         df_remote, _src = load_snapshot_data(
             web_app_url, api_token, spreadsheet_ref, worksheet_name, service_account_file
@@ -4343,11 +4346,14 @@ def sync_portfolio_from_google(
 def sync_portfolio_to_google(
     web_app_url: str,
     api_token: str,
+    tr=None,
 ) -> Tuple[bool, str, int]:
     """Push all locally-dirty trades to Google Sheets.
 
     Returns (ok, message, pushed_count).
     """
+    if tr is None:
+        tr = lambda en, he: en
     try:
         raw = _read_portfolio_file_raw()
         dirty = [r for r in raw.get("rows", []) if isinstance(r, dict) and bool(r.get("_dirty", False))]
@@ -8941,7 +8947,7 @@ def main() -> None:
             ):
                 with st.spinner(tr("Pulling from Google Sheets…", "שולף מגוגל שיט…")):
                     _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
-                        _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa
+                        _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa, tr=tr
                     )
                 load_google_snapshot_data.clear()
                 load_google_snapshot_data_via_gspread.clear()
@@ -8963,7 +8969,7 @@ def main() -> None:
                     st.error(tr("Apps Script Web App URL required for push.", "נדרש קישור Web App של Apps Script לדחיפה."))
                 else:
                     with st.spinner(tr("Pushing to Google Sheets…", "דוחף לגוגל שיט…")):
-                        _push_ok, _push_msg, _push_n = sync_portfolio_to_google(_sync_web_url, _sync_token)
+                        _push_ok, _push_msg, _push_n = sync_portfolio_to_google(_sync_web_url, _sync_token, tr=tr)
                     if _push_ok:
                         st.success(f"✅ {_push_msg}")
                         st.rerun()
