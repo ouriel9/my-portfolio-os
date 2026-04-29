@@ -217,14 +217,16 @@ COLUMN_LABELS = {
     "Yield_Origin": {LANG_EN: "Net Return (Origin)", LANG_HE: "תשואה נטו (מקור)"},
     "Yield_ILS": {LANG_EN: "Net Return (ILS)", LANG_HE: "תשואה נטו (₪)"},
     "Asset": {LANG_EN: "Target Asset", LANG_HE: "מטבע יעד"},
-    "Direct_Qty": {LANG_EN: "Direct Holding (Qty)", LANG_HE: "אחזקה ישירה (כמות)"},
-    "Direct_ILS": {LANG_EN: "Direct Holding (ILS)", LANG_HE: "אחזקה ישירה (₪)"},
-    "ETF_Qty": {LANG_EN: "ETF Holding (Units)", LANG_HE: "דרך קרן סל (יחידות)"},
-    "ETF_ILS": {LANG_EN: "ETF Holding (ILS)", LANG_HE: "דרך קרן סל (₪)"},
-    "Total_Exposure_ILS": {LANG_EN: "Total Exposure (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
-    "Estimated_BTC_Qty": {LANG_EN: "Estimated BTC Qty (incl. IBIT/MSTR)", LANG_HE: "כמות BTC מוערכת (כולל IBIT/MSTR)"},
-    "Estimated_ETH_Qty": {LANG_EN: "Estimated ETH Qty (incl. ETHA)", LANG_HE: "כמות ETH מוערכת (כולל ETHA)"},
-    "Estimated_SOL_Qty": {LANG_EN: "Estimated SOL Qty (incl. BSOL)", LANG_HE: "כמות SOL מוערכת (כולל BSOL)"},
+    # Compact English labels — fit Streamlit's default column widths so
+    # the Crypto Concentration table headers don't get truncated mid-word.
+    "Direct_Qty": {LANG_EN: "Direct Qty", LANG_HE: "אחזקה ישירה (כמות)"},
+    "Direct_ILS": {LANG_EN: "Direct (ILS)", LANG_HE: "אחזקה ישירה (₪)"},
+    "ETF_Qty": {LANG_EN: "ETF Qty", LANG_HE: "דרך קרן סל (יחידות)"},
+    "ETF_ILS": {LANG_EN: "ETF (ILS)", LANG_HE: "דרך קרן סל (₪)"},
+    "Total_Exposure_ILS": {LANG_EN: "Total (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
+    "Estimated_BTC_Qty": {LANG_EN: "Est. BTC Qty", LANG_HE: "כמות BTC מוערכת (כולל IBIT/MSTR)"},
+    "Estimated_ETH_Qty": {LANG_EN: "Est. ETH Qty", LANG_HE: "כמות ETH מוערכת (כולל ETHA)"},
+    "Estimated_SOL_Qty": {LANG_EN: "Est. SOL Qty", LANG_HE: "כמות SOL מוערכת (כולל BSOL)"},
     "Category": {LANG_EN: "Category", LANG_HE: "סוג"},
     "Yield": {LANG_EN: "Return", LANG_HE: "תשואה"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
@@ -7370,27 +7372,43 @@ def render_simulator_page(
     except Exception:
         _sim_ls = None
 
-    # ── Hydrate persisted inputs (global once + per-mode re-hydration) ──
-    # Global once: load ALL keys on the very first visit so both modes
-    # start populated from browser localStorage OR disk (in that priority).
+    # ── Hydrate persisted inputs ────────────────────────────────────────
+    # Strategy:
+    #   1. On EVERY rerun we attempt to re-hydrate from localStorage. The
+    #      component may return None on the very first render (it loads
+    #      asynchronously), so retrying every rerun catches the late-arrival
+    #      case which previously produced "values reset" complaints.
+    #   2. Hydration is ADDITIVE — keys already present in session_state win.
+    #      So after the user edits an input, that value is what gets saved
+    #      back via save_sim_prefs / setItem on the same rerun, and
+    #      re-hydration on the next rerun reads the same value.
+    #   3. Disk fallback runs ONCE per session (server-side; shared between
+    #      sessions on the same machine).
+    def _hydrate_from_ls() -> None:
+        if _sim_ls is None:
+            return
+        try:
+            _ls_raw = _sim_ls.getItem("sim_prefs")
+            if not _ls_raw:
+                return
+            _ls_dict = json.loads(_ls_raw) if isinstance(_ls_raw, str) else _ls_raw
+            if not isinstance(_ls_dict, dict):
+                return
+            for _k, _v in _ls_dict.items():
+                if _k not in st.session_state and _v is not None:
+                    st.session_state[_k] = _v
+        except Exception:
+            pass
+
+    # Always retry localStorage every rerun (it may have just initialized)
+    _hydrate_from_ls()
+
+    # First-visit-only: hydrate from server-side disk fallback
     if not st.session_state.get("_sim_prefs_hydrated", False):
-        # 1. Browser localStorage — device-local, survives refresh on any device
-        if _sim_ls is not None:
-            try:
-                _ls_raw = _sim_ls.getItem("sim_prefs")
-                if _ls_raw:
-                    _ls_dict = json.loads(_ls_raw) if isinstance(_ls_raw, str) else _ls_raw
-                    if isinstance(_ls_dict, dict):
-                        for _k, _v in _ls_dict.items():
-                            if _k not in st.session_state:
-                                st.session_state[_k] = _v
-            except Exception:
-                pass
-        # 2. Disk fallback (sim_user_prefs.json) — server-side, shared between sessions
         try:
             _prefs = load_sim_prefs()
             for _k, _v in _prefs.items():
-                if _k not in st.session_state:
+                if _k not in st.session_state and _v is not None:
                     st.session_state[_k] = _v
         except Exception:
             pass
@@ -7723,18 +7741,22 @@ def render_simulator_page(
             "השווי הכולל מהוון לפי האינפלציה — כוח הקנייה האמיתי בעתיד.",
         ),
     )
+    _monthly_real = sim_safe_withdrawal_monthly(total_real, swr_pct)
     k3.metric(
         tr("Monthly pension (NET)", "קצבה חודשית (NET)"),
         f"₪{monthly_pension:,.0f}",
+        # Green delta is ALWAYS the inflation-adjusted MONTHLY value (per
+        # user spec — "monthly real, not yearly"). When inflation = 0 the
+        # real value equals the nominal value (still meaningful).
         delta=(
-            f"₪{sim_safe_withdrawal_monthly(total_real, swr_pct):,.0f} "
+            f"₪{_monthly_real:,.0f} "
             + tr("real/month (inflation-adj.)", "ריאלי/חודש (מותאם אינפלציה)")
-        ) if inflation_pct > 0 else f"₪{monthly_pension * 12:,.0f} / {tr('year', 'שנה')}",
+        ),
         help=tr(
             "Nominal monthly withdrawal at your chosen SWR% (on NET total). "
-            "The green delta shows the real purchasing-power equivalent today.",
+            "The green delta shows the real purchasing-power equivalent today, monthly.",
             "משיכה חודשית נומינלית לפי שיעור SWR שנבחר (על השווי הנקי). "
-            "הדלתא הירוקה מציגה את הערך הריאלי – כוח הקנייה בערכי היום.",
+            "הדלתא הירוקה מציגה את הערך הריאלי החודשי – כוח הקנייה בערכי היום.",
         ),
     )
     k4.metric(
