@@ -8936,45 +8936,41 @@ def main() -> None:
                 "Configure a Web App URL or Spreadsheet ID below to enable sync.",
                 "הגדר Web App URL או Spreadsheet ID למטה כדי לאפשר סנכרון.",
             ))
-        _pull_col, _push_col = st.columns(2)
-        with _pull_col:
-            if st.button(
-                tr("↓ Pull", "↓ שלוף מגוגל"),
-                use_container_width=True,
-                disabled=not has_google_connection,
-                help=tr("Download the latest Google Sheets data and update your local store. Your unsynced local changes are preserved.", "הורד את הנתונים העדכניים מגוגל שיט ועדכן את המאגר המקומי. השינויים המקומיים שלך נשמרים."),
-                key="btn_pull_google",
-            ):
-                with st.spinner(tr("Pulling from Google Sheets…", "שולף מגוגל שיט…")):
-                    _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
-                        _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa, tr=tr
-                    )
-                load_google_snapshot_data.clear()
-                load_google_snapshot_data_via_gspread.clear()
-                if _pull_ok:
-                    st.success(f"✅ {_pull_msg}")
-                    st.rerun()
-                else:
-                    st.error(f"❌ {_pull_msg}")
-        with _push_col:
-            if st.button(
-                tr("↑ Push", "↑ דחוף לגוגל"),
-                use_container_width=True,
-                disabled=(not has_google_connection) or (_dirty_badge == 0),
-                help=tr("Upload all locally-changed trades to Google Sheets.", "העלה את כל השינויים המקומיים לגוגל שיט."),
-                key="btn_push_google",
-                type="primary" if _dirty_badge > 0 else "secondary",
-            ):
-                if not is_apps_script_web_app_url(_sync_web_url):
-                    st.error(tr("Apps Script Web App URL required for push.", "נדרש קישור Web App של Apps Script לדחיפה."))
-                else:
-                    with st.spinner(tr("Pushing to Google Sheets…", "דוחף לגוגל שיט…")):
-                        _push_ok, _push_msg, _push_n = sync_portfolio_to_google(_sync_web_url, _sync_token, tr=tr)
-                    if _push_ok:
-                        st.success(f"✅ {_push_msg}")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {_push_msg}")
+        if st.button(
+            tr("↓ Pull from Google Sheets", "↓ שלוף מגוגל שיט"),
+            use_container_width=True,
+            disabled=not has_google_connection,
+            help=tr(
+                "Download the latest trades AND manual deposits from Google Sheets and update your local store.",
+                "הורד את העסקאות והפקדות הידניות האחרונות מגוגל שיט ועדכן את המאגר המקומי.",
+            ),
+            key="btn_pull_google",
+        ):
+            with st.spinner(tr("Pulling from Google Sheets…", "שולף מגוגל שיט…")):
+                _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
+                    _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa, tr=tr
+                )
+            load_google_snapshot_data.clear()
+            load_google_snapshot_data_via_gspread.clear()
+            if _pull_ok:
+                # Also pull manual deposits for both modes
+                _dep_errors: List[str] = []
+                if is_apps_script_web_app_url(_sync_web_url) and bool(_sync_token):
+                    for _dep_mode in ["live", "demo"]:
+                        _dep_ok, _dep_rows, _dep_err = load_manual_deposits_remote(_sync_web_url, _sync_token, _dep_mode)
+                        if _dep_ok:
+                            _dep_store = load_manual_deposits_store()
+                            _dep_store[_dep_mode] = _dep_rows
+                            save_manual_deposits_store(_dep_store)
+                            # Reset loaded flag so dashboard reloads from local
+                            st.session_state.pop(f"manual_deposits_loaded_{_dep_mode}", None)
+                        else:
+                            _dep_errors.append(f"{_dep_mode}: {_dep_err}")
+                _dep_note = f"  \n⚠ {tr('Deposits pull had errors', 'שגיאה בשליפת הפקדות')}: {'; '.join(_dep_errors)}" if _dep_errors else ""
+                st.success(f"✅ {_pull_msg}{_dep_note}")
+                st.rerun()
+            else:
+                st.error(f"❌ {_pull_msg}")
 
     # ── GitHub sync (Google-Sheets-free cross-device sync) ─────────────
     # The user already pushes app.py to GitHub. Now portfolio_data.json
@@ -10145,22 +10141,23 @@ def main() -> None:
 
             action_cols = st.columns([1, 1, 3])
             if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}"):
-                store_payload = load_manual_deposits_store()
-                store_payload[deposit_mode] = normalized_rows
-                save_ok = save_manual_deposits_store(store_payload)
-                if can_sync_remote:
+                if not can_sync_remote:
+                    st.error(tr(
+                        "Google Sheets connection required to save deposits. Configure a valid Web App URL.",
+                        "נדרש חיבור לגוגל שיט כדי לשמור הפקדות. הגדר Web App URL תקין.",
+                    ))
+                else:
+                    # GOOGLE-FIRST ATOMIC: push to Google first; save locally only on success.
                     remote_ok, remote_msg = save_manual_deposits_remote(web_url_for_sync, api_token, deposit_mode, normalized_rows)
                     if remote_ok:
+                        store_payload = load_manual_deposits_store()
+                        store_payload[deposit_mode] = normalized_rows
+                        save_manual_deposits_store(store_payload)
                         st.session_state[source_state_key] = "cloud"
                         st.success(tr("Saved and synced to cloud", "נשמר וסונכרן לענן"))
                     else:
                         msg = remote_msg or tr("Unknown sync error", "שגיאת סנכרון לא ידועה")
-                        st.warning(f"{tr('Saved locally only', 'נשמר מקומית בלבד')}: {msg}")
-                elif save_ok:
-                    st.session_state[source_state_key] = "local"
-                    st.success(tr("Saved locally on this device", "נשמר מקומית במכשיר זה"))
-                else:
-                    st.error(tr("Failed to save deposits", "שמירת ההפקדות נכשלה"))
+                        st.error(f"{tr('Push to Google failed — no changes saved.', 'הדחיפה לגוגל נכשלה — לא נשמר שום שינוי.')}: {msg}")
 
             if action_cols[1].button(tr("Reload Cloud", "טען מהענן"), key=f"manual_deposits_reload_{deposit_mode}"):
                 if not can_sync_remote:
@@ -11099,79 +11096,67 @@ def main() -> None:
                             st.error(e)
                         st.stop()
 
-                    # LOCAL-FIRST: ALWAYS write to the local store first so
-                    # the row is immediately visible AND the _dirty flag is
-                    # set. Then optionally try the Google round-trip; on
-                    # success we'd clear the dirty flag (Google sync_trade_to_sheet
-                    # already handles this internally on success).
+                    # GOOGLE-FIRST ATOMIC: push to Google first; save locally only on success.
+                    if not has_google_write:
+                        st.error(tr(
+                            "Google Sheets connection required. Configure a valid Web App URL to save trades.",
+                            "נדרש חיבור לגוגל שיט. הגדר Web App URL תקין כדי לשמור עסקאות.",
+                        ))
+                        st.stop()
+
+                    ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
+                    if not ok:
+                        st.error(f"{tr('Push to Google failed — no changes saved.', 'הדחיפה לגוגל נכשלה — לא נשמר שום שינוי.')}: {msg}")
+                        st.stop()
+
+                    # Google succeeded → save locally
                     apply_local_trade("add", new_row)
 
-                    if has_google_write:
-                        ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "add", new_row)
-                    else:
-                        st.success(tr("Trade saved locally (no Google connection).", "הרשומה נשמרה מקומית (ללא חיבור לגוגל)."))
-                        st.rerun()
-                        ok, msg = False, ""    # ensure we don't fall through
-
-                    if not ok and has_google_write:
-                        # Stay calm — local store already has it (with _dirty=True),
-                        # so the Sync expander will show "1 pending" + the user
-                        # can hit Push later when Google is reachable again.
-                        st.session_state["_add_trade_google_error"] = f"{tr('Add failed on Google — saved locally. Use ☁ Sync to push when ready.', 'הוספה נכשלה בגוגל — נשמר מקומית. השתמש ב-☁ סנכרון כדי לדחוף.')}\n{msg}"
-                    elif ok:
-                        if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
-                            src = dict(partial_sell_meta.get("source_row", {}))
-                            src_trade_id = _clean(partial_sell_meta.get("source_trade_id", ""))
-                            source_update = {
-                                "Trade_ID": src_trade_id,
-                                "Current_Location": _clean(src.get("Current_Location", "")),
-                                "Platform": _clean(src.get("Platform", "")),
-                                "Type": _clean(src.get("Type", "")),
-                                "Ticker": _clean(src.get("Ticker", "")).upper(),
-                                "Purchase_Date": _clean(src.get("Purchase_Date", "")),
-                                "Quantity": float(_num(partial_sell_meta.get("remaining_qty", 0.0))),
-                                "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0.0))),
-                                "Cost_Origin": float(_num(partial_sell_meta.get("remaining_cost", 0.0))),
-                                "Origin_Currency": _normalize_currency_code(src.get("Origin_Currency", "")),
-                                "Commission": float(_num(partial_sell_meta.get("remaining_commission", 0.0))),
-                                "Status": "פתוח",
-                                "Sell_Date": "",
-                                "Cost_ILS": 0.0,
-                                "Current_Value_ILS": 0.0,
-                                "Action": "BUY",
-                                "Event_Type": "TRADE",
-                            }
-                            ok_edit, msg_edit = sync_trade_to_sheet(web_url_clean, api_token, "edit", source_update)
-                            if not ok_edit:
-                                st.warning(
-                                    tr(
-                                        "Sale row was added, but source lot update failed. Please edit the source lot manually.",
-                                        "שורת המכירה נוספה, אך עדכון לוט המקור נכשל. יש לעדכן את לוט המקור ידנית.",
-                                    )
+                    if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
+                        src = dict(partial_sell_meta.get("source_row", {}))
+                        src_trade_id = _clean(partial_sell_meta.get("source_trade_id", ""))
+                        source_update = {
+                            "Trade_ID": src_trade_id,
+                            "Current_Location": _clean(src.get("Current_Location", "")),
+                            "Platform": _clean(src.get("Platform", "")),
+                            "Type": _clean(src.get("Type", "")),
+                            "Ticker": _clean(src.get("Ticker", "")).upper(),
+                            "Purchase_Date": _clean(src.get("Purchase_Date", "")),
+                            "Quantity": float(_num(partial_sell_meta.get("remaining_qty", 0.0))),
+                            "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0.0))),
+                            "Cost_Origin": float(_num(partial_sell_meta.get("remaining_cost", 0.0))),
+                            "Origin_Currency": _normalize_currency_code(src.get("Origin_Currency", "")),
+                            "Commission": float(_num(partial_sell_meta.get("remaining_commission", 0.0))),
+                            "Status": "פתוח",
+                            "Sell_Date": "",
+                            "Cost_ILS": 0.0,
+                            "Current_Value_ILS": 0.0,
+                            "Action": "BUY",
+                            "Event_Type": "TRADE",
+                        }
+                        ok_edit, msg_edit = sync_trade_to_sheet(web_url_clean, api_token, "edit", source_update)
+                        if not ok_edit:
+                            st.warning(
+                                tr(
+                                    "Sale row was added, but source lot update failed on Google. Please edit the source lot manually.",
+                                    "שורת המכירה נוספה, אך עדכון לוט המקור נכשל בגוגל. יש לעדכן את לוט המקור ידנית.",
                                 )
-                                st.error(msg_edit)
-                            else:
-                                # also apply partial-sell source update locally
-                                apply_local_trade("edit", source_update)
+                            )
+                            st.error(msg_edit)
+                        else:
+                            apply_local_trade("edit", source_update)
 
-                        st.success(tr("Trade added (local + Google Sheets)", "הרשומה נוספה (מקומי + גוגל שיט)"))
-                        st.info(msg)
-                        # Refresh local store from Google to get server-assigned Trade_IDs.
-                        # preserve_dirty=True keeps any OTHER pending dirty trades intact.
-                        try:
-                            _fresh_df = load_google_snapshot_data(web_url_clean, api_token)
-                            save_local_portfolio(_fresh_df, preserve_dirty=True)
-                        except Exception:
-                            apply_local_trade("add", new_row)
-                        load_google_snapshot_data.clear()
-                        load_google_snapshot_data_via_gspread.clear()
-                        st.rerun()
-
-                    # Always apply to local store regardless of Google result
-                    if not ok:
-                        apply_local_trade("add", new_row)
-                        # Rerun so the sidebar dirty-badge refreshes and Push button activates
-                        st.rerun()
+                    st.success(tr("Trade added (local + Google Sheets)", "הרשומה נוספה (מקומי + גוגל שיט)"))
+                    st.info(msg)
+                    # Refresh local store from Google to get server-assigned Trade_IDs.
+                    try:
+                        _fresh_df = load_google_snapshot_data(web_url_clean, api_token)
+                        save_local_portfolio(_fresh_df, preserve_dirty=True)
+                    except Exception:
+                        pass
+                    load_google_snapshot_data.clear()
+                    load_google_snapshot_data_via_gspread.clear()
+                    st.rerun()
 
         elif mode == "edit":
             selected = _clean(st.session_state.get("selected_trade_id", ""))
@@ -11233,19 +11218,24 @@ def main() -> None:
                 if submitted:
                     if not write_enabled:
                         st.error(tr("Cannot update in gspread mode. Configure a valid Web App URL on the left.", "לא ניתן לעדכן במצב gspread. הגדר Web App URL תקין בצד שמאל."))
+                    elif not has_google_write:
+                        st.error(tr(
+                            "Google Sheets connection required. Configure a valid Web App URL to update trades.",
+                            "נדרש חיבור לגוגל שיט. הגדר Web App URL תקין כדי לעדכן עסקאות.",
+                        ))
                     else:
                         edited["Trade_ID"] = selected
-                        # Always apply locally first
-                        apply_local_trade("edit", edited)
+                        # GOOGLE-FIRST ATOMIC: push to Google first; save locally only on success.
                         ok, msg = sync_trade_to_sheet(web_url_clean, api_token, "edit", edited)
                         if ok:
+                            apply_local_trade("edit", edited)
                             st.success(tr("Trade updated (local + Google Sheets)", "הרשומה עודכנה (מקומי + גוגל שיט)"))
                             st.info(msg)
                             load_google_snapshot_data.clear()
                             load_google_snapshot_data_via_gspread.clear()
                             st.rerun()
                         else:
-                            st.error(f"{tr('Update failed in Google Sheets (saved locally)', 'עדכון נכשל בגוגל שיט (נשמר מקומית)')}: {msg}")
+                            st.error(f"{tr('Update failed in Google Sheets — no changes saved.', 'עדכון נכשל בגוגל שיט — לא נשמר שום שינוי.')}: {msg}")
 
         else:
             selected = _clean(st.session_state.get("selected_trade_id", ""))
@@ -11280,9 +11270,8 @@ def main() -> None:
                         load_google_snapshot_data_via_gspread.clear()
                         st.rerun()
                     else:
-                        # Google failed → still remove locally (mark dirty)
-                        apply_local_trade("delete", delete_payload)
-                        st.error(f"{tr('Delete failed in Google Sheets (removed locally)', 'מחיקה נכשלה בגוגל שיט (הוסרה מקומית)')}: {msg}")
+                        # GOOGLE-FIRST ATOMIC: do NOT remove locally if Google failed
+                        st.error(f"{tr('Delete failed in Google Sheets — no changes saved.', 'מחיקה נכשלה בגוגל שיט — לא נשמר שום שינוי.')}: {msg}")
 
     elif page == page_simulator:
         try:
