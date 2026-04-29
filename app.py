@@ -4312,9 +4312,32 @@ def sync_portfolio_from_google(
     if tr is None:
         tr = lambda en, he: en
     try:
-        df_remote, _src = load_snapshot_data(
-            web_app_url, api_token, spreadsheet_ref, worksheet_name, service_account_file
-        )
+        # ── Force remote fetch — bypass the local-first load_snapshot_data ──
+        # load_snapshot_data returns local data immediately when portfolio_data.json
+        # exists, which means Pull would always read the local store and never
+        # reach Google.  We call the remote helpers directly here.
+        _clean_web_url = _clean(web_app_url)
+        _clean_sa = _clean(service_account_file)
+        _fallback_ready = _can_use_gspread_fallback(spreadsheet_ref, _clean_sa)
+
+        df_remote = pd.DataFrame()
+        try:
+            load_google_snapshot_data.clear()
+        except Exception:
+            pass
+
+        if _clean_web_url and is_apps_script_web_app_url(_clean_web_url):
+            df_raw = load_google_snapshot_data(_clean_web_url, api_token)
+            df_remote = _normalize_snapshot_df(df_raw) if not df_raw.empty else df_raw
+        elif _fallback_ready:
+            df_raw = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, _clean_sa)
+            df_remote = _normalize_snapshot_df(df_raw) if not df_raw.empty else df_raw
+        else:
+            return False, tr(
+                "No Google connection configured (no Web App URL or service-account credentials).",
+                "אין חיבור גוגל — לא הוגדר Web App URL או קובץ service-account.",
+            ), 0
+
         if df_remote.empty:
             return False, tr("No rows returned from Google Sheets.", "גוגל שיט לא החזיר נתונים."), 0
         # Merge: remote rows that are NOT locally dirty override local;
@@ -4336,7 +4359,11 @@ def sync_portfolio_from_google(
         remote_non_dirty = df_remote[~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)]
         merged_df = pd.concat([remote_non_dirty, dirty_df], ignore_index=True) if not dirty_df.empty else remote_non_dirty
 
-        save_local_portfolio(merged_df, preserve_dirty=True)
+        save_local_portfolio(
+            merged_df,
+            preserve_dirty=True,
+            meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
+        )
         _save_local_snapshot_cache(merged_df)
         return True, tr(f"Pulled {len(df_remote):,} rows from Google Sheets.", f"נשלפו {len(df_remote):,} שורות מגוגל שיט."), len(df_remote)
     except Exception as exc:
