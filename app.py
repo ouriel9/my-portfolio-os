@@ -4321,24 +4321,22 @@ def sync_portfolio_from_google(
     if tr is None:
         tr = lambda en, he: en
     try:
-        # ── Force remote fetch — bypass the local-first load_snapshot_data ──
-        # load_snapshot_data returns local data immediately when portfolio_data.json
-        # exists, which means Pull would always read the local store and never
-        # reach Google.  We call the remote helpers directly here.
+        # ── Step 1: Clear ALL remote-fetch caches so we get truly fresh data ──
+        for _cache_fn in (load_google_snapshot_data, load_google_snapshot_data_via_gspread):
+            try:
+                _cache_fn.clear()
+            except Exception:
+                pass
+
         _clean_web_url = _clean(web_app_url)
         _clean_sa = _clean(service_account_file)
-        _fallback_ready = _can_use_gspread_fallback(spreadsheet_ref, _clean_sa)
 
-        df_remote = pd.DataFrame()
-        try:
-            load_google_snapshot_data.clear()
-        except Exception:
-            pass
-
+        # ── Step 2: Fetch remote data — prefer Apps Script, fall back to gspread ──
+        # load_google_snapshot_data already calls _normalize_snapshot_df internally.
+        # load_google_snapshot_data_via_gspread returns raw data that needs normalizing.
         if _clean_web_url and is_apps_script_web_app_url(_clean_web_url):
-            df_raw = load_google_snapshot_data(_clean_web_url, api_token)
-            df_remote = _normalize_snapshot_df(df_raw) if not df_raw.empty else df_raw
-        elif _fallback_ready:
+            df_remote = load_google_snapshot_data(_clean_web_url, api_token)
+        elif _can_use_gspread_fallback(spreadsheet_ref, _clean_sa):
             df_raw = load_google_snapshot_data_via_gspread(spreadsheet_ref, worksheet_name, _clean_sa)
             df_remote = _normalize_snapshot_df(df_raw) if not df_raw.empty else df_raw
         else:
@@ -4349,8 +4347,8 @@ def sync_portfolio_from_google(
 
         if df_remote.empty:
             return False, tr("No rows returned from Google Sheets.", "גוגל שיט לא החזיר נתונים."), 0
-        # Merge: remote rows that are NOT locally dirty override local;
-        # locally dirty rows are kept as-is (they take precedence).
+
+        # ── Step 3: Identify locally-dirty rows (unsynced offline edits) ──
         dirty_ids: set = set()
         try:
             raw = _read_portfolio_file_raw()
@@ -4362,19 +4360,37 @@ def sync_portfolio_from_google(
         except Exception:
             pass
 
-        # Keep locally-dirty rows as-is; use remote data for all others
-        local_df, _ = load_local_portfolio()
-        dirty_df = local_df[local_df["Trade_ID"].map(lambda t: _clean(str(t))) .isin(dirty_ids)] if not local_df.empty else pd.DataFrame()
-        remote_non_dirty = df_remote[~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)]
-        merged_df = pd.concat([remote_non_dirty, dirty_df], ignore_index=True) if not dirty_df.empty else remote_non_dirty
+        # ── Step 4: Merge ──
+        # • No dirty rows (normal case): Google data IS the local store. Full replace.
+        # • Dirty rows exist (rare): keep them, overwrite everything else from Google.
+        if dirty_ids:
+            local_df, _ = load_local_portfolio()
+            dirty_df = (
+                local_df[local_df["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)]
+                if not local_df.empty else pd.DataFrame()
+            )
+            remote_non_dirty = df_remote[
+                ~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)
+            ]
+            merged_df = pd.concat([remote_non_dirty, dirty_df], ignore_index=True)
+        else:
+            merged_df = df_remote  # No dirty rows → fast full-replace path
 
+        # ── Step 5: Save ──
         save_local_portfolio(
             merged_df,
-            preserve_dirty=True,
+            preserve_dirty=bool(dirty_ids),  # keep existing dirty flags only if needed
             meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
         )
         _save_local_snapshot_cache(merged_df)
-        return True, tr(f"Pulled {len(df_remote):,} rows from Google Sheets.", f"נשלפו {len(df_remote):,} שורות מגוגל שיט."), len(df_remote)
+
+        n_google = len(df_remote)
+        n_dirty = len(dirty_ids)
+        detail = f" ({n_dirty} {tr('local unsynced rows kept', 'שורות מקומיות לא מסונכרנות נשמרו')})" if n_dirty else ""
+        return True, tr(
+            f"Pulled {n_google:,} rows from Google Sheets.{detail}",
+            f"נשלפו {n_google:,} שורות מגוגל שיט.{detail}",
+        ), n_google
     except Exception as exc:
         return False, str(exc), 0
 
