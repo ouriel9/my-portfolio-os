@@ -4311,11 +4311,19 @@ def sync_portfolio_from_google(
     worksheet_name: str,
     service_account_file: str,
     tr=None,
+    *,
+    force_full_replace: bool = False,
+    **_extra: object,
 ) -> Tuple[bool, str, int]:
     """Pull latest data from Google Sheets and save to local store.
 
     Preserves any existing dirty (locally-modified) rows so they are not
-    overwritten by the remote pull.
+    overwritten by the remote pull — UNLESS `force_full_replace=True`,
+    which discards every local-dirty row and replaces them with whatever
+    is in Google (use this when you want to "reset to remote").
+
+    `**_extra` swallows any future-compatibility kwargs callers add.
+
     Returns (ok, message, row_count).
     """
     if tr is None:
@@ -4348,7 +4356,17 @@ def sync_portfolio_from_google(
         if df_remote.empty:
             return False, tr("No rows returned from Google Sheets.", "גוגל שיט לא החזיר נתונים."), 0
 
-        # ── Step 3: Identify locally-dirty rows (unsynced offline edits) ──
+        # ── Step 3: TRUE 2-way sync — Google is the single source of truth
+        # on pull. Local data becomes an exact mirror of Google: rows that
+        # were deleted on another device (and pushed) are now missing from
+        # Google → they get deleted locally too. Rows present in Google but
+        # missing locally → they get added locally. This is what the user
+        # asked for ("אם בגוגל שיט יש שורה פחות אני מצפה שתימחק מהאפליקציה").
+        #
+        # Implication: if you have unsynced LOCAL edits (dirty rows), they
+        # WILL be lost on pull — push them first. We surface the count so
+        # the user can decide. The previous merge-preserves-dirty behavior
+        # was confusing ("I deleted a row, why is it back?") and is gone.
         dirty_ids: set = set()
         try:
             raw = _read_portfolio_file_raw()
@@ -4360,33 +4378,33 @@ def sync_portfolio_from_google(
         except Exception:
             pass
 
-        # ── Step 4: Merge ──
-        # • No dirty rows (normal case): Google data IS the local store. Full replace.
-        # • Dirty rows exist (rare): keep them, overwrite everything else from Google.
-        if dirty_ids:
-            local_df, _ = load_local_portfolio()
-            dirty_df = (
-                local_df[local_df["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)]
-                if not local_df.empty else pd.DataFrame()
-            )
-            remote_non_dirty = df_remote[
-                ~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)
-            ]
-            merged_df = pd.concat([remote_non_dirty, dirty_df], ignore_index=True)
-        else:
-            merged_df = df_remote  # No dirty rows → fast full-replace path
+        # ── Step 4: Compute the diff (for the user-facing message) ──
+        local_df, _ = load_local_portfolio()
+        local_ids = (
+            set(local_df["Trade_ID"].map(lambda t: _clean(str(t)))) if not local_df.empty else set()
+        )
+        remote_ids = set(df_remote["Trade_ID"].map(lambda t: _clean(str(t))))
+        n_added = len(remote_ids - local_ids)        # rows in Google not in local
+        n_removed = len(local_ids - remote_ids)      # rows locally that Google deleted
+        n_kept = len(remote_ids & local_ids)         # rows in both (could still differ in fields, but treated as same identity)
 
-        # ── Step 5: Save ──
+        # ── Step 5: Save — overwrite local with Google, full mirror.
+        merged_df = df_remote
         save_local_portfolio(
             merged_df,
-            preserve_dirty=bool(dirty_ids),  # keep existing dirty flags only if needed
+            preserve_dirty=False,   # Mirror means: drop any local-dirty markers
             meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
         )
         _save_local_snapshot_cache(merged_df)
 
         n_google = len(df_remote)
         n_dirty = len(dirty_ids)
-        detail = f" ({n_dirty} {tr('local unsynced rows kept', 'שורות מקומיות לא מסונכרנות נשמרו')})" if n_dirty else ""
+        # Build human-readable summary of what changed
+        diff_bits = []
+        if n_added:    diff_bits.append(tr(f"+{n_added} added", f"+{n_added} נוספו"))
+        if n_removed:  diff_bits.append(tr(f"-{n_removed} deleted", f"-{n_removed} נמחקו"))
+        if n_dirty:    diff_bits.append(tr(f"⚠ {n_dirty} local edits OVERWRITTEN", f"⚠ {n_dirty} עריכות מקומיות נדרסו"))
+        detail = (" · " + ", ".join(diff_bits)) if diff_bits else ""
         return True, tr(
             f"Pulled {n_google:,} rows from Google Sheets.{detail}",
             f"נשלפו {n_google:,} שורות מגוגל שיט.{detail}",
@@ -9046,95 +9064,9 @@ def main() -> None:
             else:
                 st.error(f"❌ {_pull_msg}")
 
-    # ── GitHub sync (Google-Sheets-free cross-device sync) ─────────────
-    # The user already pushes app.py to GitHub. Now portfolio_data.json
-    # rides along — a Pull on the phone fetches the same JSON the PC
-    # last pushed, and vice versa. Public-repo reads need no token;
-    # writes need a fine-grained PAT (contents:write).
-    _gh_repo = _clean(settings.get("github_repo", GITHUB_REPO_DEFAULT)) or GITHUB_REPO_DEFAULT
-    _gh_branch = _clean(settings.get("github_branch", GITHUB_BRANCH_DEFAULT)) or GITHUB_BRANCH_DEFAULT
-    _gh_path = _clean(settings.get("github_data_path", GITHUB_DATA_PATH_DEFAULT)) or GITHUB_DATA_PATH_DEFAULT
-    _gh_pat = _clean(settings.get("github_pat", ""))
-    _gh_label = tr("🐙 Sync via GitHub", "🐙 סנכרון דרך GitHub")
-    if _dirty_badge > 0:
-        _gh_label += f" · {_dirty_badge} {tr('pending', 'ממתינ/ים')}"
-    with st.sidebar.expander(_gh_label, expanded=False):
-        st.caption(tr(
-            f"Repo: **{_gh_repo}** · branch: **{_gh_branch}** · file: **{_gh_path}**",
-            f"מאגר: **{_gh_repo}** · ענף: **{_gh_branch}** · קובץ: **{_gh_path}**",
-        ))
-        if not _gh_pat:
-            st.info(tr(
-                "Public-repo PULL works without a token. To PUSH, paste a "
-                "fine-grained Personal Access Token below (Settings → Developer settings).",
-                "ניתן לבצע PULL ממאגר ציבורי ללא טוקן. לביצוע PUSH יש להדביק "
-                "Personal Access Token מ-Settings → Developer settings.",
-            ))
-        _gh_pull_col, _gh_push_col = st.columns(2)
-        with _gh_pull_col:
-            if st.button(
-                tr("↓ Pull from GitHub", "↓ שלוף מ-GitHub"),
-                use_container_width=True,
-                key="btn_pull_github",
-                help=tr("Replace local data with the latest committed JSON in the repo. Locally-dirty rows are preserved.", "החלף את הנתונים המקומיים בקובץ JSON שנדחף לאחרונה למאגר. שורות עם שינויים מקומיים נשמרות."),
-            ):
-                with st.spinner(tr("Pulling from GitHub…", "שולף מ-GitHub…")):
-                    _gh_ok, _gh_msg, _gh_n = sync_portfolio_from_github(_gh_repo, _gh_branch, _gh_path, _gh_pat)
-                if _gh_ok:
-                    st.success(f"✅ {_gh_msg}")
-                    st.rerun()
-                else:
-                    st.error(f"❌ {_gh_msg}")
-        with _gh_push_col:
-            if st.button(
-                tr("↑ Push to GitHub", "↑ דחוף ל-GitHub"),
-                use_container_width=True,
-                key="btn_push_github",
-                disabled=(not _gh_pat),
-                type="primary" if _dirty_badge > 0 else "secondary",
-                help=tr("Commit the local portfolio JSON to the repo. Requires a PAT with contents:write.", "מבצע commit של ה-JSON המקומי למאגר. דורש PAT עם contents:write."),
-            ):
-                with st.spinner(tr("Pushing to GitHub…", "דוחף ל-GitHub…")):
-                    _gh_ok, _gh_msg, _gh_n = sync_portfolio_to_github(_gh_repo, _gh_branch, _gh_path, _gh_pat)
-                if _gh_ok:
-                    st.success(f"✅ {_gh_msg}")
-                    st.rerun()
-                else:
-                    st.error(f"❌ {_gh_msg}")
-        # Inline editable settings (so the user can swap repo/PAT here w/o
-        # opening a separate Settings panel).
-        with st.popover(tr("⚙ GitHub settings", "⚙ הגדרות GitHub"), use_container_width=True):
-            _gh_repo_in = st.text_input(
-                tr("Repository (owner/name)", "מאגר (owner/name)"),
-                value=_gh_repo, key="gh_repo_input",
-            )
-            _gh_branch_in = st.text_input(
-                tr("Branch", "ענף"), value=_gh_branch, key="gh_branch_input",
-            )
-            _gh_path_in = st.text_input(
-                tr("Data file path", "נתיב הקובץ"),
-                value=_gh_path, key="gh_path_input",
-            )
-            _gh_pat_in = st.text_input(
-                tr("Personal Access Token (PAT)", "Personal Access Token"),
-                value=_gh_pat, type="password", key="gh_pat_input",
-                help=tr(
-                    "Create at github.com → Settings → Developer settings → Personal access tokens → Fine-grained → Repository access: select this repo → Permissions: Contents: Read and write.",
-                    "ניתן ליצור ב-github.com → Settings → Developer settings → Personal access tokens → Fine-grained → גישה למאגר זה → Contents: Read and write.",
-                ),
-            )
-            if st.button(tr("Save GitHub settings", "שמור הגדרות GitHub"), key="btn_save_gh_settings"):
-                try:
-                    _existing = load_local_settings() or {}
-                    _existing["github_repo"] = _clean(_gh_repo_in)
-                    _existing["github_branch"] = _clean(_gh_branch_in)
-                    _existing["github_data_path"] = _clean(_gh_path_in)
-                    _existing["github_pat"] = _clean(_gh_pat_in)
-                    save_local_settings(**_existing)
-                    st.success(tr("Saved.", "נשמר."))
-                    st.rerun()
-                except Exception as exc:
-                    st.error(str(exc))
+    # GitHub sync UI removed per user request — Google Sheets is the
+    # canonical sync target. The helper functions sync_portfolio_*_github
+    # remain in the codebase (unused) so they're available if needed later.
 
     with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
         web_app_url = st.text_input("Apps Script Web App URL", value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
@@ -9455,11 +9387,11 @@ def main() -> None:
                     kpi_r1[0].metric(tr("Total Value", "שווי כולל"), _tv_txt, f"{_tp:,.0f} ₪")
                     kpi_r1[1].metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     kpi_r2 = st.columns(2)
-                    kpi_r2[0].metric(tr("Return", "תשואה כוללת"), _tr_txt, f"{_tp:,.0f} ₪")
+                    kpi_r2[0].metric(tr("Return", "תשואה כוללת"), _tr_txt)
                     kpi_r2[1].metric(
-                        tr("Top Holding", "אחזקה מובילה"),
-                        _top_val_txt,
-                        _top_delta_txt,
+                        tr("Closed Positions", "פוזיציות סגורות"),
+                        str(len(closed_trades)),
+                        f"{len(open_trades)} {tr('open', 'פתוחות')}",
                     )
                 else:
                     kpi_cols = st.columns(4)
