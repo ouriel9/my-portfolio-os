@@ -3833,7 +3833,9 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     summary = work.groupby("Ticker", as_index=False).agg(
         Cost_ILS=("Cost_ILS", "sum"),
         Value_ILS=("Current_Value_ILS", "sum"),
-        Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+        # Use plain Cost_Origin (no commission) for winner/loser Yield so it
+        # stays consistent with per-trade display and exposure table.
+        Cost_Origin=("Cost_Origin", "sum"),
         Value_Origin=("Value_Origin_Est", "sum"),
     )
     if summary.empty:
@@ -9661,7 +9663,9 @@ def main() -> None:
                     Open_Qty=("Quantity", "sum"),
                     Cost_ILS=("Cost_ILS", "sum"),
                     Value_ILS=("Current_Value_ILS", "sum"),
-                    Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+                    # Use plain Cost_Origin (no commission) for Yield_Origin so it
+                    # matches the per-trade price-appreciation metric in the tx table.
+                    Cost_Origin=("Cost_Origin", "sum"),
                     Value_Origin=("Value_Origin_Est", "sum"),
                 )
                 out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS"]
@@ -9847,7 +9851,9 @@ def main() -> None:
                                     Open_Qty=("Quantity", "sum"),
                                     Cost_ILS=("Cost_ILS", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
-                                    Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+                                    # Use plain Cost_Origin (no commission) so Yield_Origin
+                                    # matches per-trade price-appreciation (consistent display).
+                                    Cost_Origin=("Cost_Origin", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
                                 live_summary["Net_PnL_ILS"] = live_summary["Value_ILS"] - live_summary["Cost_ILS"]
@@ -9924,7 +9930,8 @@ def main() -> None:
                                     Open_Qty=("Quantity", "sum"),
                                     Cost_ILS=("Cost_ILS", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
-                                    Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+                                    # Use plain Cost_Origin for Yield_Origin consistency
+                                    Cost_Origin=("Cost_Origin", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
                                 _ov_summary["Net_PnL_ILS"] = _ov_summary["Value_ILS"] - _ov_summary["Cost_ILS"]
@@ -10518,6 +10525,19 @@ def main() -> None:
 
                         _ci = _tx["Cost_ILS"].map(_num) if "Cost_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
                         _vi = _tx["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        # ── Update Current_Value_ILS from live prices BEFORE computing yields ──
+                        # Without this, _vi is the stale value from portfolio_data.json and
+                        # the per-trade yield won't reflect real-time prices.
+                        if _lpm:
+                            _qty_tx = _tx["Quantity"].map(_num) if "Quantity" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                            _cur_tx = _tx["Origin_Currency"].map(lambda c: _normalize_currency_code(c) or "ILS") if "Origin_Currency" in _tx.columns else pd.Series("ILS", index=_tx.index)
+                            _px_tx = _tx["Ticker"].map(lambda t: float(_num(_lpm.get(_clean(t).upper(), 0.0)))) if "Ticker" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                            _fxm_tx = _cur_tx.map(lambda c: _fx if c == "USD" else 1.0)
+                            _live_vi_tx = _qty_tx * _px_tx * _fxm_tx
+                            _has_live_tx = _px_tx > 0
+                            if _has_live_tx.any():
+                                _vi = _vi.copy()
+                                _vi[_has_live_tx] = _live_vi_tx[_has_live_tx]
                         _yic = np.where(_ci > 0, (_vi - _ci) / _ci, np.nan)
                         _co = _tx["Cost_Origin"].map(_num) if "Cost_Origin" in _tx.columns else pd.Series(0.0, index=_tx.index)
                         _vo = np.where(
@@ -10525,16 +10545,10 @@ def main() -> None:
                             np.where(_fx > 0, _vi / _fx, np.nan), _vi,
                         )
                         _yoc = np.where(_co > 0, (_vo - _co) / _co, np.nan)
-                        if "Yield_ILS" in _tx.columns:
-                            _hyi = ~_tx["Yield_ILS"].map(lambda v: pd.isna(v) or _clean(v) == "")
-                            _tx["Yield_ILS"] = np.where(_hyi, _tx["Yield_ILS"], _yic)
-                        else:
-                            _tx["Yield_ILS"] = _yic
-                        if "Yield_Origin" in _tx.columns:
-                            _hyo = ~_tx["Yield_Origin"].map(lambda v: pd.isna(v) or _clean(v) == "")
-                            _tx["Yield_Origin"] = np.where(_hyo, _tx["Yield_Origin"], _yoc)
-                        else:
-                            _tx["Yield_Origin"] = _yoc
+                        # Always use fresh live yields — don't preserve stale values from the
+                        # stored JSON (which may be from an old Google Sheets sync).
+                        _tx["Yield_ILS"] = _yic
+                        _tx["Yield_Origin"] = _yoc
                         _tx = _tx.drop(columns=["Yield_Current"], errors="ignore")
 
                     # Reorder yield columns to the right
