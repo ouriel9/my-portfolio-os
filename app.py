@@ -2908,6 +2908,90 @@ def inject_client_fixes() -> None:
             }, 2000);
             rootWin._pmObserverAttached = true;
           }
+
+          // ═══════════════════════════════════════════════════════════
+          // MOBILE WEBSOCKET AUTO-RECONNECT
+          // Streamlit's WebSocket can drop when:
+          //   • the phone screen dims / app goes to background
+          //   • Wi-Fi switches between access points
+          //   • the browser tab is suspended by the OS
+          // When the page re-gains focus (visibilitychange → visible),
+          // we check whether Streamlit's connection widget is showing the
+          // "disconnected / reconnecting" banner and, if so, force a
+          // hard reload so the user sees a fresh app instead of a blank
+          // or spinner page.
+          // ═══════════════════════════════════════════════════════════
+          (function setupMobileReconnect() {
+            if (rootWin._pmReconnectBound) return;
+            rootWin._pmReconnectBound = true;
+
+            var RECONNECT_TIMEOUT_MS = 8000; // wait this long before reloading
+            var _reconnectTimer = null;
+
+            function isStreamlitDisconnected() {
+              try {
+                var d = rootDoc;
+                // Streamlit shows [data-testid="stConnectionStatus"] or a
+                // "Connection error" / "⚠" banner when disconnected.
+                var statusEl = d.querySelector('[data-testid="stConnectionStatus"]');
+                if (statusEl) {
+                  var txt = (statusEl.innerText || '').toLowerCase();
+                  if (txt.indexOf('disconnect') >= 0 || txt.indexOf('reconnect') >= 0) return true;
+                }
+                // Also watch for the generic "Connection error" toast
+                var toasts = d.querySelectorAll('[data-testid="stNotification"], .stAlert, .stException');
+                for (var i = 0; i < toasts.length; i++) {
+                  var t = (toasts[i].innerText || '').toLowerCase();
+                  if (t.indexOf('connection') >= 0 || t.indexOf('disconnect') >= 0) return true;
+                }
+              } catch(e) {}
+              return false;
+            }
+
+            function scheduleReload() {
+              if (_reconnectTimer) return; // already scheduled
+              _reconnectTimer = rootWin.setTimeout(function() {
+                _reconnectTimer = null;
+                // Only reload if still disconnected (don't interrupt a successful reconnect)
+                if (isStreamlitDisconnected()) {
+                  rootWin.location.reload();
+                }
+              }, RECONNECT_TIMEOUT_MS);
+            }
+
+            function cancelReload() {
+              if (_reconnectTimer) {
+                rootWin.clearTimeout(_reconnectTimer);
+                _reconnectTimer = null;
+              }
+            }
+
+            // When tab becomes visible again (phone unlock / switching back)
+            // give Streamlit a short grace period, then reload if disconnected.
+            rootDoc.addEventListener('visibilitychange', function() {
+              if (rootDoc.visibilityState === 'visible') {
+                rootWin.setTimeout(function() {
+                  if (isStreamlitDisconnected()) {
+                    scheduleReload();
+                  }
+                }, 2000);
+              } else {
+                // Tab hidden — cancel any pending reload
+                cancelReload();
+              }
+            });
+
+            // Also intercept the browser "online" event: if Wi-Fi reconnects
+            // after a drop, trigger a reload after a short delay.
+            rootWin.addEventListener('online', function() {
+              rootWin.setTimeout(function() {
+                if (isStreamlitDisconnected()) {
+                  scheduleReload();
+                }
+              }, 3000);
+            });
+          })();
+
         })();
         </script>
         """,
