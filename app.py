@@ -8313,7 +8313,72 @@ def render_simulator_page(
             st.rerun()
 
 
+def _run_data_migrations() -> None:
+    """One-time data migrations embedded in app.py so they run on every device that pulls from Git.
+
+    Each migration is guarded by a version key in app_local_config.json so it only runs once per device.
+    Current migrations:
+      - v1_horizon_cost_fix (2026-05-09): Fix wrong Cost_Origin / Cost_ILS for 5 Horizon crypto trades.
+        The original import miscalculated costs by ~10x for BTC Sep-2025.
+    """
+    # ── Load config (may not exist yet on a fresh device) ──────────────────
+    cfg_path = Path("app_local_config.json")
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+
+    # ── Migration v1: Horizon cost fix ─────────────────────────────────────
+    if not cfg.get("_migration_v1_horizon_cost_fix_done"):
+        _HORIZON_FIXES = {
+            # trade_id: (Cost_Origin_correct, Cost_ILS_correct)
+            "f50172f0e47a": (2061.45, 6895.14),   # BTC Sep-2025  (was 214.40 / 717.12)
+            "8d80385f4bd3": (2061.25, 7186.55),   # SOL Sep-2025  (was 1964.03 / 6847.51)
+            "dcc43c3a0b06": (1511.79, 5208.57),   # BTC Nov-2025  (was 1439.99 / 4961.14)
+            "4ecbb3956f20": (2066.51, 6708.30),   # ETH Jan-2026  (was 1967.62 / 6387.20)
+            "cb4ad6315af9": (2518.16, 8174.20),   # SOL Jan-2026  (was 2399.39 / 7788.76)
+        }
+        # Fix portfolio_data.json
+        pdata_path = Path("portfolio_data.json")
+        try:
+            pdata = json.loads(pdata_path.read_text(encoding="utf-8"))
+            changed = 0
+            for row in pdata.get("rows", []):
+                tid = str(row.get("Trade_ID", ""))
+                if tid in _HORIZON_FIXES:
+                    co_correct, ci_correct = _HORIZON_FIXES[tid]
+                    row["Cost_Origin"] = co_correct
+                    row["Cost_ILS"] = ci_correct
+                    # Recalculate Buy_Price from Cost_Origin / Quantity
+                    qty = float(row.get("Quantity") or 0)
+                    if qty > 0:
+                        row["Buy_Price"] = round(co_correct / qty, 6)
+                    changed += 1
+            if changed:
+                pdata_path.write_text(json.dumps(pdata, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass  # File may not exist yet; that's fine
+
+        # Nuke snapshot_cache.csv so the stale fallback is gone
+        try:
+            cache_path = Path("snapshot_cache.csv")
+            if cache_path.exists():
+                cache_path.unlink()
+        except Exception:
+            pass
+
+        # Mark migration as done
+        cfg["_migration_v1_horizon_cost_fix_done"] = True
+        try:
+            cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+
 def main() -> None:
+    # Run one-time data migrations before anything else
+    _run_data_migrations()
+
     # Determine saved language early so page_title can be bilingual
     _early_lang = LANG_HE
     try:
