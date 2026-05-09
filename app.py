@@ -8314,65 +8314,63 @@ def render_simulator_page(
 ##
 
 def _run_data_migrations() -> None:
-    """One-time data migrations embedded in app.py so they run on every device that pulls from Git.
+    """Data migrations embedded in app.py — run on every device that pulls from Git.
 
-    Each migration is guarded by a version key in app_local_config.json so it only runs once per device.
+    Runs every startup; each migration checks the actual data condition (idempotent).
     Current migrations:
-      - v1_horizon_cost_fix (2026-05-09): Fix wrong Cost_Origin / Cost_ILS for 5 Horizon crypto trades.
+      - horizon_cost_fix (2026-05-09): Fix wrong Cost_Origin / Cost_ILS for 5 Horizon crypto trades.
         The original import miscalculated costs by ~10x for BTC Sep-2025.
+        Matched by exact Quantity (unique per trade) — robust across different Trade_ID values.
     """
-    # ── Load config (may not exist yet on a fresh device) ──────────────────
-    cfg_path = Path("app_local_config.json")
+    # ── Migration: Horizon cost fix ────────────────────────────────────────
+    # Key: (Ticker, exact_quantity_string) — unique fingerprint per trade
+    # Value: (Cost_Origin_correct, Cost_ILS_correct)
+    # Source of truth: DATA/הוריזון וBIT2C .txt
+    _HORIZON_FIXES_BY_QTY: Dict[tuple, tuple] = {
+        ("BTC", 0.01777571): (2061.45, 6895.14),   # BTC Sep-2025  (was CO≈214, yield≈+570%)
+        ("SOL", 9.17858764): (2061.25, 7186.55),   # SOL Sep-2025  (was CO≈1964)
+        ("BTC", 0.0167499):  (1511.79, 5208.57),   # BTC Nov-2025  (was CO≈1440)
+        ("ETH", 0.716013):   (2066.51, 6708.30),   # ETH Jan-2026  (was CO≈1968)
+        ("SOL", 20.864301):  (2518.16, 8174.20),   # SOL Jan-2026  (was CO≈2399)
+    }
+
+    pdata_path = Path("portfolio_data.json")
     try:
-        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        pdata = json.loads(pdata_path.read_text(encoding="utf-8"))
+        changed = 0
+        for row in pdata.get("rows", []):
+            ticker = str(row.get("Ticker", "")).strip().upper()
+            try:
+                qty = round(float(row.get("Quantity") or 0), 8)
+            except (TypeError, ValueError):
+                qty = 0.0
+            key = (ticker, qty)
+            if key not in _HORIZON_FIXES_BY_QTY:
+                continue
+            co_correct, ci_correct = _HORIZON_FIXES_BY_QTY[key]
+            co_current = float(row.get("Cost_Origin") or 0)
+            # Only fix if the stored value is still wrong (prevent infinite overwrite)
+            if abs(co_current - co_correct) < 0.01:
+                continue  # Already correct — skip
+            row["Cost_Origin"] = co_correct
+            row["Cost_ILS"] = ci_correct
+            # Recompute Buy_Price = Cost_Origin / Quantity
+            if qty > 0:
+                row["Buy_Price"] = round(co_correct / qty, 6)
+                row["Origin_Buy_Price"] = round(co_correct / qty, 6)
+            changed += 1
+        if changed:
+            pdata_path.write_text(json.dumps(pdata, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
-        cfg = {}
+        pass  # File may not exist on a fresh device — that's fine
 
-    # ── Migration v1: Horizon cost fix ─────────────────────────────────────
-    if not cfg.get("_migration_v1_horizon_cost_fix_done"):
-        _HORIZON_FIXES = {
-            # trade_id: (Cost_Origin_correct, Cost_ILS_correct)
-            "f50172f0e47a": (2061.45, 6895.14),   # BTC Sep-2025  (was 214.40 / 717.12)
-            "8d80385f4bd3": (2061.25, 7186.55),   # SOL Sep-2025  (was 1964.03 / 6847.51)
-            "dcc43c3a0b06": (1511.79, 5208.57),   # BTC Nov-2025  (was 1439.99 / 4961.14)
-            "4ecbb3956f20": (2066.51, 6708.30),   # ETH Jan-2026  (was 1967.62 / 6387.20)
-            "cb4ad6315af9": (2518.16, 8174.20),   # SOL Jan-2026  (was 2399.39 / 7788.76)
-        }
-        # Fix portfolio_data.json
-        pdata_path = Path("portfolio_data.json")
-        try:
-            pdata = json.loads(pdata_path.read_text(encoding="utf-8"))
-            changed = 0
-            for row in pdata.get("rows", []):
-                tid = str(row.get("Trade_ID", ""))
-                if tid in _HORIZON_FIXES:
-                    co_correct, ci_correct = _HORIZON_FIXES[tid]
-                    row["Cost_Origin"] = co_correct
-                    row["Cost_ILS"] = ci_correct
-                    # Recalculate Buy_Price from Cost_Origin / Quantity
-                    qty = float(row.get("Quantity") or 0)
-                    if qty > 0:
-                        row["Buy_Price"] = round(co_correct / qty, 6)
-                    changed += 1
-            if changed:
-                pdata_path.write_text(json.dumps(pdata, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass  # File may not exist yet; that's fine
-
-        # Nuke snapshot_cache.csv so the stale fallback is gone
-        try:
-            cache_path = Path("snapshot_cache.csv")
-            if cache_path.exists():
-                cache_path.unlink()
-        except Exception:
-            pass
-
-        # Mark migration as done
-        cfg["_migration_v1_horizon_cost_fix_done"] = True
-        try:
-            cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+    # Always delete snapshot_cache.csv — it's a stale fallback that can carry wrong data
+    try:
+        cache_path = Path("snapshot_cache.csv")
+        if cache_path.exists():
+            cache_path.unlink()
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -9510,16 +9508,28 @@ def main() -> None:
         )
         summary["Net_PnL_ILS"] = summary["Value_ILS"] - summary["Cost_ILS"]
         summary["Yield_ILS"] = np.where(summary["Cost_ILS"] > 0, summary["Net_PnL_ILS"] / summary["Cost_ILS"], 0.0)
-        # For mixed-currency tickers (BTC/ETH) summing ILS+USD costs is invalid; fall back to Yield_ILS
+        # Detect ILS-only tickers (origin currency == ILS for every trade of that ticker)
+        _dash_ticker_ils = (
+            dashboard_df.groupby("Ticker")["Origin_Currency"]
+            .apply(lambda s: all((_normalize_currency_code(c) or "ILS") in {"ILS", ""} for c in s.dropna().tolist()))
+            .to_dict()
+        )
+        # For ILS tickers: Yield_Origin == Yield_ILS (same currency — Cost_Origin excl. fees ≠ Cost_ILS incl. fees = phantom discrepancy)
+        # For USD pure tickers: use origin-currency computation (legit different)
+        # For mixed-currency tickers: fall back to Yield_ILS
         _dash_origin_raw = np.where(
             summary["Cost_Origin"] > 0,
             (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"],
             0.0,
         )
         summary["Yield_Origin"] = np.where(
-            summary["Ticker"].map(lambda t: _dash_ticker_pure.get(t, True)),
-            _dash_origin_raw,
-            summary["Yield_ILS"],
+            summary["Ticker"].map(lambda t: _dash_ticker_ils.get(t, False)),
+            summary["Yield_ILS"],   # ILS: identical currency, force equal
+            np.where(
+                summary["Ticker"].map(lambda t: _dash_ticker_pure.get(t, True)),
+                _dash_origin_raw,   # USD pure: meaningful difference
+                summary["Yield_ILS"],  # Mixed: fall back
+            ),
         )
 
         # Net P/L by asset — use dashboard_df (live-enriched) not raw open_trades
@@ -10013,15 +10023,24 @@ def main() -> None:
                                     .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
                                     .to_dict()
                                 )
+                                _e_ils = (
+                                    _enriched.groupby("Ticker")["Origin_Currency"]
+                                    .apply(lambda s: all((_normalize_currency_code(c) or "ILS") in {"ILS", ""} for c in s.dropna().tolist()))
+                                    .to_dict()
+                                )
                                 _e_origin_raw = np.where(
                                     live_summary["Cost_Origin"] > 0,
                                     (live_summary["Value_Origin"] - live_summary["Cost_Origin"]) / live_summary["Cost_Origin"],
                                     0.0,
                                 )
                                 live_summary["Yield_Origin"] = np.where(
-                                    live_summary["Ticker"].map(lambda t: _e_pure.get(t, True)),
-                                    _e_origin_raw,
-                                    live_summary["Yield_ILS"],
+                                    live_summary["Ticker"].map(lambda t: _e_ils.get(t, False)),
+                                    live_summary["Yield_ILS"],   # ILS: force equal (same currency)
+                                    np.where(
+                                        live_summary["Ticker"].map(lambda t: _e_pure.get(t, True)),
+                                        _e_origin_raw,   # USD pure: meaningful
+                                        live_summary["Yield_ILS"],  # Mixed: fall back
+                                    ),
                                 )
                         except Exception:
                             pass
@@ -10104,15 +10123,24 @@ def main() -> None:
                                     .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
                                     .to_dict()
                                 )
+                                _ov_ils = (
+                                    _ov_e.groupby("Ticker")["Origin_Currency"]
+                                    .apply(lambda s: all((_normalize_currency_code(c) or "ILS") in {"ILS", ""} for c in s.dropna().tolist()))
+                                    .to_dict()
+                                )
                                 _ov_origin_raw = np.where(
                                     _ov_summary["Cost_Origin"] > 0,
                                     (_ov_summary["Value_Origin"] - _ov_summary["Cost_Origin"]) / _ov_summary["Cost_Origin"],
                                     0.0,
                                 )
                                 _ov_summary["Yield_Origin"] = np.where(
-                                    _ov_summary["Ticker"].map(lambda t: _ov_pure.get(t, True)),
-                                    _ov_origin_raw,
-                                    _ov_summary["Yield_ILS"],
+                                    _ov_summary["Ticker"].map(lambda t: _ov_ils.get(t, False)),
+                                    _ov_summary["Yield_ILS"],   # ILS: force equal (same currency)
+                                    np.where(
+                                        _ov_summary["Ticker"].map(lambda t: _ov_pure.get(t, True)),
+                                        _ov_origin_raw,   # USD pure: meaningful
+                                        _ov_summary["Yield_ILS"],  # Mixed: fall back
+                                    ),
                                 )
                         except Exception:
                             pass
@@ -10749,11 +10777,22 @@ def main() -> None:
                                 _vi[_has_live_tx] = _live_vi_tx[_has_live_tx]
                         _yic = np.where(_ci > 0, (_vi - _ci) / _ci, np.nan)
                         _co = _tx["Cost_Origin"].map(_num) if "Cost_Origin" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        # Value in origin currency: for USD assets divide ILS value by FX rate;
+                        # for ILS assets the value is already in ILS.
+                        _is_usd_cur = _tx["Origin_Currency"].map(_normalize_currency_code) == "USD"
                         _vo = np.where(
-                            _tx["Origin_Currency"].map(_normalize_currency_code) == "USD",
+                            _is_usd_cur,
                             np.where(_fx > 0, _vi / _fx, np.nan), _vi,
                         )
-                        _yoc = np.where(_co > 0, (_vo - _co) / _co, np.nan)
+                        # Yield_Origin — only meaningful for USD assets (different currency = different rate).
+                        # For ILS assets Yield_Origin == Yield_ILS by definition (same currency, no FX).
+                        # Using Cost_Origin (excl. fees) vs Cost_ILS (incl. fees) would create a phantom
+                        # discrepancy for ILS assets, so we force them equal.
+                        _yoc = np.where(
+                            _is_usd_cur,
+                            np.where(_co > 0, (_vo - _co) / _co, np.nan),
+                            _yic,  # ILS assets: Yield_Origin == Yield_ILS
+                        )
                         # Always use fresh live yields — don't preserve stale values from the
                         # stored JSON (which may be from an old Google Sheets sync).
                         _tx["Yield_ILS"] = _yic
