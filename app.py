@@ -3469,6 +3469,23 @@ def _market_symbol(ticker: str) -> str:
     return t
 
 
+def _yf_price_currency(ticker: str) -> str:
+    """Return the quote currency that yfinance uses for this ticker's price.
+
+    BTC/ETH/SOL map to BTC-USD / ETH-USD / SOL-USD → price is always in USD.
+    Israeli stocks use a .TA suffix from TASE → price is in ILS.
+    All other tickers (US stocks, ETFs, crypto pairs) are USD-quoted.
+
+    This is intentionally separate from Origin_Currency: a user can buy BTC on
+    Bit2C (Origin_Currency=ILS) but yfinance still returns a USD price, so we
+    must always apply the USD→ILS FX rate when computing Current_Value_ILS.
+    """
+    sym = _market_symbol(ticker)
+    if sym.upper().endswith(".TA"):
+        return "ILS"
+    return "USD"
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def _download_close_matrix(symbols: Tuple[str, ...], days: int = 365) -> pd.DataFrame:
     clean_symbols = tuple(s for s in symbols if _clean(s))
@@ -3829,6 +3846,12 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         work["Current_Value_ILS"] / fx,
         work["Current_Value_ILS"],
     )
+    # Detect tickers with mixed currencies — summing ILS+USD costs is invalid.
+    _rpt_ticker_pure = (
+        work.groupby("Ticker")["Origin_Currency"]
+        .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
+        .to_dict()
+    )
 
     summary = work.groupby("Ticker", as_index=False).agg(
         Cost_ILS=("Cost_ILS", "sum"),
@@ -3841,7 +3864,21 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     if summary.empty:
         winner_loser = pd.DataFrame(columns=["Category", "Ticker", "Yield"])
     else:
-        summary["Yield"] = np.where(summary["Cost_Origin"] > 0, (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"], 0.0)
+        summary["Yield_ILS"] = np.where(
+            summary["Cost_ILS"] > 0,
+            (summary["Value_ILS"] - summary["Cost_ILS"]) / summary["Cost_ILS"],
+            0.0,
+        )
+        _rpt_origin_raw = np.where(
+            summary["Cost_Origin"] > 0,
+            (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"],
+            0.0,
+        )
+        summary["Yield"] = np.where(
+            summary["Ticker"].map(lambda t: _rpt_ticker_pure.get(t, True)),
+            _rpt_origin_raw,
+            summary["Yield_ILS"],
+        )
         winner = summary.loc[summary["Yield"].idxmax()]
         loser = summary.loc[summary["Yield"].idxmin()]
         winner_loser = pd.DataFrame(
@@ -5545,12 +5582,15 @@ def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
     out["מחיר שוק"] = out["Ticker"].map(live_prices).fillna(0.0) if "Ticker" in out.columns else 0.0
     qty_series = out["Quantity"].map(_num) if "Quantity" in out.columns else 0.0
     out["שווי שוק (יחסי מטבע מקור)"] = qty_series * out["מחיר שוק"]
-    # Recalculate Current_Value_ILS using live prices + FX
-    if "Origin_Currency" in out.columns:
-        cur_series = out["Origin_Currency"].map(lambda c: _normalize_currency_code(c) or "ILS")
+    # Recalculate Current_Value_ILS using live prices + FX.
+    # IMPORTANT: use _yf_price_currency (the currency yfinance quotes the price in),
+    # NOT Origin_Currency.  Bit2C BTC has Origin_Currency=ILS (prices quoted in ₪),
+    # but yfinance returns BTC-USD → we must still multiply by the USD/ILS rate.
+    if "Ticker" in out.columns:
+        price_cur_series = out["Ticker"].map(lambda t: _yf_price_currency(_clean(t).upper()))
     else:
-        cur_series = pd.Series(["ILS"] * len(out), index=out.index)
-    live_value_ils = qty_series * out["מחיר שוק"] * cur_series.map(lambda c: usd_ils if c == "USD" else 1.0)
+        price_cur_series = pd.Series(["USD"] * len(out), index=out.index)
+    live_value_ils = qty_series * out["מחיר שוק"] * price_cur_series.map(lambda c: usd_ils if c == "USD" else 1.0)
     # Only override where we actually got a live price (>0)
     has_live = out["מחיר שוק"] > 0
     out.loc[has_live, "Current_Value_ILS"] = live_value_ils[has_live]
@@ -5602,7 +5642,11 @@ def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
         if abs(qty) < 1e-12:
             continue
         cur = _normalize_currency_code(row.get("Origin_Currency", "")) or "ILS"
-        fx = usd_ils if cur == "USD" else 1.0
+        # Use yfinance quote currency — not Origin_Currency — to decide FX multiplier.
+        # BTC on Bit2C has Origin_Currency=ILS but yfinance returns a USD price (BTC-USD),
+        # so we must always apply the USD→ILS rate for crypto / USD-quoted assets.
+        yf_cur = _yf_price_currency(ticker.upper())
+        fx = usd_ils if yf_cur == "USD" else 1.0
         out.at[idx, "Current_Value_ILS"] = qty * price * fx
 
     return out
@@ -9333,8 +9377,11 @@ def main() -> None:
                         if price > 0:
                             qty = float(_num(row.get("Quantity", 0)))
                             if abs(qty) > 1e-12:
-                                cur = _normalize_currency_code(row.get("Origin_Currency", "")) or "ILS"
-                                fx = usd_ils_val if cur == "USD" else 1.0
+                                # Use yfinance quote currency — NOT Origin_Currency.
+                                # BTC on Bit2C has Origin_Currency=ILS but the yfinance
+                                # BTC-USD price is always in USD → must apply fx rate.
+                                yf_cur = _yf_price_currency(ticker.upper())
+                                fx = usd_ils_val if yf_cur == "USD" else 1.0
                                 df.at[idx, "Current_Value_ILS"] = qty * price * fx
         except Exception:
             pass  # Fall back to stored values silently
@@ -9381,22 +9428,37 @@ def main() -> None:
             dashboard_df["Current_Value_ILS"] / fx,
             dashboard_df["Current_Value_ILS"],
         )
+        # Detect mixed-currency tickers (e.g. BTC bought on both Bit2C/ILS and Excellence/USD)
+        _dash_ticker_pure = (
+            dashboard_df.groupby("Ticker")["Origin_Currency"]
+            .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
+            .to_dict()
+        )
 
         summary = dashboard_df.groupby("Ticker", as_index=False).agg(
             Current_Price=("מחיר שוק", "max"),
             Open_Qty=("Quantity", "sum"),
             Cost_ILS=("Cost_ILS", "sum"),
             Value_ILS=("Current_Value_ILS", "sum"),
-            Cost_Origin=("Cost_Origin_With_Fee", "sum"),
+            Cost_Origin=("Cost_Origin", "sum"),      # plain cost, no commission
             Value_Origin=("Value_Origin_Est", "sum"),
         )
         summary["Net_PnL_ILS"] = summary["Value_ILS"] - summary["Cost_ILS"]
-        summary["Yield_Origin"] = np.where(summary["Cost_Origin"] > 0, (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"], 0.0)
         summary["Yield_ILS"] = np.where(summary["Cost_ILS"] > 0, summary["Net_PnL_ILS"] / summary["Cost_ILS"], 0.0)
+        # For mixed-currency tickers (BTC/ETH) summing ILS+USD costs is invalid; fall back to Yield_ILS
+        _dash_origin_raw = np.where(
+            summary["Cost_Origin"] > 0,
+            (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"],
+            0.0,
+        )
+        summary["Yield_Origin"] = np.where(
+            summary["Ticker"].map(lambda t: _dash_ticker_pure.get(t, True)),
+            _dash_origin_raw,
+            summary["Yield_ILS"],
+        )
 
-        # Net P/L by asset uses only open trades — closed positions have no sell price stored,
-        # so their Current_Value_ILS=0 would incorrectly show the full cost as a loss.
-        pnl_source = open_trades.copy() if not open_trades.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Current_Value_ILS"])
+        # Net P/L by asset — use dashboard_df (live-enriched) not raw open_trades
+        pnl_source = dashboard_df.copy() if not dashboard_df.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Current_Value_ILS"])
         for col in ["Ticker", "Cost_ILS", "Current_Value_ILS"]:
             if col not in pnl_source.columns:
                 pnl_source[col] = 0.0 if col != "Ticker" else ""
@@ -9431,10 +9493,12 @@ def main() -> None:
                             _enriched_kpi = open_trades.copy()
                             _enriched_kpi["מחיר שוק"] = _enriched_kpi["Ticker"].map(_lpx).fillna(0.0)
                             _qty_k = _enriched_kpi["Quantity"].map(_num)
-                            _cur_k = _enriched_kpi["Origin_Currency"].map(
-                                lambda c: _normalize_currency_code(c) or "ILS"
+                            # Use yfinance quote currency — NOT Origin_Currency — for FX multiplier.
+                            # BTC on Bit2C has Origin_Currency=ILS but yfinance returns USD price.
+                            _price_cur_k = _enriched_kpi["Ticker"].map(
+                                lambda t: _yf_price_currency(_clean(t).upper())
                             )
-                            _vk = _qty_k * _enriched_kpi["מחיר שוק"] * _cur_k.map(
+                            _vk = _qty_k * _enriched_kpi["מחיר שוק"] * _price_cur_k.map(
                                 lambda c: _ufx if c == "USD" else 1.0
                             )
                             _has_k = _enriched_kpi["מחיר שוק"] > 0
@@ -9658,19 +9722,34 @@ def main() -> None:
                     local_df["Current_Value_ILS"] / fx_local,
                     local_df["Current_Value_ILS"],
                 )
+                # Detect tickers with mixed Origin_Currency (e.g. BTC bought on both
+                # Bit2C/ILS and Excellence/USD). Summing ILS costs with USD costs is
+                # arithmetically undefined — fall back to Yield_ILS for those tickers.
+                _ticker_pure = (
+                    local_df.groupby("Ticker")["Origin_Currency"]
+                    .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
+                    .to_dict()
+                )
                 out = local_df.groupby("Ticker", as_index=False).agg(
                     Current_Price=("מחיר שוק", "max"),
                     Open_Qty=("Quantity", "sum"),
                     Cost_ILS=("Cost_ILS", "sum"),
                     Value_ILS=("Current_Value_ILS", "sum"),
-                    # Use plain Cost_Origin (no commission) for Yield_Origin so it
-                    # matches the per-trade price-appreciation metric in the tx table.
                     Cost_Origin=("Cost_Origin", "sum"),
                     Value_Origin=("Value_Origin_Est", "sum"),
                 )
                 out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS"]
-                out["Yield_Origin"] = np.where(out["Cost_Origin"] > 0, (out["Value_Origin"] - out["Cost_Origin"]) / out["Cost_Origin"], 0.0)
                 out["Yield_ILS"] = np.where(out["Cost_ILS"] > 0, out["Net_PnL_ILS"] / out["Cost_ILS"], 0.0)
+                # Yield_Origin: use origin-currency computation only for pure-single-currency
+                # tickers. For mixed-currency tickers (BTC/ETH with ILS+USD trades) use
+                # Yield_ILS (ILS-denominated) which is always unambiguous.
+                _origin_raw = np.where(
+                    out["Cost_Origin"] > 0,
+                    (out["Value_Origin"] - out["Cost_Origin"]) / out["Cost_Origin"],
+                    0.0,
+                )
+                _is_pure = out["Ticker"].map(lambda t: _ticker_pure.get(t, True))
+                out["Yield_Origin"] = np.where(_is_pure, _origin_raw, out["Yield_ILS"])
                 return out
 
             def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview") -> None:
@@ -9831,10 +9910,12 @@ def main() -> None:
                                 _enriched = open_trades.copy()
                                 _enriched["מחיר שוק"] = _enriched["Ticker"].map(_live_px).fillna(0.0)
                                 _qty = _enriched["Quantity"].map(_num)
-                                _cur = _enriched["Origin_Currency"].map(
-                                    lambda c: _normalize_currency_code(c) or "ILS"
+                                # Use yfinance quote currency — NOT Origin_Currency — for FX multiplier.
+                                # BTC on Bit2C has Origin_Currency=ILS but yfinance returns USD price.
+                                _price_cur = _enriched["Ticker"].map(
+                                    lambda t: _yf_price_currency(_clean(t).upper())
                                 )
-                                _live_val = _qty * _enriched["מחיר שוק"] * _cur.map(
+                                _live_val = _qty * _enriched["מחיר שוק"] * _price_cur.map(
                                     lambda c: _fx if c == "USD" else 1.0
                                 )
                                 _has = _enriched["מחיר שוק"] > 0
@@ -9851,21 +9932,31 @@ def main() -> None:
                                     Open_Qty=("Quantity", "sum"),
                                     Cost_ILS=("Cost_ILS", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
-                                    # Use plain Cost_Origin (no commission) so Yield_Origin
-                                    # matches per-trade price-appreciation (consistent display).
                                     Cost_Origin=("Cost_Origin", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
                                 live_summary["Net_PnL_ILS"] = live_summary["Value_ILS"] - live_summary["Cost_ILS"]
-                                live_summary["Yield_Origin"] = np.where(
-                                    live_summary["Cost_Origin"] > 0,
-                                    (live_summary["Value_Origin"] - live_summary["Cost_Origin"]) / live_summary["Cost_Origin"],
-                                    0.0,
-                                )
                                 live_summary["Yield_ILS"] = np.where(
                                     live_summary["Cost_ILS"] > 0,
                                     live_summary["Net_PnL_ILS"] / live_summary["Cost_ILS"],
                                     0.0,
+                                )
+                                # Mixed-currency tickers (e.g. BTC with ILS+USD trades):
+                                # summing ILS and USD costs is invalid → fall back to Yield_ILS.
+                                _e_pure = (
+                                    _enriched.groupby("Ticker")["Origin_Currency"]
+                                    .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
+                                    .to_dict()
+                                )
+                                _e_origin_raw = np.where(
+                                    live_summary["Cost_Origin"] > 0,
+                                    (live_summary["Value_Origin"] - live_summary["Cost_Origin"]) / live_summary["Cost_Origin"],
+                                    0.0,
+                                )
+                                live_summary["Yield_Origin"] = np.where(
+                                    live_summary["Ticker"].map(lambda t: _e_pure.get(t, True)),
+                                    _e_origin_raw,
+                                    live_summary["Yield_ILS"],
                                 )
                         except Exception:
                             pass
@@ -9911,10 +10002,12 @@ def main() -> None:
                                 _ov_e = open_trades.copy()
                                 _ov_e["מחיר שוק"] = _ov_e["Ticker"].map(_lpx_ov).fillna(0.0)
                                 _qty_ov = _ov_e["Quantity"].map(_num)
-                                _cur_ov = _ov_e["Origin_Currency"].map(
-                                    lambda c: _normalize_currency_code(c) or "ILS"
+                                # Use yfinance quote currency — NOT Origin_Currency — for FX multiplier.
+                                # BTC on Bit2C has Origin_Currency=ILS but yfinance returns USD price.
+                                _price_cur_ov = _ov_e["Ticker"].map(
+                                    lambda t: _yf_price_currency(_clean(t).upper())
                                 )
-                                _vov = _qty_ov * _ov_e["מחיר שוק"] * _cur_ov.map(
+                                _vov = _qty_ov * _ov_e["מחיר שוק"] * _price_cur_ov.map(
                                     lambda c: _fx_ov if c == "USD" else 1.0
                                 )
                                 _hov = _ov_e["מחיר שוק"] > 0
@@ -9930,20 +10023,31 @@ def main() -> None:
                                     Open_Qty=("Quantity", "sum"),
                                     Cost_ILS=("Cost_ILS", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
-                                    # Use plain Cost_Origin for Yield_Origin consistency
                                     Cost_Origin=("Cost_Origin", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
                                 _ov_summary["Net_PnL_ILS"] = _ov_summary["Value_ILS"] - _ov_summary["Cost_ILS"]
-                                _ov_summary["Yield_Origin"] = np.where(
-                                    _ov_summary["Cost_Origin"] > 0,
-                                    (_ov_summary["Value_Origin"] - _ov_summary["Cost_Origin"]) / _ov_summary["Cost_Origin"],
-                                    0.0,
-                                )
                                 _ov_summary["Yield_ILS"] = np.where(
                                     _ov_summary["Cost_ILS"] > 0,
                                     _ov_summary["Net_PnL_ILS"] / _ov_summary["Cost_ILS"],
                                     0.0,
+                                )
+                                # Mixed-currency tickers (BTC/ETH with ILS+USD trades):
+                                # costs in different currencies can't be summed → use Yield_ILS.
+                                _ov_pure = (
+                                    _ov_e.groupby("Ticker")["Origin_Currency"]
+                                    .apply(lambda s: len(set(s.str.upper().dropna().tolist())) <= 1)
+                                    .to_dict()
+                                )
+                                _ov_origin_raw = np.where(
+                                    _ov_summary["Cost_Origin"] > 0,
+                                    (_ov_summary["Value_Origin"] - _ov_summary["Cost_Origin"]) / _ov_summary["Cost_Origin"],
+                                    0.0,
+                                )
+                                _ov_summary["Yield_Origin"] = np.where(
+                                    _ov_summary["Ticker"].map(lambda t: _ov_pure.get(t, True)),
+                                    _ov_origin_raw,
+                                    _ov_summary["Yield_ILS"],
                                 )
                         except Exception:
                             pass
@@ -9952,7 +10056,8 @@ def main() -> None:
                 _ov_exposure_fragment()
 
         # Compute once and share across both Allocation and Reports tabs.
-        _shared_reports_payload = build_home_inspired_reports(open_trades)
+        # Use dashboard_df (already live-enriched) so all charts reflect current prices.
+        _shared_reports_payload = build_home_inspired_reports(dashboard_df)
 
         with tab_allocation:
             allocation_payload = _shared_reports_payload
@@ -10143,7 +10248,7 @@ def main() -> None:
         with _ov_equity_slot:
             if can_show_build_up:
                 st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
-                perf_track = open_trades.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
+                perf_track = dashboard_df.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
                 perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
                 fig_track = go.Figure()
@@ -10470,6 +10575,41 @@ def main() -> None:
                 if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
                 _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, use_container_width=True, hide_index=True)
 
+                # ── Export bar — below the table ───────────────────────────
+                _is_he_tx = _lang.startswith("ע")
+                _export_prefix = "trades_open" if _open else "trades_all"
+                _ts_tx = datetime.now().strftime("%Y%m%d_%H%M")
+                _ec1, _ec2, _ec3 = st.columns(3)
+                with _ec1:
+                    st.download_button(
+                        ("⬇️ CSV" if _is_he_tx else "⬇️ CSV"),
+                        data=_dv.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"{_export_prefix}_{_ts_tx}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key=f"dl_csv_{_export_prefix}_{_ts_tx}",
+                    )
+                with _ec2:
+                    st.download_button(
+                        ("⬇️ JSON" if _is_he_tx else "⬇️ JSON"),
+                        data=_dv.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
+                        file_name=f"{_export_prefix}_{_ts_tx}.json",
+                        mime="application/json",
+                        use_container_width=True,
+                        key=f"dl_json_{_export_prefix}_{_ts_tx}",
+                    )
+                with _ec3:
+                    _xls_tx = pp_dataframe_to_excel_bytes(_dv, sheet_name=_export_prefix)
+                    if _xls_tx:
+                        st.download_button(
+                            ("⬇️ Excel" if _is_he_tx else "⬇️ Excel"),
+                            data=_xls_tx,
+                            file_name=f"{_export_prefix}_{_ts_tx}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                            key=f"dl_xlsx_{_export_prefix}_{_ts_tx}",
+                        )
+
             if live_updates and hasattr(st, "fragment"):
                 @st.fragment(run_every="20s")
                 def _tx_live_fragment() -> None:
@@ -10532,7 +10672,11 @@ def main() -> None:
                             _qty_tx = _tx["Quantity"].map(_num) if "Quantity" in _tx.columns else pd.Series(0.0, index=_tx.index)
                             _cur_tx = _tx["Origin_Currency"].map(lambda c: _normalize_currency_code(c) or "ILS") if "Origin_Currency" in _tx.columns else pd.Series("ILS", index=_tx.index)
                             _px_tx = _tx["Ticker"].map(lambda t: float(_num(_lpm.get(_clean(t).upper(), 0.0)))) if "Ticker" in _tx.columns else pd.Series(0.0, index=_tx.index)
-                            _fxm_tx = _cur_tx.map(lambda c: _fx if c == "USD" else 1.0)
+                            # FX multiplier must be based on yfinance quote currency, NOT Origin_Currency.
+                            # BTC on Bit2C: Origin_Currency=ILS but price from yfinance is USD → must × FX.
+                            _fxm_tx = _tx["Ticker"].map(
+                                lambda t: _fx if _yf_price_currency(_clean(t).upper()) == "USD" else 1.0
+                            ) if "Ticker" in _tx.columns else pd.Series(_fx, index=_tx.index)
                             _live_vi_tx = _qty_tx * _px_tx * _fxm_tx
                             _has_live_tx = _px_tx > 0
                             if _has_live_tx.any():
