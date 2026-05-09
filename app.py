@@ -8311,7 +8311,7 @@ def render_simulator_page(
             except Exception:
                 pass
             st.rerun()
-##
+
 
 def _run_data_migrations() -> None:
     """Data migrations embedded in app.py — run on every device that pulls from Git.
