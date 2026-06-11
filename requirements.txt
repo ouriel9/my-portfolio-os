@@ -1,7 +1,16 @@
 streamlit
+streamlit-option-menu
+streamlit-extras
+streamlit-aggrid
+streamlit-lottie
+streamlit-local-storage
 pandas
+numpy
 yfinance
 plotly
 fpdf
 gspread
 google-auth
+openpyxl
+xlrd
+pypdf

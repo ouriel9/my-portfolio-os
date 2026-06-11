@@ -3,6 +3,7 @@ import json
 import os
 import re
 import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -105,12 +106,32 @@ DEFAULT_TRADINGVIEW_WATCHLIST = [
     {"category": "macro", "ticker": "VIX", "label": "S&P 500 Volatility Index", "tv_symbol": "TVC:VIX"},
     {"category": "macro", "ticker": "USDILS", "label": "US Dollar / Israeli Shekel", "tv_symbol": "FX_IDC:USDILS"},
 ]
-LOCAL_SETTINGS_FILE = Path(__file__).resolve().parent / "app_local_config.json"
-DEFAULT_SERVICE_ACCOUNT_FILE = Path(__file__).resolve().parent / "clean-linker-492313-s3-770814e64205.json"
+def _resolve_data_dir() -> Path:
+    """Directory holding per-user data files (config, deposits, portfolio).
+
+    Dev mode: the repo dir (next to app.py).
+    Frozen (PyInstaller): config is intentionally NOT bundled (it holds the
+    API token) — prefer the EXE's own directory, falling back to the original
+    project dir on this machine so the desktop bundle keeps working.
+    """
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        if (exe_dir / "app_local_config.json").exists():
+            return exe_dir
+        project_dir = Path(r"C:\Users\ourie\PycharmProjects\my-portfolio-os")
+        if (project_dir / "app_local_config.json").exists():
+            return project_dir
+        return exe_dir
+    return Path(__file__).resolve().parent
+
+
+_DATA_DIR = _resolve_data_dir()
+LOCAL_SETTINGS_FILE = _DATA_DIR / "app_local_config.json"
+DEFAULT_SERVICE_ACCOUNT_FILE = _DATA_DIR / "clean-linker-492313-s3-770814e64205.json"
 DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7OQVPLflfN2rufBhAT5-fzmjy8iEVFMmNLZlK_CeI4MFvx1dijZF/exec"
-MANUAL_DEPOSITS_FILE = Path(__file__).resolve().parent / "manual_deposits_store.json"
-LOCAL_PORTFOLIO_FILE = Path(__file__).resolve().parent / "portfolio_data.json"
+MANUAL_DEPOSITS_FILE = _DATA_DIR / "manual_deposits_store.json"
+LOCAL_PORTFOLIO_FILE = _DATA_DIR / "portfolio_data.json"
 LOCAL_SNAPSHOT_CACHE_FILE = Path(__file__).resolve().parent / "snapshot_cache.csv"
 VERIFIED_DATA_FALLBACK_FILE = Path(__file__).resolve().parent / "DATA" / "verified_data.csv"
 APPS_SCRIPT_COOLDOWN_FILE = Path(__file__).resolve().parent / "apps_script_cooldown.json"
@@ -3160,7 +3181,7 @@ def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "
         "autosize": true,
         "width": "100%",
         "height": "{height}",
-        "symbol": "{symbol}",
+        "symbol": {json.dumps(symbol)},
         "interval": "D",
         "timezone": "Etc/UTC",
         "theme": "{tv_theme}",
@@ -3344,8 +3365,13 @@ def _to_trade_id(row: pd.Series) -> str:
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
+# Canonical set of status labels that mark a trade as closed/sold. Defined once
+# here and referenced everywhere instead of being copy-pasted as a raw literal.
+CLOSED_STATUS_VALUES = frozenset({"סגור", "closed", "close", "sold", "נמכר"})
+
+
 def _is_closed_status(value: object) -> bool:
-    return _clean(value).lower() in {"סגור", "closed", "close", "sold", "נמכר"}
+    return _clean(value).lower() in CLOSED_STATUS_VALUES
 
 
 def _is_excellence_platform(value: object) -> bool:
@@ -3655,14 +3681,36 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
     if close_df.empty:
         return pd.Series(dtype=float)
 
+    # USD-quoted tickers must be converted to ILS before summing, otherwise the
+    # combined series weights each holding by its native-currency notional (a USD
+    # position counts ~3.6x light vs an equal-value ILS one), distorting every
+    # aggregate risk metric (vol/Sharpe/MDD/CAGR/beta). Use the USD/ILS history
+    # aligned to the price index; fall back to spot if history is unavailable.
+    needs_fx = any(_yf_price_currency(t) == "USD" for t in qty_by_ticker)
+    fx_series = None
+    fx_spot = 0.0
+    if needs_fx:
+        fx_df = _download_close_matrix(("USDILS=X",), days=max(int(days), 30))
+        if not fx_df.empty and "USDILS=X" in fx_df.columns:
+            fx_series = pd.to_numeric(fx_df["USDILS=X"], errors="coerce")
+        fx_spot = _safe_quote("USDILS=X")
+        if fx_spot <= 0:
+            fx_spot = 3.6
+
     frames = []
     for ticker, qty in qty_by_ticker.items():
         sym = symbol_by_ticker[ticker]
         if sym not in close_df.columns:
             continue
         s = pd.to_numeric(close_df[sym], errors="coerce").rename(ticker)
-        if s.notna().any():
-            frames.append(s * qty)
+        if not s.notna().any():
+            continue
+        if _yf_price_currency(ticker) == "USD":
+            if fx_series is not None:
+                s = s * fx_series.reindex(s.index).ffill().bfill()
+            else:
+                s = s * fx_spot
+        frames.append(s * qty)
 
     if not frames:
         return pd.Series(dtype=float)
@@ -3682,9 +3730,15 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
         realized = 0.0
         for _, row in tdf.iterrows():
             qty = float(row["Quantity"])
-            cost_ils = float(row["Cost_ILS"]) if _num(row["Cost_ILS"]) != 0 else float(_num(row["Cost_Origin"]))
-            unit_cost = abs(cost_ils / qty) if qty else 0.0
             origin_currency = _normalize_currency_code(row.get("Origin_Currency", ""))
+            if _num(row["Cost_ILS"]) != 0:
+                cost_ils = float(row["Cost_ILS"])
+            else:
+                # Fall back to Cost_Origin, converting to ILS when it's USD-denominated
+                # (otherwise a USD cost was silently treated as ILS, ~3.6x understated).
+                fallback_cost = float(_num(row["Cost_Origin"]))
+                cost_ils = fallback_cost * usd_ils_rate if origin_currency == "USD" else fallback_cost
+            unit_cost = abs(cost_ils / qty) if qty else 0.0
             display_currency = _infer_display_currency(ticker, origin_currency)
             cost_origin = float(row.get("Cost_Origin", 0.0) or 0.0)
             if display_currency == "USD" and origin_currency == "USD" and cost_origin:
@@ -3721,9 +3775,18 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                     sell_qty -= used
                     if lot.qty <= 1e-9:
                         lots.pop(0)
+                # Fully-closed positions are stored as a SINGLE row carrying both
+                # the buy cost (Cost_ILS) and the sale proceeds (Current_Value_ILS)
+                # with no separate BUY lot, so the loop above matches nothing.
+                # Realize the unmatched quantity against this row's own cost basis.
+                # Without this, realized P/L was always 0 for closed positions.
+                if sell_qty > 1e-9:
+                    realized += sell_qty * (sell_price - unit_cost)
 
         open_qty = sum(lot.qty for lot in lots)
-        if open_qty <= 1e-9:
+        # Emit a row when there's an open position OR realized P/L to report.
+        # Closed-only tickers have open_qty == 0 but still carry realized P/L.
+        if open_qty <= 1e-9 and abs(realized) <= 1e-9:
             continue
         open_cost = sum(lot.qty * lot.cost_per_unit for lot in lots)
         open_display_cost = sum(lot.qty * lot.display_cost_per_unit for lot in lots)
@@ -5101,7 +5164,11 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Record_Source"] = "STATE_SNAPSHOT"
     df["Event_Type"] = "TRADE"
-    df["Action"] = df["Status"].map(lambda x: "SELL" if _clean(x) == "סגור" else "BUY")
+    # Use the canonical closed-status set (סגור/closed/close/sold/נמכר), not just
+    # "סגור". Previously a sale labeled with any other synonym was tagged BUY,
+    # which made FIFO treat it as a phantom buy lot (overstated open qty, missing
+    # realized PnL). Mirrors _is_closed_status used everywhere else.
+    df["Action"] = df["Status"].map(lambda x: "SELL" if _is_closed_status(x) else "BUY")
     return df
 
 
@@ -5538,8 +5605,7 @@ def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
         trades["Status"] = ""
     trades["Status"] = trades["Status"].replace("", "פתוח")
     status_norm = trades["Status"].map(_clean).str.lower()
-    closed_values = {"סגור", "closed", "close", "sold", "נמכר"}
-    closed_mask = status_norm.isin(closed_values)
+    closed_mask = status_norm.isin(CLOSED_STATUS_VALUES)
     open_trades = trades[~closed_mask].copy()
     closed_trades = trades[closed_mask].copy()
 
@@ -5612,8 +5678,7 @@ def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
     # Identify open trades
     if "Status" in out.columns:
         status_norm = out["Status"].map(_clean).str.lower()
-        closed_values = {"סגור", "closed", "close", "sold", "נמכר"}
-        open_mask = ~status_norm.isin(closed_values)
+        open_mask = ~status_norm.isin(CLOSED_STATUS_VALUES)
     else:
         open_mask = pd.Series([True] * len(out), index=out.index)
 
@@ -7572,17 +7637,34 @@ ISRAELI_CAPITAL_GAINS_TAX = 0.25  # 25% on REAL (inflation-adjusted) profits
 
 def _real_capital_gains_tax(
     final_nominal: float,
-    total_contributed: float,
+    initial: float,
+    monthly: float,
+    months: int,
+    lump: float,
+    lump_month: int,
     inflation_pct: float,
     years: float,
 ) -> float:
-    """Israeli rule of thumb: 25% on the inflation-adjusted gain.
-    Indexed basis = contributions × (1+inflation)^years. Tax = 25% × max(0, nominal − indexed).
-    Returns the tax amount (always >= 0)."""
-    if final_nominal <= 0 or total_contributed <= 0 or years <= 0:
+    """Israeli rule of thumb: 25% on the inflation-adjusted (real) gain.
+
+    Each contribution is indexed only from its OWN deposit date — the initial
+    capital (t=0) gets the full horizon, monthly deposit m gets (months-m)/12
+    years, and the lump at lump_month gets (months-lump_month)/12 years. The
+    previous version indexed the entire basis by the full horizon, overstating
+    the indexed basis and under-charging tax for contribution-heavy plans.
+    Tax = 25% × max(0, nominal − indexed_basis). Always >= 0."""
+    if final_nominal <= 0 or years <= 0:
         return 0.0
-    inflation_factor = (1.0 + max(0.0, inflation_pct) / 100.0) ** float(years)
-    indexed_basis = total_contributed * inflation_factor
+    i = max(0.0, inflation_pct) / 100.0
+    months = max(0, int(months))
+    indexed_basis = max(0.0, float(initial)) * (1.0 + i) ** float(years)
+    if monthly and months > 0:
+        # deposit m (1..months): (months-m)/12 yrs of indexing → exact geometric sum
+        exps = np.arange(months - 1, -1, -1, dtype=float) / 12.0
+        indexed_basis += float(monthly) * float(np.sum((1.0 + i) ** exps))
+    if lump:
+        lm = max(0, min(int(lump_month), months))
+        indexed_basis += max(0.0, float(lump)) * (1.0 + i) ** ((months - lm) / 12.0)
     real_gain = max(0.0, final_nominal - indexed_basis)
     return ISRAELI_CAPITAL_GAINS_TAX * real_gain
 
@@ -8072,7 +8154,11 @@ def render_simulator_page(
     )
     reg_tax = _real_capital_gains_tax(
         final_nominal=reg_final_gross,
-        total_contributed=reg_total_contributed,
+        initial=regular_initial,
+        monthly=regular_monthly,
+        months=months_total,
+        lump=regular_lump,
+        lump_month=regular_lump_month,
         inflation_pct=inflation_pct,
         years=years_total,
     )
@@ -8380,7 +8466,7 @@ def main() -> None:
     # Determine saved language early so page_title can be bilingual
     _early_lang = LANG_HE
     try:
-        _early_cfg = json.loads(Path("app_local_config.json").read_text(encoding="utf-8"))
+        _early_cfg = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
         _early_lang = _early_cfg.get("language", LANG_HE)
     except Exception:
         pass
@@ -8982,7 +9068,7 @@ def main() -> None:
     # header, dataframe header. Designed to make orientation instant and
     # visually reinforce the "where am I" feeling.
     _page_accents = {
-        "dashboard": "#2563eb",   # blue — overview (per spec)
+        "dashboard": "#6366f1",   # indigo — overview (per spec)
         "manage":    "#10b981",   # emerald — active portfolio actions
         "risk":      "#ef4444",   # rose — risk / warning family
         "simulator": "#f59e0b",   # amber — exploration / projection
@@ -8996,7 +9082,7 @@ def main() -> None:
         "simulator": "#b45309",
         "quality":   "#0e7490",
     }
-    _accent = _page_accents.get(active_page_id, "#2563eb")
+    _accent = _page_accents.get(active_page_id, "#6366f1")
     _accent_dark = _page_accents_dark.get(active_page_id, "#1e40af")
     st.markdown(
         f"""
@@ -9429,7 +9515,7 @@ def main() -> None:
                     has_status = "Status" in df.columns
                     if has_status:
                         status_norm = df["Status"].map(_clean).str.lower()
-                        closed_values = {"סגור", "closed", "close", "sold", "נמכר"}
+                        closed_values = CLOSED_STATUS_VALUES
                         open_mask = ~status_norm.isin(closed_values)
                     else:
                         open_mask = pd.Series([True] * len(df), index=df.index)
@@ -9476,7 +9562,7 @@ def main() -> None:
         stats_text = (
             f"{len(trades):,} {tr('rows loaded', 'רשומות נטענו')} | "
             f"{len(trades[trades['Record_Source'] == 'STATE_SNAPSHOT']):,} {tr('snapshot rows', 'שורות תמונת מצב')} | "
-            f"{len(trades[trades['Status'] == 'סגור']):,} {tr('closed', 'סגורות')}"
+            f"{int(trades['Status'].map(_clean).str.lower().isin(CLOSED_STATUS_VALUES).sum()):,} {tr('closed', 'סגורות')}"
         )
         st.markdown(f"<div class='dashboard-stats-line'>{stats_text}</div>", unsafe_allow_html=True)
 
@@ -10241,8 +10327,11 @@ def main() -> None:
                         cls = _clean(getattr(row, "Asset_Class", ""))
                         assets = _clean(getattr(row, "Assets", "")) or "-"
                         color = class_color_map.get(cls, "#64748b")
+                        # Sheet-sourced values are user-influenced; escape before HTML injection.
+                        cls_safe = cls.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                        assets_safe = assets.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                         st.markdown(
-                            f"<span style='color:{color};font-weight:700'>■</span> <strong>{cls}</strong>: {assets}",
+                            f"<span style='color:{color};font-weight:700'>■</span> <strong>{cls_safe}</strong>: {assets_safe}",
                             unsafe_allow_html=True,
                         )
                 else:
@@ -11562,7 +11651,7 @@ def main() -> None:
                             edited[col] = _select_or_type(tr("Origin currency", "מטבע מקור"), currencies, _clean(val), f"edit_{selected}_currency", tr).upper()
                         elif col == "Status":
                             _status_opts = [tr("Open", "פתוח"), tr("Closed", "סגור")]
-                            _status_idx = 1 if _clean(val) in {"סגור", "closed", "close", "sold", "נמכר"} else 0
+                            _status_idx = 1 if _is_closed_status(val) else 0
                             _status_sel = st.selectbox(tr("Status", "סטטוס"), _status_opts, index=_status_idx, key=f"e_{col}")
                             # Always store in canonical Hebrew form (consistent with the data sheet)
                             edited[col] = "סגור" if _status_sel == tr("Closed", "סגור") else "פתוח"

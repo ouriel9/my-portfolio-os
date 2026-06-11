@@ -7,6 +7,39 @@ const CRYPTO_ETFS = ["IBIT", "ETHA", "BSOL", "MSTR"];
 const PORTFOLIO_SHEET = "תמונת מצב";
 const AUDIT_SHEET = "תגובות לטופס 1";
 const DEPOSITS_SHEET = "הפקדות ידניות";
+const SNAPSHOT_CANONICAL_HEADERS = [
+  "מיקום נוכחי", "פלטפורמה", "סוג נכס", "טיקר", "תאריך רכישה", "כמות", "שער קנייה",
+  "עלות כוללת", "מטבע", "עמלה", "סטטוס", "שער נוכחי USD", "עלות USD", "עלות ILS",
+  "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי ILS", "שער מכירה",
+  "תאריך מכירה", "תשואה במכירה", "תשואה מקור", "תשואה שקלית", "Trade_ID"
+];
+const SNAPSHOT_FIELD_ALIASES = {
+  location: ["מיקום נוכחי", "Current_Location"],
+  platform: ["פלטפורמה", "Platform"],
+  type: ["סוג נכס", "Type"],
+  ticker: ["טיקר", "Ticker"],
+  purchaseDate: ["תאריך רכישה", "Purchase_Date"],
+  quantity: ["כמות", "Quantity"],
+  buyPrice: ["שער קנייה", "Origin_Buy_Price"],
+  costOrigin: ["עלות כוללת", "Cost_Origin"],
+  currency: ["מטבע", "Origin_Currency"],
+  fee: ["עמלה", "Commission"],
+  status: ["סטטוס", "Status"],
+  sellDate: ["תאריך מכירה", "Sell_Date"],
+  spotUsd: ["שער נוכחי USD"],
+  valueUsd: ["שווי USD", "שווי נוכחי USD"],
+  costUsd: ["עלות USD"],
+  costIls: ["עלות ILS"],
+  valueIls: ["שווי ILS"],
+  buyUsd: ["שער קנייה USD"],
+  buyIls: ["שער קנייה ILS"],
+  spotIls: ["שער נוכחי ILS"],
+  sellPrice: ["שער מכירה", "Sell_Price_Origin"],
+  yieldAtSale: ["תשואה במכירה", "Yield_At_Sale"],
+  yieldOrigin: ["תשואה מקור"],
+  yieldIls: ["תשואה שקלית"],
+  tradeId: ["Trade_ID"]
+};
 
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
@@ -17,6 +50,7 @@ function onOpen() {
     .addItem("🛡️ העברה לארנק קר (ללא כפילויות)", "TransferToColdWallet")
     .addSeparator()
     .addItem("🛠️ רופא המערכת - ניקוי ופיצול עמלות", "SystemDoctor")
+    .addItem("🧹 צמצום עמודות כפולות (חד-פעמי)", "RunSnapshotSchemaDedupOnce")
     .addItem("⚙️ התקנה ותיקון נוסחאות (מבנה חדש)", "InstallSystem")
     .addToUi();
 }
@@ -37,9 +71,33 @@ function parseNum(val) {
   return parseFloat(String(val).replace("₪", "").replace("$", "").split(",").join("").split("%").join("").split(" ").join("").trim()) || 0;
 }
 
+function buildSnapshotHeaderIndexMap_(headers) {
+  const cleanHeaders = (headers || []).map(cleanText);
+  const out = {};
+  Object.keys(SNAPSHOT_FIELD_ALIASES).forEach(function (key) {
+    out[key] = -1;
+    const aliases = SNAPSHOT_FIELD_ALIASES[key] || [];
+    for (let i = 0; i < aliases.length; i++) {
+      const idx = cleanHeaders.indexOf(aliases[i]);
+      if (idx >= 0) {
+        out[key] = idx;
+        break;
+      }
+    }
+  });
+  return out;
+}
+
+function rowVal_(row, map, key) {
+  const idx = map[key];
+  if (idx === undefined || idx < 0 || idx >= row.length) return "";
+  return row[idx];
+}
+
 function normalizeDateOnly_(val) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
   if (Object.prototype.toString.call(val) === "[object Date]") {
-    return Utilities.formatDate(val, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return Utilities.formatDate(val, tz, "yyyy-MM-dd");
   }
   const s = cleanText(val);
   if (!s) return "";
@@ -56,10 +114,17 @@ function normalizeDateOnly_(val) {
   // Already in YYYY-MM-DD or similar ISO format
   const d = new Date(s);
   if (String(d) !== "Invalid Date") {
-    return Utilities.formatDate(d, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    return Utilities.formatDate(d, tz, "yyyy-MM-dd");
   }
 
   return s;
+}
+
+function toSheetDateOrText_(val) {
+  const normalized = normalizeDateOnly_(val);
+  if (!normalized) return "";
+  const asDate = new Date(normalized + "T00:00:00");
+  return String(asDate) !== "Invalid Date" ? asDate : normalized;
 }
 
 function inferCryptoLocationByFields_(platform, type, ticker, purchaseDate, currentLocation) {
@@ -170,6 +235,175 @@ function appendAudit_(action, tradeId, status, payload) {
     .appendRow([new Date(), action, tradeId, status, payload]);
 }
 
+function _isBlankCell_(v) {
+  return cleanText(v) === "";
+}
+
+function _snapshotSemanticGroups_() {
+  return [
+    ["מיקום נוכחי", "Current_Location"],
+    ["פלטפורמה", "Platform"],
+    ["סוג נכס", "Type"],
+    ["טיקר", "Ticker"],
+    ["תאריך רכישה", "Purchase_Date"],
+    ["כמות", "Quantity"],
+    ["שער קנייה", "Origin_Buy_Price"],
+    ["עלות כוללת", "Cost_Origin"],
+    ["מטבע", "Origin_Currency"],
+    ["עמלה", "Commission"],
+    ["סטטוס", "Status"],
+    ["שער נוכחי USD", "שער נוכחי USD (כפילות)"],
+    ["עלות USD"],
+    ["עלות ILS"],
+    ["שווי USD", "שווי נוכחי USD"],
+    ["שווי ILS"],
+    ["שער קנייה USD"],
+    ["שער קנייה ILS"],
+    ["שער נוכחי ILS"],
+    ["שער מכירה", "Sell_Price_Origin"],
+    ["תאריך מכירה", "Sell_Date"],
+    ["תשואה במכירה", "Yield_At_Sale"],
+    ["תשואה מקור"],
+    ["תשואה שקלית"],
+    ["Trade_ID"],
+    ["שער USD/ILS עדכני:", "USD/ILS", "שער דולר שקל"]
+  ];
+}
+
+function _findFirstHeaderByAliases_(headers, aliases) {
+  for (let i = 0; i < aliases.length; i++) {
+    const ix = headers.indexOf(cleanText(aliases[i]));
+    if (ix >= 0) return ix;
+  }
+  return -1;
+}
+
+function _aliasesForCanonicalHeader_(header) {
+  const groups = _snapshotSemanticGroups_();
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i].indexOf(header) >= 0) return groups[i];
+  }
+  return [header];
+}
+
+function _mergeColumnInto_(values, keepIx, dropIx) {
+  let filled = 0;
+  let conflicts = 0;
+  for (let r = 1; r < values.length; r++) {
+    const keepVal = values[r][keepIx];
+    const dropVal = values[r][dropIx];
+    if (_isBlankCell_(keepVal) && !_isBlankCell_(dropVal)) {
+      values[r][keepIx] = dropVal;
+      filled++;
+    } else if (!_isBlankCell_(keepVal) && !_isBlankCell_(dropVal) && cleanText(keepVal) !== cleanText(dropVal)) {
+      conflicts++;
+    }
+  }
+  return { filled: filled, conflicts: conflicts };
+}
+
+function dedupeSnapshotSchemaOnce_() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const done = cleanText(props.getProperty("SNAPSHOT_SCHEMA_DEDUP_DONE"));
+    if (done) {
+      return { ok: true, skipped: true, reason: "already_done", done_at: done };
+    }
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ws = ss.getSheetByName(PORTFOLIO_SHEET);
+    if (!ws) return { ok: false, error: "Missing snapshot sheet" };
+
+    const lastRow = ws.getLastRow();
+    const lastCol = ws.getLastColumn();
+    if (lastRow < 1 || lastCol < 1) {
+      props.setProperty("SNAPSHOT_SCHEMA_DEDUP_DONE", new Date().toISOString());
+      return { ok: true, skipped: true, reason: "empty_sheet" };
+    }
+
+    const rng = ws.getRange(1, 1, lastRow, lastCol);
+    const values = rng.getValues();
+    const headers = values[0].map(cleanText);
+
+    const backupName = PORTFOLIO_SHEET + "_backup_before_schema_dedup_" + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyyMMdd_HHmmss");
+    ws.copyTo(ss).setName(backupName);
+
+    const mergeStats = [];
+    const groups = _snapshotSemanticGroups_();
+    groups.forEach(function (group) {
+      const indexes = [];
+      group.forEach(function (alias) {
+        const ix = headers.indexOf(cleanText(alias));
+        if (ix >= 0 && indexes.indexOf(ix) < 0) indexes.push(ix);
+      });
+      if (indexes.length <= 1) return;
+      const keepIx = indexes[0];
+      for (let i = 1; i < indexes.length; i++) {
+        const dropIx = indexes[i];
+        const merged = _mergeColumnInto_(values, keepIx, dropIx);
+        headers[dropIx] = "";
+        mergeStats.push({
+          kept_header: headers[keepIx],
+          kept_col: keepIx + 1,
+          removed_col: dropIx + 1,
+          filled_from_duplicate: merged.filled,
+          conflicts: merged.conflicts
+        });
+      }
+    });
+
+    const canonicalHeaders = SNAPSHOT_CANONICAL_HEADERS.slice();
+    const canonicalIdx = canonicalHeaders.map(function (h) {
+      return _findFirstHeaderByAliases_(headers, _aliasesForCanonicalHeader_(h));
+    });
+
+    const outHeaders = [];
+    const outRows = [];
+    for (let r = 0; r < values.length; r++) {
+      const outRow = [];
+      for (let c = 0; c < canonicalHeaders.length; c++) {
+        if (r === 0) {
+          outRow.push(canonicalHeaders[c]);
+          continue;
+        }
+        const srcIx = canonicalIdx[c];
+        outRow.push(srcIx >= 0 ? values[r][srcIx] : "");
+      }
+      if (r === 0) outHeaders.push(outRow);
+      else outRows.push(outRow);
+    }
+
+    ws.clear();
+    ws.getRange(1, 1, 1, canonicalHeaders.length).setValues(outHeaders);
+    if (outRows.length > 0) {
+      ws.getRange(2, 1, outRows.length, canonicalHeaders.length).setValues(outRows);
+    }
+    formatMainSheet();
+
+    const doneAt = new Date().toISOString();
+    props.setProperty("SNAPSHOT_SCHEMA_DEDUP_DONE", doneAt);
+    const result = {
+      ok: true,
+      backup_sheet: backupName,
+      rows: outRows.length,
+      columns_after: canonicalHeaders.length,
+      merges: mergeStats,
+      done_at: doneAt
+    };
+    appendAudit_("snapshot_schema_dedup", "SYSTEM", "OK", JSON.stringify(result));
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function RunSnapshotSchemaDedupOnce() {
+  const result = dedupeSnapshotSchemaOnce_();
+  SpreadsheetApp.getUi().alert("צמצום סכמת תמונת מצב", JSON.stringify(result, null, 2), SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
 function getColumnMap_(sheet) {
   const headers = sheet.getRange(1, 1, 1, Math.max(25, sheet.getLastColumn())).getValues()[0].map(cleanText);
   const ix = {};
@@ -192,7 +426,8 @@ function getColumnMap_(sheet) {
   ix.currency = findAny_(["מטבע", "Origin_Currency"]);
   ix.fee = findAny_(["עמלה", "Commission"]);
   ix.status = findAny_(["סטטוס", "Status"]);
-  ix.tradeId = findAny_(["Trade_ID"]);
+  ix.sellDate = findAny_(["תאריך מכירה", "Sell_Date"]);
+  ix.tradeId = findAny_(["Trade_ID", "Trade ID", "מזהה עסקה", "trade_id"]);
 
   if (ix.tradeId < 0) {
     const col = sheet.getLastColumn() + 1;
@@ -202,19 +437,159 @@ function getColumnMap_(sheet) {
   return ix;
 }
 
+function copyCalculatedFormulaCells_(ws, sourceRow, targetRow) {
+  if (!ws || sourceRow < 2 || targetRow < 2) return;
+  const lastCol = ws.getLastColumn();
+  if (lastCol < 1) return;
+  const headers = ws.getRange(1, 1, 1, lastCol).getValues()[0].map(cleanText);
+  const map = buildSnapshotHeaderIndexMap_(headers);
+  const keys = [
+    "spotUsd", "costUsd", "costIls", "valueUsd", "valueIls",
+    "buyUsd", "buyIls", "spotIls", "sellPrice", "yieldAtSale",
+    "yieldOrigin", "yieldIls"
+  ];
+  keys.forEach(function (k) {
+    const ix = map[k];
+    if (ix === undefined || ix < 0 || ix >= lastCol) return;
+    const srcCell = ws.getRange(sourceRow, ix + 1, 1, 1);
+    const formula = srcCell.getFormula();
+    if (!formula) return;
+    srcCell.copyTo(ws.getRange(targetRow, ix + 1, 1, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+  });
+}
+
+function findFormulaTemplateRow_(ws, excludeRow) {
+  if (!ws) return -1;
+  const lastRow = ws.getLastRow();
+  if (lastRow < 2) return -1;
+  const headers = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0].map(cleanText);
+  const map = buildSnapshotHeaderIndexMap_(headers);
+  const keys = [
+    "spotUsd", "costUsd", "costIls", "valueUsd", "valueIls",
+    "buyUsd", "buyIls", "spotIls", "sellPrice", "yieldAtSale",
+    "yieldOrigin", "yieldIls"
+  ];
+
+  for (let r = lastRow; r >= 2; r--) {
+    if (excludeRow && r === excludeRow) continue;
+    let hasFormula = false;
+    for (let i = 0; i < keys.length; i++) {
+      const ix = map[keys[i]];
+      if (ix === undefined || ix < 0) continue;
+      const f = ws.getRange(r, ix + 1).getFormula();
+      if (cleanText(f)) {
+        hasFormula = true;
+        break;
+      }
+    }
+    if (hasFormula) return r;
+  }
+  return -1;
+}
+
+function findTradeRowLoose_(ws, ix, trade) {
+  const last = ws.getLastRow();
+  if (last < 2) return -1;
+  if (ix.platform < 0 || ix.ticker < 0 || ix.purchaseDate < 0) return -1;
+
+  const rows = ws.getRange(2, 1, last - 1, ws.getLastColumn()).getValues();
+  const targetPlatform = cleanText(trade.Platform || "");
+  const targetTicker = cleanText(trade.Ticker || "").toUpperCase();
+  const targetDate = normalizeDateOnly_(trade.Purchase_Date || "");
+  const targetQty = parseNum(trade.Quantity || 0);
+
+  let bestRow = -1;
+  let bestQtyDelta = Infinity;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (targetPlatform && cleanText(row[ix.platform]) !== targetPlatform) continue;
+    if (targetTicker && cleanText(row[ix.ticker]).toUpperCase() !== targetTicker) continue;
+    if (targetDate && normalizeDateOnly_(row[ix.purchaseDate]) !== targetDate) continue;
+
+    if (ix.quantity >= 0) {
+      const delta = Math.abs(parseNum(row[ix.quantity]) - targetQty);
+      if (delta < bestQtyDelta) {
+        bestQtyDelta = delta;
+        bestRow = i + 2;
+      }
+    } else {
+      return i + 2;
+    }
+  }
+  return bestRow;
+}
+
+function normalizeCurrencyCode_(value) {
+  // Must match app.py._normalize_currency_code and core.py._normalize_currency_code
+  // byte-for-byte — it feeds the canonical Trade_ID identity tuple.
+  const raw = cleanText(value).toUpperCase();
+  if (raw === "" || raw === "NAN") return "";
+  if (raw === "ILS" || raw === "NIS" || raw === "₪" || raw === "שח" || raw === 'ש"ח') return "ILS";
+  if (raw === "USD" || raw === "$") return "USD";
+  return raw;
+}
+
 function tradeIdFromRow_(row, ix) {
+  // CANONICAL 10-field identity built from a raw snapshot row via ix.
+  // Previously this was a DIFFERENT 5-field hash than buildTradeIdFromTrade_,
+  // so a trade added (10-field id) disagreed with the same row re-hashed on
+  // normalize (5-field id) -> duplicate rows. Now identical to tradeIdentityRaw_
+  // and to app.py/core.py._to_trade_id.
   const raw = [
     cleanText(row[ix.platform]),
+    ix.location >= 0 ? cleanText(row[ix.location]) : "",
+    ix.type >= 0 ? cleanText(row[ix.type]) : "",
     cleanText(row[ix.ticker]).toUpperCase(),
     normalizeDateOnly_(row[ix.purchaseDate]),
-    parseNum(row[ix.quantity]),
-    parseNum(row[ix.cost])
+    parseNum(row[ix.quantity]).toFixed(12),
+    ix.buyPrice >= 0 ? parseNum(row[ix.buyPrice]).toFixed(12) : (0).toFixed(12),
+    ix.cost >= 0 ? parseNum(row[ix.cost]).toFixed(12) : (0).toFixed(12),
+    ix.currency >= 0 ? normalizeCurrencyCode_(row[ix.currency]) : "",
+    ix.fee >= 0 ? parseNum(row[ix.fee]).toFixed(12) : (0).toFixed(12)
   ].join("|");
-  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_1, raw, Utilities.Charset.UTF_8);
+  return hashTradeId_(raw);
+}
+
+function hashTradeId_(raw) {
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_1, String(raw || ""), Utilities.Charset.UTF_8);
   return digest.map(function (b) {
     const v = (b + 256) % 256;
     return ("0" + v.toString(16)).slice(-2);
   }).join("").slice(0, 16);
+}
+
+function tradeIdentityRaw_(trade) {
+  // CANONICAL 10-field identity (object form). Mirrors tradeIdFromRow_ and
+  // app.py/core.py._to_trade_id. Currency goes through normalizeCurrencyCode_
+  // so ₪/$ symbols map to ILS/USD identically across all clients.
+  return [
+    cleanText(trade.Platform || ""),
+    cleanText(trade.Current_Location || ""),
+    cleanText(trade.Type || ""),
+    cleanText(trade.Ticker || "").toUpperCase(),
+    normalizeDateOnly_(trade.Purchase_Date || ""),
+    parseNum(trade.Quantity || 0).toFixed(12),
+    parseNum(trade.Origin_Buy_Price || 0).toFixed(12),
+    parseNum(trade.Cost_Origin || 0).toFixed(12),
+    normalizeCurrencyCode_(trade.Origin_Currency || ""),
+    parseNum(trade.Commission || 0).toFixed(12)
+  ].join("|");
+}
+
+function buildTradeIdFromTrade_(trade) {
+  return hashTradeId_(tradeIdentityRaw_(trade));
+}
+
+function ensureUniqueTradeIdForAdd_(ws, ix, trade) {
+  let base = cleanText(trade.Trade_ID || "");
+  if (!base) base = buildTradeIdFromTrade_(trade);
+  if (findTradeRowById_(ws, ix, base) < 0) return base;
+
+  for (let i = 1; i <= 50; i++) {
+    const candidate = hashTradeId_(base + "|" + Date.now() + "|" + i + "|" + Math.random());
+    if (findTradeRowById_(ws, ix, candidate) < 0) return candidate;
+  }
+  return hashTradeId_(base + "|fallback|" + Date.now() + "|" + Math.random());
 }
 
 // --------------------------
@@ -449,6 +824,11 @@ function doPost(e) {
       return jsonResponse_({ ok: true, stats: stats });
     }
 
+    if (action === "dedupe_snapshot_schema") {
+      const result = dedupeSnapshotSchemaOnce_();
+      return jsonResponse_(result);
+    }
+
     if (readAliases[action]) {
       const data = readSnapshotRows_();
       return jsonResponse_({ ok: true, data: data });
@@ -475,7 +855,7 @@ function doPost(e) {
     const trade = sanitizeTrade_(payload.trade || {});
     if (!trade.Trade_ID) return jsonResponse_({ ok: false, error: "Trade_ID is required" });
 
-    const result = action === "delete" ? deleteTrade_(trade.Trade_ID) : upsertTrade_(action, trade);
+    const result = action === "delete" ? deleteTrade_(trade) : upsertTrade_(action, trade);
     appendAudit_(action, trade.Trade_ID, result.ok ? "OK" : "ERROR", JSON.stringify(result));
     return jsonResponse_(result);
   } catch (err) {
@@ -493,9 +873,10 @@ function readSnapshotRows_() {
 
   const values = ws.getRange(1, 1, lastRow, lastCol).getValues();
   const headers = values[0].map(cleanText);
-  const tz = Session.getScriptTimeZone();
+  const map = buildSnapshotHeaderIndexMap_(headers);
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
   const rows = values.slice(1)
-    .filter(function(r) { return cleanText(r[3]) !== ""; })
+    .filter(function(r) { return cleanText(rowVal_(r, map, "ticker")) !== ""; })
     .map(function(row) {
       return row.map(function(cell) {
         if (Object.prototype.toString.call(cell) === "[object Date]") {
@@ -510,27 +891,56 @@ function readSnapshotRows_() {
 function sanitizeTrade_(trade) {
   const out = {};
   Object.keys(trade).forEach(function (k) { out[k] = trade[k]; });
+  out.Current_Location = cleanText(out.Current_Location || out["מיקום נוכחי"] || "");
   out.Platform = cleanText(out.Platform || out["פלטפורמה"] || "");
   out.Type = cleanText(out.Type || out["סוג נכס"] || "קריפטו");
   out.Ticker = cleanText(out.Ticker || out["טיקר"] || "").toUpperCase();
-  out.Purchase_Date = cleanText(out.Purchase_Date || out["תאריך רכישה"] || "");
+  out.Purchase_Date = normalizeDateOnly_(out.Purchase_Date || out["תאריך רכישה"] || "");
   out.Quantity = parseNum(out.Quantity || out["כמות"]);
   out.Origin_Buy_Price = parseNum(out.Origin_Buy_Price || out["שער קנייה"]);
   out.Cost_Origin = parseNum(out.Cost_Origin || out["עלות כוללת"]);
   out.Origin_Currency = cleanText(out.Origin_Currency || out["מטבע"] || "ILS").toUpperCase();
   out.Commission = parseNum(out.Commission || out["עמלה"]);
   out.Status = cleanText(out.Status || out["סטטוס"] || "פתוח");
+  out.Sell_Date = normalizeDateOnly_(out.Sell_Date || out["תאריך מכירה"] || "");
   out.Trade_ID = cleanText(out.Trade_ID || "");
 
+  if (out.Cost_Origin <= 0 && out.Quantity > 0 && out.Origin_Buy_Price > 0) {
+    out.Cost_Origin = out.Quantity * out.Origin_Buy_Price;
+  }
+
   if (!out.Trade_ID) {
-    const raw = [out.Platform, out.Ticker, normalizeDateOnly_(out.Purchase_Date), out.Quantity, out.Cost_Origin].join("|");
-    const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_1, raw, Utilities.Charset.UTF_8);
-    out.Trade_ID = digest.map(function (b) {
-      const v = (b + 256) % 256;
-      return ("0" + v.toString(16)).slice(-2);
-    }).join("").slice(0, 16);
+    out.Trade_ID = buildTradeIdFromTrade_(out);
   }
   return out;
+}
+
+function applyCalculatedFormulasForRow_(ws, rowNum) {
+  if (!ws || rowNum < 2) return;
+  const headers = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0].map(cleanText);
+  const map = buildSnapshotHeaderIndexMap_(headers);
+  const r = rowNum;
+  const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
+  const formulas = {
+    spotUsd: '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0)))',
+    costUsd: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) / IF($I' + r + '="USD", 1, ' + hRate + '))',
+    costIls: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * IF($I' + r + '="ILS", 1, ' + hRate + '))',
+    valueUsd: '=IF(F' + r + '="", 0, F' + r + '*M' + r + ')',
+    valueIls: '=IF(P' + r + '="","", P' + r + ' * $AA$1)',
+    buyUsd: '=IF(G' + r + '="","", IF($I' + r + '="USD", $G' + r + ', $G' + r + ' / ' + hRate + '))',
+    buyIls: '=IF(G' + r + '="","", IF($I' + r + '="ILS", $G' + r + ', $G' + r + ' * ' + hRate + '))',
+    spotIls: '=IF(M' + r + '="","", M' + r + ' * $AA$1)',
+    sellPrice: '=IF(K' + r + '<>"סגור", "", IF(F' + r + '="", "", IF($I' + r + '="USD", P' + r + '/F' + r + ', Q' + r + '/F' + r + ')))',
+    yieldAtSale: '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
+    yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
+    yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
+  };
+
+  Object.keys(formulas).forEach(function (k) {
+    const ix = map[k];
+    if (ix === undefined || ix < 0) return;
+    ws.getRange(r, ix + 1).setFormula(formulas[k]);
+  });
 }
 
 function rowToMapByHeaders_(headers, row) {
@@ -557,6 +967,7 @@ function tradeFromAuditRow_(headers, row) {
   }
 
   return sanitizeTrade_({
+    Current_Location: asMap.Current_Location || asMap["מיקום נוכחי"] || "",
     Platform: asMap.Platform || asMap["פלטפורמה"] || "",
     Type: asMap.Type || asMap["סוג נכס"] || "קריפטו",
     Ticker: asMap.Ticker || asMap["טיקר"] || "",
@@ -567,6 +978,7 @@ function tradeFromAuditRow_(headers, row) {
     Origin_Currency: asMap.Origin_Currency || asMap["מטבע"] || "ILS",
     Commission: asMap.Commission || asMap["עמלה"] || 0,
     Status: asMap.Status || asMap["סטטוס"] || "פתוח",
+    Sell_Date: asMap.Sell_Date || asMap["תאריך מכירה"] || "",
     Trade_ID: asMap.Trade_ID || asMap.trade_id || ""
   });
 }
@@ -583,7 +995,7 @@ function syncAuditRowToPortfolio_(sheet, rowNum) {
   const trade = tradeFromAuditRow_(headers, row);
   if (!trade || !trade.Trade_ID) return;
 
-  const result = action === "delete" ? deleteTrade_(trade.Trade_ID) : upsertTrade_(action, trade);
+  const result = action === "delete" ? deleteTrade_(trade) : upsertTrade_(action, trade);
   const statusCell = headers.indexOf("Status") >= 0 ? headers.indexOf("Status") + 1 : -1;
   if (statusCell > 0) {
     sheet.getRange(rowNum, statusCell).setValue(result.ok ? "OK" : "ERROR");
@@ -594,9 +1006,52 @@ function syncAuditRowToPortfolio_(sheet, rowNum) {
 function findTradeRowById_(ws, ix, tradeId) {
   const last = ws.getLastRow();
   if (last < 2) return -1;
-  const values = ws.getRange(2, ix.tradeId + 1, last - 1, 1).getValues();
-  for (let i = 0; i < values.length; i++) {
-    if (cleanText(values[i][0]) === cleanText(tradeId)) return i + 2;
+  const targetId = cleanText(tradeId);
+  if (!targetId) return -1;
+
+  if (ix.tradeId >= 0) {
+    const values = ws.getRange(2, ix.tradeId + 1, last - 1, 1).getValues();
+    for (let i = 0; i < values.length; i++) {
+      if (cleanText(values[i][0]) === targetId) return i + 2;
+    }
+  }
+
+  const headerRow = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0].map(cleanText);
+  const fallbackCols = ["Trade_ID", "Trade ID", "מזהה עסקה", "trade_id"]
+    .map(function (h) { return headerRow.indexOf(h); })
+    .filter(function (idx) { return idx >= 0; });
+
+  for (let c = 0; c < fallbackCols.length; c++) {
+    const colIx = fallbackCols[c];
+    const values = ws.getRange(2, colIx + 1, last - 1, 1).getValues();
+    for (let i = 0; i < values.length; i++) {
+      if (cleanText(values[i][0]) === targetId) return i + 2;
+    }
+  }
+  return -1;
+}
+
+function findTradeRowByKey_(ws, ix, trade) {
+  const last = ws.getLastRow();
+  if (last < 2) return -1;
+  if (ix.platform < 0 || ix.ticker < 0 || ix.purchaseDate < 0 || ix.quantity < 0 || ix.cost < 0) return -1;
+  const width = ws.getLastColumn();
+  const rows = ws.getRange(2, 1, last - 1, width).getValues();
+
+  const targetPlatform = cleanText(trade.Platform || "");
+  const targetTicker = cleanText(trade.Ticker || "").toUpperCase();
+  const targetDate = normalizeDateOnly_(trade.Purchase_Date || "");
+  const targetQty = parseNum(trade.Quantity || 0);
+  const targetCost = parseNum(trade.Cost_Origin || 0);
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (targetPlatform && cleanText(row[ix.platform]) !== targetPlatform) continue;
+    if (targetTicker && cleanText(row[ix.ticker]).toUpperCase() !== targetTicker) continue;
+    if (targetDate && normalizeDateOnly_(row[ix.purchaseDate]) !== targetDate) continue;
+    if (!almostEqual_(row[ix.quantity], targetQty, 1e-8)) continue;
+    if (!almostEqual_(row[ix.cost], targetCost, 0.01)) continue;
+    return i + 2;
   }
   return -1;
 }
@@ -605,53 +1060,113 @@ function upsertTrade_(action, trade) {
   const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PORTFOLIO_SHEET);
   const ix = getColumnMap_(ws);
   const width = ws.getLastColumn();
-  const rowIndex = findTradeRowById_(ws, ix, trade.Trade_ID);
+  let rowIndex = findTradeRowById_(ws, ix, trade.Trade_ID);
+  if (action === "edit" && rowIndex < 0) {
+    rowIndex = findTradeRowByKey_(ws, ix, trade);
+  }
+  if (action === "edit" && rowIndex < 0) {
+    rowIndex = findTradeRowLoose_(ws, ix, trade);
+  }
 
-  if (action === "add" && rowIndex > 0) return { ok: false, error: "Trade already exists" };
+  if (action === "add") {
+    // Similar purchases are allowed; only resolve Trade_ID collisions.
+    if (rowIndex > 0) {
+      trade.Trade_ID = ensureUniqueTradeIdForAdd_(ws, ix, trade);
+      rowIndex = -1;
+    }
+  }
   if (action === "edit" && rowIndex < 0) return { ok: false, error: "Trade not found" };
 
   if (action === "add") {
     const target = ws.getLastRow() + 1;
     const row = new Array(width).fill("");
+    const isClosed = cleanText(trade.Status) === "סגור";
+    const sellDateVal = cleanText(trade.Sell_Date);
+    if (ix.location >= 0) row[ix.location] = trade.Current_Location;
     row[ix.platform] = trade.Platform;
     row[ix.type] = trade.Type;
     row[ix.ticker] = trade.Ticker;
-    row[ix.purchaseDate] = trade.Purchase_Date;
+    row[ix.purchaseDate] = toSheetDateOrText_(trade.Purchase_Date);
     row[ix.quantity] = trade.Quantity;
     row[ix.buyPrice] = trade.Origin_Buy_Price;
     row[ix.cost] = trade.Cost_Origin;
     row[ix.currency] = trade.Origin_Currency;
     row[ix.fee] = trade.Commission;
     row[ix.status] = trade.Status;
+    if (ix.sellDate >= 0) row[ix.sellDate] = isClosed ? toSheetDateOrText_(sellDateVal || new Date()) : "עדיין פתוח";
     row[ix.tradeId] = trade.Trade_ID;
     ws.getRange(target, 1, 1, width).setValues([row]);
-    if (target > 2) {
-      ws.getRange(target - 1, 12, 1, 12).copyTo(ws.getRange(target, 12, 1, 12), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+    if (target >= 2) {
+      const templateRow = findFormulaTemplateRow_(ws, target);
+      if (templateRow >= 2) {
+        copyCalculatedFormulaCells_(ws, templateRow, target);
+      } else {
+        applyCalculatedFormulasForRow_(ws, target);
+      }
       ws.getRange(target - 1, 1, 1, width).copyTo(ws.getRange(target, 1, 1, width), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
     }
-    return { ok: true, message: "Added", row: target };
+    return { ok: true, message: "Added", row: target, trade_id: trade.Trade_ID };
   }
 
-  const existing = ws.getRange(rowIndex, 1, 1, width).getValues()[0];
+  const rowRange = ws.getRange(rowIndex, 1, 1, width);
+  const existing = rowRange.getValues()[0];
+  const existingFormulas = rowRange.getFormulas()[0];
+
+  if (ix.location >= 0) existing[ix.location] = trade.Current_Location;
   existing[ix.platform] = trade.Platform;
   existing[ix.type] = trade.Type;
   existing[ix.ticker] = trade.Ticker;
-  existing[ix.purchaseDate] = trade.Purchase_Date;
+  existing[ix.purchaseDate] = toSheetDateOrText_(trade.Purchase_Date);
   existing[ix.quantity] = trade.Quantity;
   existing[ix.buyPrice] = trade.Origin_Buy_Price;
   existing[ix.cost] = trade.Cost_Origin;
   existing[ix.currency] = trade.Origin_Currency;
   existing[ix.fee] = trade.Commission;
   existing[ix.status] = trade.Status;
+  if (ix.sellDate >= 0) {
+    const nowClosed = cleanText(trade.Status) === "סגור";
+    const incomingSellDate = cleanText(trade.Sell_Date);
+    const existingSellDate = cleanText(existing[ix.sellDate]);
+    if (nowClosed) {
+      existing[ix.sellDate] = toSheetDateOrText_(incomingSellDate || (existingSellDate === "עדיין פתוח" ? "" : existingSellDate) || new Date());
+    } else {
+      existing[ix.sellDate] = "עדיין פתוח";
+    }
+  }
   existing[ix.tradeId] = trade.Trade_ID;
-  ws.getRange(rowIndex, 1, 1, width).setValues([existing]);
-  return { ok: true, message: "Updated", row: rowIndex };
+
+  // Preserve formula-based calculated cells during edit so yields stay alive.
+  const protectedIx = {};
+  [ix.location, ix.platform, ix.type, ix.ticker, ix.purchaseDate, ix.quantity, ix.buyPrice, ix.cost, ix.currency, ix.fee, ix.status, ix.sellDate, ix.tradeId]
+    .forEach(function (v) { if (v >= 0) protectedIx[v] = true; });
+  for (let c = 0; c < width; c++) {
+    if (protectedIx[c]) continue;
+    if (existingFormulas[c]) {
+      existing[c] = existingFormulas[c];
+    }
+  }
+
+  rowRange.setValues([existing]);
+
+  // If this row lost formulas previously, restore them from a nearby template row.
+  const templateRowForEdit = findFormulaTemplateRow_(ws, rowIndex);
+  if (templateRowForEdit >= 2) {
+    copyCalculatedFormulaCells_(ws, templateRowForEdit, rowIndex);
+  } else {
+    applyCalculatedFormulasForRow_(ws, rowIndex);
+  }
+  return { ok: true, message: "Updated", row: rowIndex, trade_id: trade.Trade_ID };
 }
 
-function deleteTrade_(tradeId) {
+function deleteTrade_(tradeOrId) {
   const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PORTFOLIO_SHEET);
   const ix = getColumnMap_(ws);
-  const rowIndex = findTradeRowById_(ws, ix, tradeId);
+  const asTrade = (typeof tradeOrId === "object" && tradeOrId !== null) ? tradeOrId : { Trade_ID: tradeOrId };
+  const tradeId = cleanText(asTrade.Trade_ID || "");
+  let rowIndex = findTradeRowById_(ws, ix, tradeId);
+  if (rowIndex < 0) {
+    rowIndex = findTradeRowByKey_(ws, ix, asTrade);
+  }
   if (rowIndex < 0) return { ok: false, error: "Trade not found" };
   ws.deleteRow(rowIndex);
   return { ok: true, message: "Deleted", row: rowIndex };
@@ -659,7 +1174,77 @@ function deleteTrade_(tradeId) {
 
 function validateToken_(token) {
   const required = PropertiesService.getScriptProperties().getProperty("API_TOKEN");
-  if (required && token !== required) throw new Error("Unauthorized");
+  // Fail CLOSED. Previously this only checked the token when API_TOKEN was set,
+  // so an unset/cleared property silently authorized every request — granting
+  // anyone with the public Web-App URL read/write access to the sheet.
+  if (!required) throw new Error("Unauthorized: API_TOKEN script property is not configured");
+  if (token !== required) throw new Error("Unauthorized");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MONTHLY EMAIL REPORT — zero-credential summary via MailApp.
+// One-time setup: Apps Script editor → Triggers (⏰) → Add Trigger →
+//   function: sendMonthlyReport, event source: Time-driven,
+//   type: Month timer, day: 1st, hour: e.g. 8-9am.
+// Sends a Hebrew summary of the portfolio to the sheet owner's email.
+// ─────────────────────────────────────────────────────────────────────
+function sendMonthlyReport() {
+  const data = readSnapshotRows_();
+  const headers = data.headers;
+  const rows = data.rows;
+  const ixOf = function (names) {
+    for (let i = 0; i < headers.length; i++) {
+      if (names.indexOf(cleanText(headers[i])) >= 0) return i;
+    }
+    return -1;
+  };
+  const ixTicker = ixOf(["טיקר", "Ticker"]);
+  const ixStatus = ixOf(["סטטוס", "Status"]);
+  const ixCostIls = ixOf(["עלות ILS"]);
+  const ixValueIls = ixOf(["שווי ILS"]);
+  const closedSet = ["סגור", "closed", "close", "sold", "נמכר"];
+
+  let totalCost = 0, totalValue = 0, nOpen = 0, nClosed = 0;
+  const byTicker = {};
+  rows.forEach(function (r) {
+    const status = cleanText(r[ixStatus] || "").toLowerCase();
+    if (closedSet.indexOf(status) >= 0) { nClosed++; return; }
+    nOpen++;
+    const cost = parseNum(r[ixCostIls]);
+    const value = parseNum(r[ixValueIls]);
+    totalCost += cost;
+    totalValue += value;
+    const t = cleanText(r[ixTicker] || "?").toUpperCase();
+    byTicker[t] = (byTicker[t] || 0) + value;
+  });
+
+  const profit = totalValue - totalCost;
+  const retPct = totalCost > 0 ? (profit / totalCost) * 100 : 0;
+  const fmt = function (n) { return "₪" + Math.round(n).toLocaleString("en-US"); };
+  const top = Object.keys(byTicker)
+    .map(function (t) { return [t, byTicker[t]]; })
+    .sort(function (a, b) { return b[1] - a[1]; })
+    .slice(0, 5)
+    .map(function (e) {
+      const w = totalValue > 0 ? ((e[1] / totalValue) * 100).toFixed(1) : "0";
+      return "  • " + e[0] + ": " + fmt(e[1]) + " (" + w + "%)";
+    })
+    .join("\n");
+
+  const now = new Date();
+  const subject = "📊 Portfolio OS — סיכום חודשי " + Utilities.formatDate(now, "Asia/Jerusalem", "MM/yyyy");
+  const body =
+    "סיכום התיק נכון ל-" + Utilities.formatDate(now, "Asia/Jerusalem", "dd/MM/yyyy HH:mm") + "\n\n" +
+    "שווי כולל:        " + fmt(totalValue) + "\n" +
+    "עלות כוללת:       " + fmt(totalCost) + "\n" +
+    "רווח/הפסד פתוח:   " + fmt(profit) + " (" + retPct.toFixed(2) + "%)\n" +
+    "פוזיציות:          " + nOpen + " פתוחות, " + nClosed + " סגורות\n\n" +
+    "5 ההחזקות הגדולות:\n" + top + "\n\n" +
+    "— נשלח אוטומטית ע\"י Portfolio OS (Apps Script monthly trigger)";
+
+  MailApp.sendEmail(Session.getEffectiveUser().getEmail(), subject, body);
+  appendAudit_("monthly_report", "", "OK", subject);
+  return subject;
 }
 
 function jsonResponse_(obj) {
@@ -757,32 +1342,45 @@ function InstallSystem() {
       mainSheet.getRange(2, 11, mainSheet.getLastRow() - 1, 1).setValue("פתוח");
     }
   }
-  mainSheet.getRange("L:AE").clear();
-  const formulaHeaders = [["שער נוכחי USD", "שווי נוכחי USD", "עלות USD", "עלות ILS", "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי USD (כפילות)", "שער נוכחי ILS", "תשואה מקור", "תשואה שקלית"]];
-  mainSheet.getRange("L1:W1").setValues(formulaHeaders).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
-  mainSheet.getRange("Y1").setFormula('=GOOGLEFINANCE("CURRENCY:USDILS")').setBackground("#FFF2CC").setFontWeight("bold").setHorizontalAlignment("center");
-  mainSheet.getRange("X1").setValue("שער USD/ILS עדכני:").setFontWeight("bold");
+  // Keep Sell_Date values in V intact; only clear formula regions around it.
+  mainSheet.getRange("L1").setValue("סטטוס מכירה");
+  mainSheet.getRange("M:U").clear();
+  mainSheet.getRange("W:AE").clear();
+  const metricHeaders = [["שער נוכחי USD", "עלות USD", "עלות ILS", "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי ILS", "שער מכירה"]];
+  mainSheet.getRange("M1:U1").setValues(metricHeaders).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
+  mainSheet.getRange("V1").setValue("תאריך מכירה").setBackground("#4A5568").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
+  const yieldHeaders = [["תשואה במכירה", "תשואה מקור", "תשואה שקלית"]];
+  mainSheet.getRange("W1:Y1").setValues(yieldHeaders).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
+  mainSheet.getRange("Z1").setValue("שער USD/ILS עדכני:").setFontWeight("bold");
+  mainSheet.getRange("AA1").setFormula('=GOOGLEFINANCE("CURRENCY:USDILS")').setBackground("#FFF2CC").setFontWeight("bold").setHorizontalAlignment("center");
+  mainSheet.getRange("AA1").setNumberFormat("#,##0.000000");
   const numRows = Math.max(mainSheet.getLastRow(), 2) - 1;
-  const formulasToApply = [];
+  const pricingFormulas = [];
+  const yieldFormulas = [];
   for (let i = 0; i < numRows; i++) {
     const r = i + 2;
-    const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $Y$1)), $Y$1)";
-    formulasToApply.push([
-      '=IF(K' + r + '="סגור", "נמכר", IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0))))',
-      '=IF(OR(F' + r + '="", L' + r + '="נמכר"), 0, F' + r + '*L' + r + ')',
+    const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
+    pricingFormulas.push([
+      '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0)))',
       '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) / IF($I' + r + '="USD", 1, ' + hRate + '))',
       '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * IF($I' + r + '="ILS", 1, ' + hRate + '))',
-      '=IF(M' + r + '="","", M' + r + ')',
-      '=IF(M' + r + '="","", M' + r + ' * $Y$1)',
+      '=IF(F' + r + '="", 0, F' + r + '*M' + r + ')',
+      '=IF(P' + r + '="","", P' + r + ' * $AA$1)',
       '=IF(G' + r + '="","", IF($I' + r + '="USD", $G' + r + ', $G' + r + ' / ' + hRate + '))',
       '=IF(G' + r + '="","", IF($I' + r + '="ILS", $G' + r + ', $G' + r + ' * ' + hRate + '))',
-      '=IF(L' + r + '="","", L' + r + ')',
-      '=IF(L' + r + '="","", L' + r + ' * $Y$1)',
-      '=IF(OR($H' + r + '="", $H' + r + '=0, K' + r + '="סגור"), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
-      '=IF(OR($O' + r + '="", $O' + r + '=0, K' + r + '="סגור"), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
+      '=IF(M' + r + '="","", M' + r + ' * $AA$1)',
+      '=IF(K' + r + '<>"סגור", "", IF(F' + r + '="", "", IF($I' + r + '="USD", P' + r + '/F' + r + ', Q' + r + '/F' + r + ')))'
+    ]);
+    yieldFormulas.push([
+      '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
+      '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
+      '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
     ]);
   }
-  mainSheet.getRange(2, 12, numRows, 12).setFormulas(formulasToApply);
+  if (numRows > 0) {
+    mainSheet.getRange(2, 13, numRows, 9).setFormulas(pricingFormulas); // M:U
+    mainSheet.getRange(2, 23, numRows, 3).setFormulas(yieldFormulas);   // W:Y
+  }
 
   // Normalize numeric formats to avoid mixed text/currency exports in CSV.
   if (numRows > 0) {
@@ -791,9 +1389,33 @@ function InstallSystem() {
     mainSheet.getRange(2, 8, numRows, 1).setNumberFormat("#,##0.00");       // עלות כוללת
     mainSheet.getRange(2, 10, numRows, 1).setNumberFormat("#,##0.00");      // עמלה
 
-    // L:W = formula columns
-    mainSheet.getRange(2, 12, numRows, 10).setNumberFormat("#,##0.00");     // L:U numeric values
-    mainSheet.getRange(2, 22, numRows, 2).setNumberFormat("0.00%");          // V:W yields
+    mainSheet.getRange(2, 22, numRows, 1).setNumberFormat("dd/MM/yyyy");     // תאריך מכירה (V)
+    mainSheet.getRange(2, 13, numRows, 9).setNumberFormat("#,##0.00");       // M:U numeric values
+
+    // Ensure yield columns are always formatted as percentages by header name.
+    const headerMap = buildSnapshotHeaderIndexMap_(mainSheet.getRange(1, 1, 1, mainSheet.getLastColumn()).getValues()[0]);
+    const yieldCols = [headerMap.yieldAtSale, headerMap.yieldOrigin, headerMap.yieldIls].filter(function (ix) { return ix >= 0; });
+    yieldCols.forEach(function (ix) {
+      mainSheet.getRange(2, ix + 1, numRows, 1).setNumberFormat("0.00%");
+    });
+
+    // Open rows should explicitly show "עדיין פתוח" in Sell_Date.
+    if (headerMap.status >= 0 && headerMap.sellDate >= 0) {
+      const statusVals = mainSheet.getRange(2, headerMap.status + 1, numRows, 1).getValues();
+      const sellVals = mainSheet.getRange(2, headerMap.sellDate + 1, numRows, 1).getValues();
+      const outSell = [];
+      for (let i = 0; i < numRows; i++) {
+        const statusVal = cleanText(statusVals[i][0]);
+        const existingVal = sellVals[i][0];
+        const existingText = cleanText(existingVal);
+        if (statusVal === "סגור") {
+          outSell.push([existingText && existingText !== "עדיין פתוח" ? existingVal : new Date()]);
+        } else {
+          outSell.push(["עדיין פתוח"]);
+        }
+      }
+      mainSheet.getRange(2, headerMap.sellDate + 1, numRows, 1).setValues(outSell);
+    }
   }
 
   sortSheetByDate();
@@ -804,13 +1426,14 @@ function formatMainSheet() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("תמונת מצב");
   if (!sheet) return;
   const lastRow = Math.max(sheet.getLastRow(), 2);
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
   sheet.setRightToLeft(true);
   sheet.setFrozenRows(1);
-  const fullRange = sheet.getRange(1, 1, lastRow, 23);
+  const fullRange = sheet.getRange(1, 1, lastRow, lastCol);
   fullRange.setHorizontalAlignment("center").setVerticalAlignment("middle");
   sheet.getBandings().forEach(function (b) { b.remove(); });
   fullRange.applyRowBanding(SpreadsheetApp.BandingTheme.INDIGO, true, false);
-  sheet.autoResizeColumns(1, 23);
+  sheet.autoResizeColumns(1, lastCol);
 }
 
 function RefreshAllData() {
@@ -827,20 +1450,28 @@ function buildDashboard() {
   homeSheet.getRange(1, 1, homeSheet.getMaxRows(), homeSheet.getMaxColumns()).clearDataValidations();
   homeSheet.setRightToLeft(true);
   const data = mainSheet.getDataRange().getValues();
-  const rows = data.slice(1).filter(function (r) { return cleanText(r[3]) !== "" && cleanText(r[10]) !== "סגור"; });
+  const map = buildSnapshotHeaderIndexMap_(data[0] || []);
+  const rows = data.slice(1).filter(function (r) {
+    return cleanText(rowVal_(r, map, "ticker")) !== "" && cleanText(rowVal_(r, map, "status")) !== "סגור";
+  });
   const summary = {};
   let totalCostILS = 0;
   let totalValILS = 0;
   rows.forEach(function (r) {
-    const t = cleanText(r[3]);
+    const t = cleanText(rowVal_(r, map, "ticker"));
     if (!summary[t]) summary[t] = { qty: 0, costILS: 0, valILS: 0, costOrig: 0, valOrig: 0 };
-    summary[t].qty += parseNum(r[5]);
-    summary[t].costILS += parseNum(r[14]);
-    summary[t].valILS += parseNum(r[16]);
-    summary[t].costOrig += parseNum(r[7]) + parseNum(r[9]);
-    summary[t].valOrig += (cleanText(r[8]) === "USD" ? parseNum(r[15]) : parseNum(r[16]));
-    totalCostILS += parseNum(r[14]);
-    totalValILS += parseNum(r[16]);
+    const qty = parseNum(rowVal_(r, map, "quantity"));
+    const costIls = parseNum(rowVal_(r, map, "costIls"));
+    const valueIls = parseNum(rowVal_(r, map, "valueIls"));
+    const costOrig = parseNum(rowVal_(r, map, "costOrigin")) + parseNum(rowVal_(r, map, "fee"));
+    const valueOrig = cleanText(rowVal_(r, map, "currency")) === "USD" ? parseNum(rowVal_(r, map, "valueUsd")) : valueIls;
+    summary[t].qty += qty;
+    summary[t].costILS += costIls;
+    summary[t].valILS += valueIls;
+    summary[t].costOrig += costOrig;
+    summary[t].valOrig += valueOrig;
+    totalCostILS += costIls;
+    totalValILS += valueIls;
   });
   homeSheet.getRange("B2:H2").merge().setValue("💼 לוח בקרה - התיק הפעיל").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#1A365D").setFontColor("white");
   const totalYield = totalCostILS ? (totalValILS - totalCostILS) / totalCostILS : 0;
@@ -908,6 +1539,26 @@ function onEdit(e) {
   const sheet = e.source.getActiveSheet();
   const sheetName = sheet.getName();
 
+  // Freeze Sell_Date when a row is manually marked closed in תמונת מצב.
+  if (sheetName === PORTFOLIO_SHEET && e.range.getRow() > 1) {
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(cleanText);
+    const map = buildSnapshotHeaderIndexMap_(headers);
+    const editedCol = e.range.getColumn() - 1;
+    if (editedCol === map.status && map.sellDate >= 0) {
+      const rowNum = e.range.getRow();
+      const statusVal = cleanText(sheet.getRange(rowNum, map.status + 1).getValue());
+      if (statusVal === "סגור") {
+        const sellDateCell = sheet.getRange(rowNum, map.sellDate + 1);
+        const currentSellDate = cleanText(sellDateCell.getValue());
+        if (!currentSellDate || currentSellDate === "עדיין פתוח") {
+          sellDateCell.setValue(new Date());
+        }
+      } else {
+        sheet.getRange(rowNum, map.sellDate + 1).setValue("עדיין פתוח");
+      }
+    }
+  }
+
   // Allow manual/additional rows in תגובות לטופס 1 to flow into תמונת מצב.
   if (sheetName === AUDIT_SHEET) {
     syncAuditRowToPortfolio_(sheet, e.range.getRow());
@@ -949,15 +1600,22 @@ function renderReport(reportName, homeSheet) {
   if (!reportName || reportName === "- נקה דוח -") return;
   const mainSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("תמונת מצב");
   const data = mainSheet.getDataRange().getValues();
-  const rows = data.slice(1).filter(function (r) { return cleanText(r[3]) !== "" && cleanText(r[10]) !== "סגור"; });
+  const map = buildSnapshotHeaderIndexMap_(data[0] || []);
+  const rows = data.slice(1).filter(function (r) {
+    return cleanText(rowVal_(r, map, "ticker")) !== "" && cleanText(rowVal_(r, map, "status")) !== "סגור";
+  });
   let totalVal = 0, totalCost = 0, cryptoVal = 0, btcVal = 0;
   const platformCosts = {}, tickerSummary = {};
   const assetData = { BTC: { realQty: 0, realVal: 0, etfQty: 0, etfVal: 0 }, ETH: { realQty: 0, realVal: 0, etfQty: 0, etfVal: 0 }, SOL: { realQty: 0, realVal: 0, etfQty: 0, etfVal: 0 } };
   rows.forEach(function (r) {
-    const platform = cleanText(r[1]), type = cleanText(r[2]), ticker = cleanText(r[3]);
-    const qty = parseNum(r[5]), costILS = parseNum(r[14]), valILS = parseNum(r[16]);
-    const costOrig = parseNum(r[7]) + parseNum(r[9]);
-    const valOrig = cleanText(r[8]) === "USD" ? parseNum(r[15]) : parseNum(r[16]);
+    const platform = cleanText(rowVal_(r, map, "platform"));
+    const type = cleanText(rowVal_(r, map, "type"));
+    const ticker = cleanText(rowVal_(r, map, "ticker"));
+    const qty = parseNum(rowVal_(r, map, "quantity"));
+    const costILS = parseNum(rowVal_(r, map, "costIls"));
+    const valILS = parseNum(rowVal_(r, map, "valueIls"));
+    const costOrig = parseNum(rowVal_(r, map, "costOrigin")) + parseNum(rowVal_(r, map, "fee"));
+    const valOrig = cleanText(rowVal_(r, map, "currency")) === "USD" ? parseNum(rowVal_(r, map, "valueUsd")) : valILS;
     totalVal += valILS; totalCost += costILS;
     if (platform) platformCosts[platform] = (platformCosts[platform] || 0) + costILS;
     if (!tickerSummary[ticker]) tickerSummary[ticker] = { cost: 0, val: 0, costOrig: 0, valOrig: 0 };
@@ -1029,7 +1687,7 @@ function renderReport(reportName, homeSheet) {
       const tbl = [["דולר שקל (USD/ILS)", '=GOOGLEFINANCE("CURRENCY:USDILS")'], ["ביטקוין דולר (BTC/USD)", '=GOOGLEFINANCE("CURRENCY:BTCUSD")'], ["אתריום דולר (ETH/USD)", '=GOOGLEFINANCE("CURRENCY:ETHUSD")'], ["סולאנה דולר (SOL/USD)", '=GOOGLEFINANCE("CURRENCY:SOLUSD")']];
       homeSheet.getRange(reportRow, 11, tbl.length, 2).setValues(tbl).setBackground("#F7FAFC").setHorizontalAlignment("center");
       homeSheet.getRange(reportRow, 11, tbl.length, 1).setFontWeight("bold");
-      homeSheet.getRange(reportRow, 12, tbl.length, 1).setNumberFormat("#,##0.00");
+      homeSheet.getRange(reportRow, 12, tbl.length, 1).setNumberFormat("#,##0.000000");
       paintReportTable_(homeSheet, reportRow - 1, 11, tbl.length + 1, 2);
       reportRow += tbl.length + 2;
     }
@@ -1037,12 +1695,14 @@ function renderReport(reportName, homeSheet) {
 }
 
 function showDrillDown(ticker, homeSheet, startRow) {
-  const allRows = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("תמונת מצב").getDataRange().getValues().slice(1).filter(function (r) { return cleanText(r[3]) !== ""; });
+  const data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("תמונת מצב").getDataRange().getValues();
+  const map = buildSnapshotHeaderIndexMap_(data[0] || []);
+  const allRows = data.slice(1).filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) !== ""; });
   if (allRows.length === 0) return;
   let currentRow = startRow;
   if (ticker === "בחר הכל") {
     const allTickers = {};
-    allRows.forEach(function (r) { allTickers[r[3]] = true; });
+    allRows.forEach(function (r) { allTickers[cleanText(rowVal_(r, map, "ticker"))] = true; });
     Object.keys(allTickers).sort().forEach(function (t) { currentRow = drawSingleAssetTable(t, allRows, homeSheet, currentRow); });
   } else {
     drawSingleAssetTable(ticker, allRows, homeSheet, currentRow);
@@ -1050,7 +1710,9 @@ function showDrillDown(ticker, homeSheet, startRow) {
 }
 
 function drawSingleAssetTable(ticker, allRows, homeSheet, startRow) {
-  const history = allRows.filter(function (r) { return r[3] === ticker; });
+  const data = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("תמונת מצב").getDataRange().getValues();
+  const map = buildSnapshotHeaderIndexMap_(data[0] || []);
+  const history = allRows.filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) === ticker; });
   if (history.length === 0) return startRow;
   homeSheet.getRange(startRow, 2, 1, 8)
     .merge()
@@ -1067,7 +1729,18 @@ function drawSingleAssetTable(ticker, allRows, homeSheet, startRow) {
     .setFontWeight("bold")
     .setHorizontalAlignment("center");
 
-  const body = history.map(function (r) { return [r[4], r[1], parseNum(r[5]), parseNum(r[6]), parseNum(r[14]), parseNum(r[16]), parseNum(r[21]), r[10]]; });
+  const body = history.map(function (r) {
+    return [
+      rowVal_(r, map, "purchaseDate"),
+      rowVal_(r, map, "platform"),
+      parseNum(rowVal_(r, map, "quantity")),
+      parseNum(rowVal_(r, map, "buyPrice")),
+      parseNum(rowVal_(r, map, "costIls")),
+      parseNum(rowVal_(r, map, "valueIls")),
+      parseNum(rowVal_(r, map, "yieldOrigin")),
+      rowVal_(r, map, "status")
+    ];
+  });
   const bodyRange = homeSheet.getRange(startRow + 2, 2, body.length, 8);
   bodyRange
     .setValues(body)
@@ -1108,20 +1781,25 @@ function distributeToPlatformSheets() {
   const mainSheet = ss.getSheetByName("תמונת מצב");
   if (!mainSheet) return;
   const data = mainSheet.getDataRange().getValues();
+  const map = buildSnapshotHeaderIndexMap_(data[0] || []);
+  const width = mainSheet.getLastColumn();
   ["אקסלנס", "Bit2C", "הורייזון"].forEach(function (platform) {
     const targetSheet = ss.getSheetByName(platform);
     if (!targetSheet) return;
-    if (targetSheet.getLastRow() > 1) targetSheet.getRange(2, 1, targetSheet.getLastRow(), 23).clearContent();
-    const filteredData = data.filter(function (row) { return cleanText(row[1]) === platform; });
+    if (targetSheet.getLastRow() > 1) targetSheet.getRange(2, 1, targetSheet.getLastRow(), width).clearContent();
+    const filteredData = data.filter(function (row, idx) {
+      if (idx === 0) return false;
+      return cleanText(rowVal_(row, map, "platform")) === platform;
+    });
     if (filteredData.length > 0) {
       targetSheet.getRange(2, 1, filteredData.length, filteredData[0].length).setValues(filteredData);
-      const formulas = mainSheet.getRange(2, 1, 1, 23).getFormulas()[0];
-      for (let col = 0; col < 23; col++) {
+      const formulas = mainSheet.getRange(2, 1, 1, width).getFormulas()[0];
+      for (let col = 0; col < width; col++) {
         if (formulas[col] !== "") {
           mainSheet.getRange(2, col + 1).copyTo(targetSheet.getRange(2, col + 1, filteredData.length, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
         }
       }
-      mainSheet.getRange(2, 1, 1, 23).copyTo(targetSheet.getRange(2, 1, filteredData.length, 23), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+      mainSheet.getRange(2, 1, 1, width).copyTo(targetSheet.getRange(2, 1, filteredData.length, width), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
     }
   });
 }

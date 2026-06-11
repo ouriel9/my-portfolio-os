@@ -1,0 +1,84 @@
+# ─────────────────────────────────────────────────────────────────────
+#  Portfolio OS — .gitignore
+#  Added by security audit (2026-06-11). Protects credentials + financial
+#  data from being pushed to the PUBLIC GitHub remote (ouriel9/my-portfolio-os).
+#  NOTE: This only stops FUTURE commits. Files already tracked must be
+#  removed with `git rm --cached <file>` (see audit report).
+# ─────────────────────────────────────────────────────────────────────
+
+# === SECRETS / CREDENTIALS (never commit) ===
+app_local_config.json
+.streamlit/secrets.toml
+# GCP service-account private keys (any name)
+*service*account*.json
+*-credentials*.json
+clean-linker-*.json
+*.pem
+*.key
+
+# === USER FINANCIAL DATA (private) ===
+portfolio_data.json
+portfolio_data.bak*.json
+manual_deposits_store.json
+sim_user_prefs.json
+snapshot_cache.csv
+verified_data.csv
+
+# === LOGS ===
+*.log
+streamlit.err.log
+streamlit.out.log
+streamlit_debug.log
+streamlit_test.log
+
+# === PYTHON ===
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# === BUILD ARTIFACTS ===
+build/
+dist/
+*.spec.bak
+APP_2.0/build/
+APP_2.0/dist/
+
+# === NEXT.JS / NODE ===
+node_modules/
+nextjs-portfolio/node_modules/
+nextjs-portfolio/.next/
+nextjs-portfolio/out/
+nextjs-portfolio/tsconfig.tsbuildinfo
+nextjs-portfolio/android/
+
+# === IDE ===
+.idea/
+.vscode/
+
+# === ENV FILES ===
+.env
+.env.*
+!.env.example
+
+# === RUNTIME CACHE / DATA (per-user) ===
+snapshot_cache.csv
+
+# === STALE DUPLICATE PROJECT TREE ===
+.claude/app.py
+.claude/Code.gs
+.claude/app_local_config.json
+.claude/APP_2.0/
+.claude/.venv/
+.claude/.streamlit/
+
+# === MISC SCRATCH / QA ARTIFACTS ===
+_*.png
+_*.py
+chk.py
+s.py
+search_app.py
+_qa_*.py
+_refs/
+*.tmp
