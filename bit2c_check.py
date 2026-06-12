@@ -37,7 +37,43 @@ def private_get(path: str) -> dict:
         return json.loads(r.read().decode())
 
 
+def private_post(path: str, extra: dict | None = None) -> dict:
+    nonce = str(int(time.time() * 1000))
+    payload = {"nonce": nonce}
+    if extra:
+        payload.update(extra)
+    body = urllib.parse.urlencode(payload)
+    sign = base64.b64encode(
+        hmac.new(CREDS["secret"].encode(), body.encode(), hashlib.sha512).digest()
+    ).decode()
+    req = urllib.request.Request(
+        f"{BASE}{path}",
+        data=body.encode(),
+        headers={"Key": CREDS["key"], "Sign": sign,
+                 "Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode())
+
+
+def history() -> None:
+    # Pull account order history (all pairs) to find recent BTC buys.
+    for path in ("/Order/OrderHistory", "/Order/AccountHistory"):
+        try:
+            res = private_post(path, {"take": 50, "fromTime": 0})
+            print(f"=== {path} ===")
+            print(json.dumps(res, ensure_ascii=False, indent=2)[:4000])
+            return
+        except Exception as exc:
+            print(f"{path}: {str(exc)[:120]}")
+
+
 def main() -> None:
+    import sys
+    if "history" in sys.argv:
+        history()
+        return
     bal = private_get("/Account/Balance/v2")
     if isinstance(bal, dict) and bal.get("error"):
         print("API ERROR:", bal["error"])
