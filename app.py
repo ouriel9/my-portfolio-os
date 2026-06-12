@@ -2197,27 +2197,41 @@ def _inject_design_overlay(is_dark: bool) -> None:
     help badges untouched, no metric-label clipping). Remove this one function
     call to fully revert. Marker: PP-DESIGN-2026."""
     if is_dark:
-        page_grad = "radial-gradient(1200px 600px at 80% -10%, #15213b 0%, #0b1120 45%, #090e1a 100%)"
-        card_bg = "linear-gradient(180deg, rgba(30,41,59,.72), rgba(22,30,46,.72))"
-        card_brd = "rgba(148,163,184,.14)"
-        card_sh = "0 1px 2px rgba(0,0,0,.4), 0 18px 40px -24px rgba(0,0,0,.7)"
+        page_grad = ("radial-gradient(1100px 560px at 88% -12%, #1b2a4d 0%, rgba(11,17,32,0) 52%),"
+                     "radial-gradient(900px 520px at 6% 8%, #16223c 0%, rgba(11,17,32,0) 46%),"
+                     "linear-gradient(180deg, #0b1120 0%, #090e1a 100%)")
+        card_bg = "linear-gradient(165deg, rgba(33,45,68,.86), rgba(20,28,44,.86))"
+        card_brd = "rgba(148,163,184,.16)"
+        card_sh = "0 1px 2px rgba(0,0,0,.45), 0 22px 48px -26px rgba(0,0,0,.78)"
         val_col = "#f8fafc"
         lab_col = "#9fb0c7"
-        accent_glow = "rgba(99,102,241,.45)"
+        accent_glow = "rgba(99,102,241,.5)"
+        sidebar_bg = "linear-gradient(180deg, #0f1729 0%, #0a0f1c 100%)"
     else:
-        page_grad = "radial-gradient(1200px 600px at 80% -10%, #eef3fc 0%, #f5f8fd 45%, #eef2f9 100%)"
-        card_bg = "linear-gradient(180deg, #ffffff, #fcfdff)"
-        card_brd = "rgba(15,23,42,.07)"
-        card_sh = "0 1px 2px rgba(15,23,42,.05), 0 14px 34px -20px rgba(15,23,42,.20)"
+        page_grad = ("radial-gradient(1100px 560px at 88% -12%, #e7eefc 0%, rgba(245,248,253,0) 52%),"
+                     "radial-gradient(900px 520px at 4% 6%, #eef1fb 0%, rgba(245,248,253,0) 48%),"
+                     "linear-gradient(180deg, #f6f8fd 0%, #eef2fa 100%)")
+        card_bg = "linear-gradient(165deg, #ffffff 0%, #f8fbff 100%)"
+        card_brd = "rgba(15,23,42,.08)"
+        card_sh = "0 1px 2px rgba(15,23,42,.05), 0 18px 40px -22px rgba(15,23,42,.22)"
         val_col = "#0b1220"
         lab_col = "#5b6b85"
-        accent_glow = "rgba(99,102,241,.30)"
+        accent_glow = "rgba(99,102,241,.34)"
+        sidebar_bg = "linear-gradient(180deg, #ffffff 0%, #eef2fb 100%)"
     st.markdown(f"""
     <style id="pp-design-2026">
-    /* ===================== PP-DESIGN-2026 (cosmetic overlay) ===================== */
-    :root {{ --pp-accent:#6366f1; --pp-accent2:#8b5cf6; --pp-radius:16px; }}
+    /* ===================== PP-DESIGN-2026 (premium overlay) ===================== */
+    :root {{ --pp-accent:#6366f1; --pp-accent2:#8b5cf6; --pp-radius:18px;
+             --pp-ease:cubic-bezier(.22,.61,.36,1); }}
 
-    /* App background — soft depth instead of flat fill */
+    /* ---- Animation keyframes (GPU-friendly: transform + opacity only) ---- */
+    @keyframes ppFadeUp {{ from {{ opacity:0; transform: translateY(16px); }} to {{ opacity:1; transform:none; }} }}
+    @keyframes ppFadeIn {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
+    @keyframes ppPop    {{ from {{ opacity:0; transform: translateY(12px) scale(.98); }} to {{ opacity:1; transform:none; }} }}
+    @keyframes ppSheen  {{ 0% {{ transform: translateX(-150%) rotate(8deg); }} 100% {{ transform: translateX(260%) rotate(8deg); }} }}
+    @keyframes ppRise   {{ from {{ opacity:0; transform: translateY(8px); }} to {{ opacity:1; transform:none; }} }}
+
+    /* App background — layered depth instead of flat fill */
     [data-testid="stAppViewContainer"] > .main,
     section.main {{ background: {page_grad} !important; background-attachment: fixed !important; }}
 
@@ -2226,93 +2240,149 @@ def _inject_design_overlay(is_dark: bool) -> None:
         -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
     }}
 
-    /* Metric tiles — elevated glass cards with a left accent + hover lift */
+    /* PAGE TRANSITION — main content fades + rises on each render */
+    section.main .block-container {{ animation: ppFadeUp .5s var(--pp-ease) both; }}
+    /* Sub-tab panel cross-fade when switching tabs */
+    [data-baseweb="tab-panel"] {{ animation: ppFadeIn .38s ease both; }}
+
+    /* Metric tiles — elevated glass cards, corner glow, hover lift, staggered entrance */
     [data-testid="stMetric"] {{
         background: {card_bg} !important;
         border: 1px solid {card_brd} !important;
         border-radius: var(--pp-radius) !important;
-        padding: 1.05rem 1.15rem !important;
+        padding: 1.15rem 1.25rem !important;
         box-shadow: {card_sh} !important;
-        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
-        transition: transform .18s ease, box-shadow .18s ease !important;
+        backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        transition: transform .22s var(--pp-ease), box-shadow .22s var(--pp-ease), border-color .22s ease !important;
         position: relative; overflow: hidden;
+        animation: ppPop .5s var(--pp-ease) both;
+    }}
+    [data-testid="stMetric"]::after {{
+        content:""; position:absolute; top:-40%; inset-inline-end:-30%;
+        width:160px; height:160px; border-radius:50%;
+        background: radial-gradient(circle, {accent_glow} 0%, rgba(0,0,0,0) 70%);
+        opacity:.55; pointer-events:none;
     }}
     [data-testid="stMetric"]:hover {{
-        transform: translateY(-3px) !important;
-        box-shadow: 0 8px 18px -6px {accent_glow}, {card_sh} !important;
+        transform: translateY(-4px) !important;
+        border-color: var(--pp-accent) !important;
+        box-shadow: 0 14px 30px -12px {accent_glow}, {card_sh} !important;
     }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(1) [data-testid="stMetric"] {{ animation-delay:.02s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stMetric"] {{ animation-delay:.09s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(3) [data-testid="stMetric"] {{ animation-delay:.16s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(4) [data-testid="stMetric"] {{ animation-delay:.23s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(5) [data-testid="stMetric"] {{ animation-delay:.30s; }}
     [data-testid="stMetricValue"] {{
-        font-weight: 800 !important; letter-spacing: -.02em !important;
+        font-weight: 820 !important; letter-spacing: -.025em !important;
         color: {val_col} !important; font-variant-numeric: tabular-nums;
+        font-size: 1.9rem !important; line-height: 1.1 !important;
     }}
     [data-testid="stMetricLabel"] {{
-        font-weight: 600 !important; letter-spacing: .01em !important;
-        color: {lab_col} !important; opacity: .95 !important;
+        font-weight: 600 !important; letter-spacing: .02em !important;
+        color: {lab_col} !important; opacity: .96 !important;
+        text-transform: uppercase; font-size: .74rem !important;
     }}
 
-    /* Buttons — gradient, rounded, subtle lift */
+    /* Buttons — rounded, lift + animated shine */
     .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {{
-        border-radius: 12px !important; font-weight: 650 !important;
-        border: 1px solid {card_brd} !important;
-        transition: transform .15s ease, box-shadow .15s ease, filter .15s ease !important;
+        border-radius: 13px !important; font-weight: 680 !important;
+        border: 1px solid {card_brd} !important; position: relative; overflow: hidden;
+        transition: transform .16s var(--pp-ease), box-shadow .16s ease, filter .16s ease !important;
     }}
     .stButton > button:hover, .stDownloadButton > button:hover {{
-        transform: translateY(-1px) !important; filter: brightness(1.04) !important;
-        box-shadow: 0 8px 20px -10px {accent_glow} !important;
+        transform: translateY(-2px) !important; filter: brightness(1.05) !important;
+        box-shadow: 0 12px 26px -12px {accent_glow} !important;
     }}
-    /* Primary buttons get the brand gradient */
+    .stButton > button:active, .stDownloadButton > button:active {{ transform: translateY(0) scale(.98) !important; }}
     .stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] button {{
         background: linear-gradient(135deg, var(--pp-accent), var(--pp-accent2)) !important;
         border: none !important; color: #fff !important;
-        box-shadow: 0 8px 22px -10px {accent_glow} !important;
+        box-shadow: 0 10px 26px -12px {accent_glow} !important;
+    }}
+    .stButton > button[kind="primary"]::after, [data-testid="stFormSubmitButton"] button::after {{
+        content:""; position:absolute; top:0; left:0; width:40%; height:100%;
+        background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.35) 50%, rgba(255,255,255,0) 100%);
+        transform: translateX(-150%) rotate(8deg); pointer-events:none;
+    }}
+    .stButton > button[kind="primary"]:hover::after, [data-testid="stFormSubmitButton"] button:hover::after {{
+        animation: ppSheen .9s ease;
     }}
 
-    /* Sub-tabs — pill underline + smoother */
+    /* ---- SIDEBAR — tinted glass panel + polished nav ---- */
+    [data-testid="stSidebar"] {{
+        background: {sidebar_bg} !important;
+        border-inline-end: 1px solid {card_brd} !important;
+        box-shadow: 8px 0 30px -22px rgba(15,23,42,.45) !important;
+    }}
+    [data-testid="stSidebar"] .nav-link {{
+        border-radius: 12px !important; margin: 3px 0 !important;
+        transition: background .16s ease, transform .14s var(--pp-ease), box-shadow .16s ease !important;
+    }}
+    [data-testid="stSidebar"] .nav-link:hover {{
+        background: rgba(99,102,241,.10) !important;
+        transform: translateY(-1px) !important;
+    }}
+    [data-testid="stSidebar"] [data-testid="stExpander"] {{
+        border-radius: 14px !important; border: 1px solid {card_brd} !important;
+    }}
+
+    /* Sub-tabs — smoother pills */
     [data-baseweb="tab-list"] {{ gap: .15rem !important; }}
-    [data-baseweb="tab"] {{ border-radius: 10px 10px 0 0 !important; font-weight: 600 !important; }}
+    [data-baseweb="tab"] {{ border-radius: 11px 11px 0 0 !important; font-weight: 640 !important;
+        transition: color .15s ease, background .15s ease !important; }}
     [data-baseweb="tab"][aria-selected="true"] {{ color: var(--pp-accent) !important; }}
 
-    /* Expanders + dataframes — match the card language */
+    /* Expanders + dataframes + charts — unified premium card surface (rise-in) */
     [data-testid="stExpander"] {{
-        border: 1px solid {card_brd} !important; border-radius: 14px !important;
-        box-shadow: {card_sh} !important; overflow: hidden;
+        border: 1px solid {card_brd} !important; border-radius: 16px !important;
+        box-shadow: {card_sh} !important; overflow: hidden; background: {card_bg} !important;
+        animation: ppRise .5s var(--pp-ease) both;
+        transition: border-color .18s ease, box-shadow .18s ease !important;
     }}
+    [data-testid="stExpander"]:hover {{ box-shadow: 0 16px 34px -18px {accent_glow}, {card_sh} !important; }}
     [data-testid="stDataFrame"], [data-testid="stTable"] {{
-        border-radius: 14px !important; overflow: hidden !important;
+        border-radius: 16px !important; overflow: hidden !important;
         border: 1px solid {card_brd} !important; box-shadow: {card_sh} !important;
+        animation: ppRise .5s var(--pp-ease) both;
     }}
-
-    /* Plotly charts — rounded framed surface */
     [data-testid="stPlotlyChart"] {{
         border-radius: var(--pp-radius); overflow: hidden;
-        border: 1px solid {card_brd}; box-shadow: {card_sh};
+        border: 1px solid {card_brd}; box-shadow: {card_sh}; background: {card_bg};
+        animation: ppRise .55s var(--pp-ease) both;
     }}
 
-    /* The per-page accent header gets a richer gradient bar + glow */
+    /* The header glow + rounded base (full hero look set in pp-page-accent) */
     .app-header-wrap {{
-        box-shadow: 0 10px 30px -18px {accent_glow} !important;
-        border-radius: 0 0 18px 18px !important;
+        box-shadow: 0 16px 38px -18px {accent_glow} !important;
+        border-radius: 0 0 22px 22px !important;
     }}
 
-    /* ---- MOBILE (≤ 600px): bigger, airier, nicer ---- */
-    @media (max-width: 600px) {{
-        [data-testid="stMetric"] {{ padding: .85rem .9rem !important; border-radius: 14px !important; }}
-        [data-testid="stMetricValue"] {{ font-size: 1.45rem !important; }}
-        .stButton > button {{ min-height: 44px !important; }}  /* touch target */
-        [data-baseweb="tab"] {{ padding: .55rem .7rem !important; }}
-        section.main {{ padding-top: .25rem !important; }}
-    }}
-    /* Section headings (st.markdown ### …) — quiet uppercase eyebrow style */
+    /* Section headings (st.markdown ### …) */
     .main h3 {{
-        font-weight: 750 !important; letter-spacing: -.01em !important;
-        margin-top: .4rem !important;
+        font-weight: 780 !important; letter-spacing: -.015em !important;
+        margin-top: .5rem !important;
     }}
-    /* KPI delta rendered as a soft pill instead of bare text */
+    /* KPI delta rendered as a soft pill */
     [data-testid="stMetricDelta"] {{
         display: inline-flex !important; align-items: center; gap: 2px;
-        padding: 1px 8px !important; border-radius: 999px !important;
+        padding: 2px 9px !important; border-radius: 999px !important;
         background: {accent_glow} !important; width: fit-content;
-        font-weight: 650 !important;
+        font-weight: 680 !important;
+    }}
+
+    /* Inputs — softer, focus glow */
+    .stNumberInput input, .stTextInput input, .stTextArea textarea {{
+        border-radius: 11px !important;
+        transition: box-shadow .16s ease, border-color .16s ease !important;
+    }}
+    .stNumberInput input:focus, .stTextInput input:focus, .stTextArea textarea:focus {{
+        box-shadow: 0 0 0 3px {accent_glow} !important;
+    }}
+
+    /* Respect reduced-motion preference */
+    @media (prefers-reduced-motion: reduce) {{
+        *, *::before, *::after {{ animation: none !important; }}
     }}
 
     /* MOBILE refinement — managed as its own tuned layout */
@@ -9400,23 +9470,60 @@ def main() -> None:
     st.markdown(
         f"""
         <style id="pp-page-accent">
-            /* Header border + faint coloured glow */
+            /* ===== Premium gradient HERO header (page-aware) ===== */
+            @keyframes ppHeroSheen {{ 0% {{ transform: translateX(-60%) rotate(12deg); opacity:0; }}
+                                      15% {{ opacity:.6; }} 60% {{ opacity:.25; }}
+                                      100% {{ transform: translateX(220%) rotate(12deg); opacity:0; }} }}
             .app-header-wrap {{
-                border-top: 3px solid {_accent} !important;
-                box-shadow: 0 2px 12px -4px {_accent}66 !important;
+                background:
+                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.26) 0%, rgba(255,255,255,0) 42%),
+                    linear-gradient(118deg, {_accent_dark} 0%, {_accent} 60%, {_accent}e6 100%) !important;
+                border: none !important;
+                border-top: none !important;
+                border-bottom: none !important;
+                border-radius: 0 0 24px 24px !important;
+                box-shadow: 0 18px 42px -18px {_accent}aa,
+                            0 1px 0 0 rgba(255,255,255,.22) inset !important;
+                padding: 0.9rem 1.35rem 0.85rem 1.35rem !important;
+                position: sticky !important;
+                overflow: hidden !important;
             }}
-            .app-sub-title {{ color: {_accent} !important; }}
-            .app-logo-badge {{
-                background: {_accent}1A !important;
-                border: 1px solid {_accent}55 !important;
-                color: {_accent} !important;
+            /* moving light sweep across the hero */
+            .app-header-wrap::before {{
+                content:""; position:absolute; top:0; left:0; height:100%; width:45%;
+                background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.28) 50%, rgba(255,255,255,0) 100%);
+                transform: translateX(-60%) rotate(12deg); pointer-events:none;
+                animation: ppHeroSheen 7s ease-in-out 1.2s infinite;
             }}
-            /* Hero title gradient — page-aware */
             .app-main-title {{
-                background: linear-gradient(135deg, {_accent_dark} 0%, {_accent} 60%, {_accent}cc 100%) !important;
-                -webkit-background-clip: text !important;
-                background-clip: text !important;
-                -webkit-text-fill-color: transparent !important;
+                background: none !important;
+                -webkit-background-clip: border-box !important;
+                background-clip: border-box !important;
+                -webkit-text-fill-color: #ffffff !important;
+                color: #ffffff !important;
+                font-weight: 850 !important;
+                letter-spacing: -.022em !important;
+                text-shadow: 0 2px 20px rgba(0,0,0,.20) !important;
+            }}
+            .app-sub-title {{
+                color: rgba(255,255,255,.94) !important;
+                font-weight: 700 !important;
+                letter-spacing: .06em !important;
+                opacity: .92 !important;
+            }}
+            .app-logo-badge {{
+                background: rgba(255,255,255,.18) !important;
+                border: 1px solid rgba(255,255,255,.32) !important;
+                color: #ffffff !important;
+                backdrop-filter: blur(6px) !important;
+                -webkit-backdrop-filter: blur(6px) !important;
+                font-weight: 650 !important;
+            }}
+            .app-logo-icon {{
+                background: rgba(255,255,255,.15) !important;
+                border: 1px solid rgba(255,255,255,.28) !important;
+                border-radius: 16px !important;
+                box-shadow: 0 8px 22px -10px rgba(0,0,0,.35) !important;
             }}
 
             /* Sidebar active nav-link */
