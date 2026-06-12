@@ -3968,10 +3968,11 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         direct_val = float(direct["Current_Value_ILS"].sum())
         etf_qty = float(etf_df["Quantity"].sum())
         etf_val = float(etf_df["Current_Value_ILS"].sum())
+        # Indirect exposure = the pure spot-crypto ETF only (IBIT/ETHA/BSOL),
+        # converted to coin units. MSTR is intentionally NOT folded into BTC:
+        # it's a leveraged equity proxy, not a 1:1 BTC vehicle, and keeping it
+        # out matches the Next.js/Flet exposure calc exactly (cross-app parity).
         indirect_ils = etf_val
-        if asset == "BTC":
-            # BTC exposure includes MSTR as an additional indirect BTC vehicle.
-            indirect_ils += float(work.loc[work["Ticker"] == "MSTR", "Current_Value_ILS"].sum())
 
         estimated_asset_qty = direct_qty
         asset_ils_basis = (direct_val / direct_qty) if direct_qty > 1e-9 else 0.0

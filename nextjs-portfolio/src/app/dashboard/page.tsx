@@ -37,6 +37,49 @@ type TabId = 'overview' | 'allocation' | 'reports' | 'transactions';
 const CLOSED_SET = ['סגור', 'closed', 'close', 'sold', 'נמכר'];
 const isClosedTrade = (s: string) => CLOSED_SET.includes((s ?? '').toLowerCase().trim());
 
+// Spot crypto ETFs → the coin they track. Used to fold ETF exposure into a
+// single "how many coins do I really hold" figure.
+const CRYPTO_ETF_MAP: Record<string, string[]> = {
+  BTC: ['IBIT'],
+  ETH: ['ETHA'],
+  SOL: ['BSOL'],
+};
+
+interface CoinExposure {
+  coin: string;
+  directQty: number;
+  etfEquivQty: number;
+  totalQty: number;
+  valueIls: number;
+}
+
+function computeCryptoExposure(open: { ticker: string; quantity: number; spotIls: number; valueIls: number }[]): CoinExposure[] {
+  const out: CoinExposure[] = [];
+  for (const [coin, etfs] of Object.entries(CRYPTO_ETF_MAP)) {
+    const directRows = open.filter((t) => t.ticker === coin);
+    const directQty = directRows.reduce((s, t) => s + t.quantity, 0);
+    // coin spot in ILS — from a direct holding, else derive from value/qty.
+    let coinSpotIls = directRows.find((t) => t.spotIls > 0)?.spotIls ?? 0;
+    if (coinSpotIls <= 0) {
+      const ref = directRows.find((t) => t.quantity > 0 && t.valueIls > 0);
+      if (ref) coinSpotIls = ref.valueIls / ref.quantity;
+    }
+    const etfRows = open.filter((t) => etfs.includes(t.ticker));
+    const etfValueIls = etfRows.reduce((s, t) => s + t.valueIls, 0);
+    const etfEquivQty = coinSpotIls > 0 ? etfValueIls / coinSpotIls : 0;
+    const directValueIls = directRows.reduce((s, t) => s + t.valueIls, 0);
+    if (directQty === 0 && etfValueIls === 0) continue;
+    out.push({
+      coin,
+      directQty,
+      etfEquivQty,
+      totalQty: directQty + etfEquivQty,
+      valueIls: directValueIls + etfValueIls,
+    });
+  }
+  return out;
+}
+
 function downloadBlob(content: string, name: string, mime: string) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -304,6 +347,10 @@ function ReportsTab({ views, locale, chartLock }: { views: CoreViews; locale: st
     { label: isHe ? 'עלות כוללת' : 'Total Cost', value: formatCurrency(views.totalCostIls, 'ILS', locale as 'he' | 'en'), positive: true },
   ];
 
+  // Total crypto exposure: direct holdings + ETF-equivalent (an ETF position's
+  // ILS value ÷ the coin's ILS spot = how many coins it represents).
+  const exposure = computeCryptoExposure(views.openTrades);
+
   return (
     <div className="space-y-5">
       {/* Key metrics grid */}
@@ -354,6 +401,46 @@ function ReportsTab({ views, locale, chartLock }: { views: CoreViews; locale: st
           </ResponsiveContainer>
         </div>
       </section>
+
+      {/* Total crypto exposure incl. ETFs (IBIT/ETHA/BSOL) */}
+      {exposure.length > 0 && (
+        <section className="card">
+          <h2 className="mb-1 text-sm font-bold text-slate-700 dark:text-slate-200">
+            {isHe ? 'חשיפת קריפטו כוללת (כולל ETF)' : 'Total Crypto Exposure (incl. ETFs)'}
+          </h2>
+          <p className="mb-3 text-xs text-slate-400">
+            {isHe
+              ? 'אחזקה ישירה + שווי ה-ETF (IBIT/ETHA/BSOL) מתורגם לכמות מטבע'
+              : 'Direct holdings + ETF value (IBIT/ETHA/BSOL) converted to coin units'}
+          </p>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                  <th className="pb-2 text-start font-semibold pe-4">{isHe ? 'מטבע' : 'Coin'}</th>
+                  <th className="pb-2 text-end font-semibold pe-4">{isHe ? 'ישיר' : 'Direct'}</th>
+                  <th className="pb-2 text-end font-semibold pe-4">{isHe ? 'דרך ETF' : 'Via ETF'}</th>
+                  <th className="pb-2 text-end font-semibold pe-4">{isHe ? 'סה״כ חשיפה' : 'Total'}</th>
+                  <th className="pb-2 text-end font-semibold">{isHe ? 'שווי (₪)' : 'Value (₪)'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {exposure.map((e) => (
+                  <tr key={e.coin} className="border-b border-slate-100 dark:border-slate-800">
+                    <td className="py-2 pe-4 font-mono font-bold">{e.coin}</td>
+                    <td className="py-2 pe-4 text-end font-mono tabular-nums" data-ltr>{formatNumber(e.directQty, locale as 'he' | 'en', 6)}</td>
+                    <td className="py-2 pe-4 text-end font-mono tabular-nums text-indigo-500 dark:text-indigo-400" data-ltr>
+                      +{formatNumber(e.etfEquivQty, locale as 'he' | 'en', 6)}
+                    </td>
+                    <td className="py-2 pe-4 text-end font-mono font-bold tabular-nums" data-ltr>{formatNumber(e.totalQty, locale as 'he' | 'en', 6)}</td>
+                    <td className="py-2 text-end font-mono tabular-nums">{formatCurrency(e.valueIls, 'ILS', locale as 'he' | 'en')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {/* Crypto exposure KPIs — mirrors app.py crypto-share report */}
       {(() => {
