@@ -2328,6 +2328,32 @@ def _inject_design_overlay(is_dark: bool) -> None:
         .main h3 {{ font-size: 1.05rem !important; }}
         /* charts never overflow the viewport */
         [data-testid="stPlotlyChart"], .js-plotly-plot {{ max-width: 100% !important; }}
+
+        /* Compact the big page header on phones — it ate too much vertical space */
+        .app-header-wrap {{ padding: .5rem .7rem !important; border-radius: 0 0 14px 14px !important; }}
+        .app-header-wrap h1, .app-header-wrap [data-testid="stHeading"] h1 {{ font-size: 1.15rem !important; }}
+        /* Tighter vertical rhythm so more fits above the fold */
+        .main .block-container {{ padding-top: .4rem !important; }}
+        [data-testid="stVerticalBlock"] {{ gap: .55rem !important; }}
+        /* Metric tiles: crisper card with a clearer accent edge on mobile */
+        [data-testid="stMetric"] {{
+            border-radius: 16px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 10px 22px -16px {accent_glow} !important;
+        }}
+        /* Sub-tabs scroll as comfortable pills */
+        [data-baseweb="tab-list"] {{ gap: .3rem !important; padding-bottom: .15rem !important; }}
+        [data-baseweb="tab"] {{
+            border-radius: 999px !important; background: rgba(127,127,127,.08) !important;
+            font-size: .82rem !important; white-space: nowrap !important;
+        }}
+        [data-baseweb="tab"][aria-selected="true"] {{
+            background: linear-gradient(135deg, var(--pp-accent), var(--pp-accent2)) !important;
+            color: #fff !important;
+        }}
+        /* Inputs/selects bigger touch targets */
+        .stNumberInput input, .stTextInput input, [data-baseweb="select"] {{ min-height: 42px !important; }}
+        /* Dataframe: comfortable row height, smaller font so columns fit */
+        [data-testid="stDataFrame"] {{ font-size: .78rem !important; }}
     }}
     /* ============================================================================= */
     </style>
