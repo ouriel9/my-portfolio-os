@@ -497,6 +497,12 @@ def _normalize_theme_mode(theme_mode: str) -> str:
 
 
 def _resolve_theme_base(theme_mode: str) -> str:
+    # The Aurora (v2) design is inherently dark — force the whole app into dark
+    # mode so the base dark CSS (dropdowns, tooltips, inputs, tables) applies
+    # underneath the Aurora overlay, instead of light elements showing through.
+    import os as _os
+    if _os.environ.get("PP_DESIGN_V2"):
+        return THEME_DARK
     mode = _normalize_theme_mode(theme_mode)
     if mode == THEME_LIGHT:
         return THEME_LIGHT
@@ -2228,9 +2234,14 @@ def _inject_design_v2(is_dark: bool) -> None:
     @keyframes v2Glow {{ 0%,100% {{ box-shadow: 0 0 0 1px {hair}, 0 18px 50px -26px rgba(0,0,0,.85); }} 50% {{ box-shadow: 0 0 0 1px {glow}, 0 18px 54px -22px rgba(0,0,0,.85); }} }}
 
     /* ---- Global typography + AURORA background ---- */
-    html, body, [data-testid="stAppViewContainer"] * {{
+    html, body,
+    [data-testid="stAppViewContainer"] *:not([data-testid="stIconMaterial"]):not(.material-icons):not([class*="material-symbols"]) {{
         font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif !important;
         -webkit-font-smoothing: antialiased;
+    }}
+    /* Keep Material icon ligatures rendering as ICONS (not raw text) */
+    [data-testid="stIconMaterial"], .material-icons, [class*="material-symbols"] {{
+        font-family: 'Material Symbols Rounded','Material Symbols Outlined','Material Symbols Sharp','Material Icons' !important;
     }}
     [data-testid="stAppViewContainer"] > .main, section.main, [data-testid="stAppViewContainer"] {{
         background:
