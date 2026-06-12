@@ -2187,7 +2187,249 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     """
 
     st.markdown(css, unsafe_allow_html=True)
-    _inject_design_overlay(is_dark)
+    # Design selector: set env PP_DESIGN_V2=1 to use the from-scratch "Aurora"
+    # theme (shipped as a parallel desktop build). Default = the 2026 overlay.
+    import os as _os
+    if _os.environ.get("PP_DESIGN_V2"):
+        _inject_design_v2(is_dark)
+    else:
+        _inject_design_overlay(is_dark)
+
+
+def _inject_design_v2(is_dark: bool) -> None:
+    """'AURORA' — a from-scratch premium design, independent of the v1 overlay.
+    A forced dark, glassmorphic 'aurora terminal' aesthetic: near-black aurora
+    background, frosted glass cards with luminous hairline borders, neon mint/
+    cyan accents, tabular monospace numerics, and tasteful motion. Uses high-
+    specificity selectors + !important so it wins over the base CSS AND the
+    per-page accent header regardless of injection order. Marker: PP-DESIGN-V2."""
+    A = "#5eead4"   # primary accent — mint/teal
+    A2 = "#7c93ff"  # secondary accent — periwinkle
+    A3 = "#f0abfc"  # tertiary — orchid (for gradients)
+    ink = "#e8edf7"      # primary text
+    sub = "#9aa7bd"      # muted text
+    bg0 = "#070b14"      # base background
+    glass = "rgba(20,28,46,.55)"
+    glass2 = "rgba(28,38,62,.42)"
+    hair = "rgba(140,160,200,.16)"   # hairline border
+    hair2 = "rgba(140,160,200,.10)"
+    glow = "rgba(94,234,212,.28)"
+    st.markdown(f"""
+    <style id="pp-design-v2">
+    /* ===================== PP-DESIGN-V2 ("AURORA") ===================== */
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap');
+    :root {{ --v2a:{A}; --v2a2:{A2}; --v2a3:{A3}; --v2-ease:cubic-bezier(.16,.84,.34,1); }}
+
+    @keyframes v2Up   {{ from {{ opacity:0; transform: translateY(18px); }} to {{ opacity:1; transform:none; }} }}
+    @keyframes v2In   {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
+    @keyframes v2Pop  {{ from {{ opacity:0; transform: translateY(14px) scale(.97); }} to {{ opacity:1; transform:none; }} }}
+    @keyframes v2Aurora {{ 0% {{ background-position: 0% 50%; }} 50% {{ background-position: 100% 50%; }} 100% {{ background-position: 0% 50%; }} }}
+    @keyframes v2Sheen {{ 0% {{ transform: translateX(-120%) rotate(10deg); opacity:0; }} 12% {{ opacity:.5; }} 70% {{ opacity:.15; }} 100% {{ transform: translateX(240%) rotate(10deg); opacity:0; }} }}
+    @keyframes v2Glow {{ 0%,100% {{ box-shadow: 0 0 0 1px {hair}, 0 18px 50px -26px rgba(0,0,0,.85); }} 50% {{ box-shadow: 0 0 0 1px {glow}, 0 18px 54px -22px rgba(0,0,0,.85); }} }}
+
+    /* ---- Global typography + AURORA background ---- */
+    html, body, [data-testid="stAppViewContainer"] * {{
+        font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif !important;
+        -webkit-font-smoothing: antialiased;
+    }}
+    [data-testid="stAppViewContainer"] > .main, section.main, [data-testid="stAppViewContainer"] {{
+        background:
+            radial-gradient(1200px 700px at 82% -8%, rgba(124,147,255,.20), rgba(7,11,20,0) 55%),
+            radial-gradient(1000px 680px at 8% 6%, rgba(94,234,212,.16), rgba(7,11,20,0) 52%),
+            radial-gradient(900px 700px at 50% 120%, rgba(240,171,252,.12), rgba(7,11,20,0) 55%),
+            {bg0} !important;
+        background-attachment: fixed !important;
+        color: {ink} !important;
+    }}
+    .main p, .main span, .main label, .main li, [data-testid="stMarkdownContainer"] {{ color: {ink}; }}
+    .main h1, .main h2, .main h3, .main h4 {{ color: {ink} !important; letter-spacing: -.02em !important; font-weight: 700 !important; }}
+
+    /* PAGE TRANSITION */
+    section.main .block-container {{ animation: v2Up .55s var(--v2-ease) both; }}
+    [data-baseweb="tab-panel"] {{ animation: v2In .4s ease both; }}
+
+    /* ---- HERO header — animated aurora glass (beats pp-page-accent) ---- */
+    html body .app-header-wrap {{
+        background:
+            linear-gradient(120deg, rgba(94,234,212,.16), rgba(124,147,255,.16) 45%, rgba(240,171,252,.16)) ,
+            {glass} !important;
+        background-size: 220% 220%, auto !important;
+        animation: v2Aurora 14s ease infinite !important;
+        border: 1px solid {hair} !important;
+        border-top: 1px solid rgba(94,234,212,.4) !important;
+        border-radius: 0 0 26px 26px !important;
+        box-shadow: 0 24px 60px -28px rgba(0,0,0,.9), 0 1px 0 0 rgba(255,255,255,.06) inset !important;
+        backdrop-filter: blur(18px) saturate(1.3) !important;
+        -webkit-backdrop-filter: blur(18px) saturate(1.3) !important;
+        padding: 1rem 1.4rem .95rem 1.4rem !important;
+        overflow: hidden !important;
+    }}
+    html body .app-header-wrap::before {{
+        content:""; position:absolute; top:0; left:0; height:100%; width:46%;
+        background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.16) 50%, rgba(255,255,255,0));
+        transform: translateX(-120%) rotate(10deg); pointer-events:none;
+        animation: v2Sheen 8s ease-in-out 1.5s infinite;
+    }}
+    html body .app-main-title {{
+        background: linear-gradient(100deg, {A} 0%, {A2} 52%, {A3} 100%) !important;
+        -webkit-background-clip: text !important; background-clip: text !important;
+        -webkit-text-fill-color: transparent !important; color: transparent !important;
+        font-weight: 700 !important; letter-spacing: -.025em !important;
+        filter: drop-shadow(0 2px 16px rgba(94,234,212,.25)) !important;
+    }}
+    html body .app-sub-title {{ color: {A} !important; font-weight: 600 !important;
+        letter-spacing: .14em !important; text-transform: uppercase !important; opacity: .9 !important; }}
+    html body .app-logo-badge {{
+        background: rgba(94,234,212,.12) !important; border: 1px solid rgba(94,234,212,.32) !important;
+        color: {A} !important; backdrop-filter: blur(6px) !important; font-weight: 600 !important;
+        letter-spacing: .02em !important;
+    }}
+    html body .app-logo-icon {{
+        background: rgba(255,255,255,.06) !important; border: 1px solid {hair} !important;
+        border-radius: 16px !important; box-shadow: 0 0 24px -6px {glow} !important;
+    }}
+
+    /* ---- Metric tiles — frosted glass, neon numerics, glow on hover ---- */
+    html body [data-testid="stMetric"] {{
+        background: {glass} !important;
+        border: 1px solid {hair} !important; border-radius: 20px !important;
+        padding: 1.2rem 1.3rem !important;
+        box-shadow: 0 18px 50px -26px rgba(0,0,0,.85) !important;
+        backdrop-filter: blur(16px) saturate(1.25) !important;
+        -webkit-backdrop-filter: blur(16px) saturate(1.25) !important;
+        position: relative; overflow: hidden;
+        transition: transform .25s var(--v2-ease), box-shadow .25s var(--v2-ease), border-color .25s ease !important;
+        animation: v2Pop .55s var(--v2-ease) both;
+    }}
+    html body [data-testid="stMetric"]::before {{
+        content:""; position:absolute; top:0; left:0; right:0; height:2px;
+        background: linear-gradient(90deg, {A}, {A2} 55%, {A3}); opacity:.8;
+    }}
+    html body [data-testid="stMetric"]::after {{
+        content:""; position:absolute; top:-45%; inset-inline-end:-30%;
+        width:180px; height:180px; border-radius:50%;
+        background: radial-gradient(circle, {glow} 0%, rgba(0,0,0,0) 70%); opacity:.6; pointer-events:none;
+    }}
+    html body [data-testid="stMetric"]:hover {{
+        transform: translateY(-5px) !important;
+        border-color: rgba(94,234,212,.5) !important;
+        box-shadow: 0 26px 60px -24px rgba(0,0,0,.9), 0 0 30px -8px {glow} !important;
+    }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(1) [data-testid="stMetric"] {{ animation-delay:.03s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stMetric"] {{ animation-delay:.11s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(3) [data-testid="stMetric"] {{ animation-delay:.19s; }}
+    [data-testid="stHorizontalBlock"] > div:nth-child(4) [data-testid="stMetric"] {{ animation-delay:.27s; }}
+    html body [data-testid="stMetricValue"] {{
+        font-family: 'JetBrains Mono', ui-monospace, monospace !important;
+        font-weight: 700 !important; color: {ink} !important; letter-spacing: -.02em !important;
+        font-size: 1.95rem !important; line-height: 1.08 !important;
+        text-shadow: 0 0 24px rgba(94,234,212,.14) !important;
+    }}
+    html body [data-testid="stMetricLabel"] {{
+        color: {sub} !important; font-weight: 600 !important;
+        text-transform: uppercase !important; letter-spacing: .1em !important; font-size: .72rem !important;
+    }}
+    html body [data-testid="stMetricDelta"] {{
+        font-family: 'JetBrains Mono', monospace !important;
+        border-radius: 999px !important; padding: 2px 10px !important;
+        background: rgba(94,234,212,.12) !important; width: fit-content; font-weight: 700 !important;
+    }}
+
+    /* ---- Sidebar — deep glass rail ---- */
+    html body [data-testid="stSidebar"] {{
+        background: linear-gradient(180deg, rgba(12,18,32,.92), rgba(7,11,20,.96)) !important;
+        border-inline-end: 1px solid {hair} !important;
+        backdrop-filter: blur(14px) !important;
+    }}
+    html body [data-testid="stSidebar"] * {{ color: {ink}; }}
+    html body [data-testid="stSidebar"] .nav-link {{
+        border-radius: 12px !important; margin: 3px 0 !important; color: {sub} !important;
+        transition: background .18s ease, transform .14s var(--v2-ease), color .18s ease !important;
+    }}
+    html body [data-testid="stSidebar"] .nav-link:hover {{
+        background: rgba(94,234,212,.10) !important; color: {ink} !important; transform: translateY(-1px) !important;
+    }}
+    html body [data-testid="stSidebar"] .nav-link-selected, html body [data-testid="stSidebar"] .nav-link.active {{
+        background: linear-gradient(135deg, rgba(94,234,212,.22), rgba(124,147,255,.22)) !important;
+        color: {ink} !important; box-shadow: inset 3px 0 0 0 {A} !important;
+    }}
+
+    /* ---- Buttons — neon gradient + shine ---- */
+    html body .stButton > button, html body .stDownloadButton > button, html body [data-testid="stFormSubmitButton"] button {{
+        border-radius: 13px !important; font-weight: 650 !important; color: {ink} !important;
+        background: {glass2} !important; border: 1px solid {hair} !important;
+        position: relative; overflow: hidden;
+        transition: transform .16s var(--v2-ease), box-shadow .18s ease, border-color .18s ease !important;
+    }}
+    html body .stButton > button:hover, html body .stDownloadButton > button:hover {{
+        transform: translateY(-2px) !important; border-color: rgba(94,234,212,.5) !important;
+        box-shadow: 0 14px 30px -14px {glow} !important;
+    }}
+    html body .stButton > button[kind="primary"], html body [data-testid="stFormSubmitButton"] button {{
+        background: linear-gradient(135deg, {A}, {A2}) !important; border: none !important;
+        color: #04121a !important; font-weight: 700 !important;
+        box-shadow: 0 12px 30px -12px {glow} !important;
+    }}
+
+    /* ---- Tabs — glass pills ---- */
+    html body [data-baseweb="tab-list"] {{ gap: .3rem !important; background: transparent !important; border: none !important; }}
+    html body [data-baseweb="tab"] {{
+        border-radius: 12px !important; font-weight: 600 !important; color: {sub} !important;
+        background: rgba(140,160,200,.06) !important; border: 1px solid {hair2} !important;
+        transition: all .16s ease !important;
+    }}
+    html body [data-baseweb="tab"][aria-selected="true"] {{
+        background: linear-gradient(135deg, rgba(94,234,212,.22), rgba(124,147,255,.22)) !important;
+        color: {ink} !important; border-color: rgba(94,234,212,.4) !important;
+    }}
+
+    /* ---- Cards: expanders / dataframes / charts ---- */
+    html body [data-testid="stExpander"] {{
+        background: {glass} !important; border: 1px solid {hair} !important; border-radius: 18px !important;
+        box-shadow: 0 18px 50px -28px rgba(0,0,0,.85) !important; overflow: hidden;
+        backdrop-filter: blur(14px) !important; animation: v2Up .5s var(--v2-ease) both;
+    }}
+    html body [data-testid="stExpander"]:hover {{ border-color: rgba(94,234,212,.34) !important; }}
+    html body [data-testid="stDataFrame"], html body [data-testid="stTable"] {{
+        border-radius: 18px !important; overflow: hidden !important; border: 1px solid {hair} !important;
+        box-shadow: 0 18px 50px -28px rgba(0,0,0,.85) !important; animation: v2Up .5s var(--v2-ease) both;
+    }}
+    html body [data-testid="stPlotlyChart"] {{
+        border-radius: 20px !important; overflow: hidden; border: 1px solid {hair} !important;
+        background: {glass} !important; box-shadow: 0 18px 54px -28px rgba(0,0,0,.85) !important;
+        backdrop-filter: blur(8px) !important; animation: v2Up .55s var(--v2-ease) both;
+    }}
+
+    /* ---- Inputs ---- */
+    html body .stNumberInput input, html body .stTextInput input, html body .stTextArea textarea {{
+        background: rgba(10,16,28,.6) !important; color: {ink} !important;
+        border: 1px solid {hair} !important; border-radius: 12px !important;
+        transition: box-shadow .16s ease, border-color .16s ease !important;
+    }}
+    html body .stNumberInput input:focus, html body .stTextInput input:focus, html body .stTextArea textarea:focus {{
+        border-color: {A} !important; box-shadow: 0 0 0 3px rgba(94,234,212,.18) !important;
+    }}
+
+    /* scrollbar */
+    ::-webkit-scrollbar-thumb {{ background: rgba(94,234,212,.4) !important; }}
+    ::-webkit-scrollbar-thumb:hover {{ background: rgba(94,234,212,.7) !important; }}
+
+    @media (prefers-reduced-motion: reduce) {{ *, *::before, *::after {{ animation: none !important; }} }}
+
+    /* ---- Mobile ---- */
+    @media (max-width: 600px) {{
+        html body [data-testid="stMetric"] {{ padding: .95rem 1rem !important; border-radius: 17px !important; height:100% !important; }}
+        html body [data-testid="stMetricValue"] {{ font-size: 1.55rem !important; }}
+        html body [data-testid="stMetricLabel"] {{ font-size: .64rem !important; }}
+        html body .app-header-wrap {{ padding: .65rem .85rem !important; border-radius: 0 0 20px 20px !important; }}
+        html body .app-main-title {{ font-size: 1.25rem !important; }}
+        html body .stButton > button {{ min-height: 46px !important; }}
+        html body [data-baseweb="tab"] {{ font-size: .8rem !important; white-space: nowrap !important; }}
+        .main .block-container {{ padding-left:.65rem !important; padding-right:.65rem !important; }}
+    }}
+    /* ============================================================================= */
+    </style>
+    """, unsafe_allow_html=True)
 
 
 def _inject_design_overlay(is_dark: bool) -> None:

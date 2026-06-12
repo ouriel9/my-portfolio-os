@@ -13,6 +13,7 @@ Architecture:
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -29,6 +30,27 @@ CHILD_FLAG = "--streamlit-server"
 # start — and it always serves the latest app.py (synced from GitHub), so the
 # EXE is never stale. Only if it's down do we spawn our own bundled server.
 PERSISTENT_PORT = 8501
+
+
+def _variant_config() -> dict:
+    """Optional `_launcher.json` next to the EXE selects which variant this is:
+      {"persistent_port": 8502, "design": "v2"}
+    This lets the SAME build power multiple desktop copies (e.g. a v1 and a
+    from-scratch v2 design) without rebuilding — just drop a different config
+    file beside each copy. Absent file → defaults (port 8501, default design)."""
+    try:
+        if getattr(sys, "frozen", False):
+            base = Path(sys.executable).resolve().parent
+        else:
+            base = Path(__file__).resolve().parent
+        cfg = base / "_launcher.json"
+        if cfg.exists():
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
 
 
 def _find_app_root() -> Path:
@@ -179,6 +201,13 @@ def _open_window(url: str) -> "subprocess.Popen | None":
 
 
 def main() -> int:
+    # Variant config (port + design) applies to BOTH the parent and the
+    # re-spawned child server, so set the design env before either branch.
+    cfg = _variant_config()
+    persistent_port = int(cfg.get("persistent_port", PERSISTENT_PORT))
+    if str(cfg.get("design", "")).lower() == "v2":
+        os.environ["PP_DESIGN_V2"] = "1"
+
     # Child-process branch: just run Streamlit on our main thread
     if len(sys.argv) >= 2 and sys.argv[1] == CHILD_FLAG:
         if len(sys.argv) < 4:
@@ -191,7 +220,7 @@ def main() -> int:
     # ── FAST PATH: reuse the always-on server if it's already healthy ──
     # This opens the window in <1s instead of cold-starting a bundled server,
     # and shows the latest app.py the user runs locally.
-    persistent_url = f"http://127.0.0.1:{PERSISTENT_PORT}/"
+    persistent_url = f"http://127.0.0.1:{persistent_port}/"
     if _wait_for_streamlit(persistent_url, timeout_s=1.5):
         win = _open_window(persistent_url)
         # The always-on server isn't ours to manage; just keep this process
