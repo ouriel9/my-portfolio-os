@@ -2187,6 +2187,124 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     """
 
     st.markdown(css, unsafe_allow_html=True)
+    _inject_design_overlay(is_dark)
+
+
+def _inject_design_overlay(is_dark: bool) -> None:
+    """2026 visual refresh — a SELF-CONTAINED design layer added on top of the
+    base CSS. Purely cosmetic (color/shadow/radius/typography/spacing); changes
+    no layout structure and respects CLAUDE.md (no direction:rtl on layout,
+    help badges untouched, no metric-label clipping). Remove this one function
+    call to fully revert. Marker: PP-DESIGN-2026."""
+    if is_dark:
+        page_grad = "radial-gradient(1200px 600px at 80% -10%, #15213b 0%, #0b1120 45%, #090e1a 100%)"
+        card_bg = "linear-gradient(180deg, rgba(30,41,59,.72), rgba(22,30,46,.72))"
+        card_brd = "rgba(148,163,184,.14)"
+        card_sh = "0 1px 2px rgba(0,0,0,.4), 0 18px 40px -24px rgba(0,0,0,.7)"
+        val_col = "#f8fafc"
+        lab_col = "#9fb0c7"
+        accent_glow = "rgba(99,102,241,.45)"
+    else:
+        page_grad = "radial-gradient(1200px 600px at 80% -10%, #eef3fc 0%, #f5f8fd 45%, #eef2f9 100%)"
+        card_bg = "linear-gradient(180deg, #ffffff, #fcfdff)"
+        card_brd = "rgba(15,23,42,.07)"
+        card_sh = "0 1px 2px rgba(15,23,42,.05), 0 14px 34px -20px rgba(15,23,42,.20)"
+        val_col = "#0b1220"
+        lab_col = "#5b6b85"
+        accent_glow = "rgba(99,102,241,.30)"
+    st.markdown(f"""
+    <style id="pp-design-2026">
+    /* ===================== PP-DESIGN-2026 (cosmetic overlay) ===================== */
+    :root {{ --pp-accent:#6366f1; --pp-accent2:#8b5cf6; --pp-radius:16px; }}
+
+    /* App background — soft depth instead of flat fill */
+    [data-testid="stAppViewContainer"] > .main,
+    section.main {{ background: {page_grad} !important; background-attachment: fixed !important; }}
+
+    /* Typography polish */
+    html, body, [data-testid="stAppViewContainer"] * {{
+        -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    }}
+
+    /* Metric tiles — elevated glass cards with a left accent + hover lift */
+    [data-testid="stMetric"] {{
+        background: {card_bg} !important;
+        border: 1px solid {card_brd} !important;
+        border-radius: var(--pp-radius) !important;
+        padding: 1.05rem 1.15rem !important;
+        box-shadow: {card_sh} !important;
+        backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+        transition: transform .18s ease, box-shadow .18s ease !important;
+        position: relative; overflow: hidden;
+    }}
+    [data-testid="stMetric"]:hover {{
+        transform: translateY(-3px) !important;
+        box-shadow: 0 8px 18px -6px {accent_glow}, {card_sh} !important;
+    }}
+    [data-testid="stMetricValue"] {{
+        font-weight: 800 !important; letter-spacing: -.02em !important;
+        color: {val_col} !important; font-variant-numeric: tabular-nums;
+    }}
+    [data-testid="stMetricLabel"] {{
+        font-weight: 600 !important; letter-spacing: .01em !important;
+        color: {lab_col} !important; opacity: .95 !important;
+    }}
+
+    /* Buttons — gradient, rounded, subtle lift */
+    .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {{
+        border-radius: 12px !important; font-weight: 650 !important;
+        border: 1px solid {card_brd} !important;
+        transition: transform .15s ease, box-shadow .15s ease, filter .15s ease !important;
+    }}
+    .stButton > button:hover, .stDownloadButton > button:hover {{
+        transform: translateY(-1px) !important; filter: brightness(1.04) !important;
+        box-shadow: 0 8px 20px -10px {accent_glow} !important;
+    }}
+    /* Primary buttons get the brand gradient */
+    .stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] button {{
+        background: linear-gradient(135deg, var(--pp-accent), var(--pp-accent2)) !important;
+        border: none !important; color: #fff !important;
+        box-shadow: 0 8px 22px -10px {accent_glow} !important;
+    }}
+
+    /* Sub-tabs — pill underline + smoother */
+    [data-baseweb="tab-list"] {{ gap: .15rem !important; }}
+    [data-baseweb="tab"] {{ border-radius: 10px 10px 0 0 !important; font-weight: 600 !important; }}
+    [data-baseweb="tab"][aria-selected="true"] {{ color: var(--pp-accent) !important; }}
+
+    /* Expanders + dataframes — match the card language */
+    [data-testid="stExpander"] {{
+        border: 1px solid {card_brd} !important; border-radius: 14px !important;
+        box-shadow: {card_sh} !important; overflow: hidden;
+    }}
+    [data-testid="stDataFrame"], [data-testid="stTable"] {{
+        border-radius: 14px !important; overflow: hidden !important;
+        border: 1px solid {card_brd} !important; box-shadow: {card_sh} !important;
+    }}
+
+    /* Plotly charts — rounded framed surface */
+    [data-testid="stPlotlyChart"] {{
+        border-radius: var(--pp-radius); overflow: hidden;
+        border: 1px solid {card_brd}; box-shadow: {card_sh};
+    }}
+
+    /* The per-page accent header gets a richer gradient bar + glow */
+    .app-header-wrap {{
+        box-shadow: 0 10px 30px -18px {accent_glow} !important;
+        border-radius: 0 0 18px 18px !important;
+    }}
+
+    /* ---- MOBILE (≤ 600px): bigger, airier, nicer ---- */
+    @media (max-width: 600px) {{
+        [data-testid="stMetric"] {{ padding: .85rem .9rem !important; border-radius: 14px !important; }}
+        [data-testid="stMetricValue"] {{ font-size: 1.45rem !important; }}
+        .stButton > button {{ min-height: 44px !important; }}  /* touch target */
+        [data-baseweb="tab"] {{ padding: .55rem .7rem !important; }}
+        section.main {{ padding-top: .25rem !important; }}
+    }}
+    /* ============================================================================= */
+    </style>
+    """, unsafe_allow_html=True)
 
 
 def inject_dark_dropdown_fix(is_dark: bool) -> None:
