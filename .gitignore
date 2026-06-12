@@ -89,3 +89,7 @@ search_app.py
 _qa_*.py
 _refs/
 *.tmp
+
+# Parallel/clean PyInstaller build dirs
+dist_clean/
+build_clean/
