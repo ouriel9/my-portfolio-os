@@ -2302,6 +2302,33 @@ def _inject_design_overlay(is_dark: bool) -> None:
         [data-baseweb="tab"] {{ padding: .55rem .7rem !important; }}
         section.main {{ padding-top: .25rem !important; }}
     }}
+    /* Section headings (st.markdown ### …) — quiet uppercase eyebrow style */
+    .main h3 {{
+        font-weight: 750 !important; letter-spacing: -.01em !important;
+        margin-top: .4rem !important;
+    }}
+    /* KPI delta rendered as a soft pill instead of bare text */
+    [data-testid="stMetricDelta"] {{
+        display: inline-flex !important; align-items: center; gap: 2px;
+        padding: 1px 8px !important; border-radius: 999px !important;
+        background: {accent_glow} !important; width: fit-content;
+        font-weight: 650 !important;
+    }}
+
+    /* MOBILE refinement — managed as its own tuned layout */
+    @media (max-width: 600px) {{
+        /* 2-up KPI grid with consistent gaps and equal heights */
+        [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {{ gap: .5rem !important; }}
+        [data-testid="stMetric"] {{ height: 100% !important; }}
+        [data-testid="stMetricValue"] {{ font-size: 1.35rem !important; line-height: 1.15 !important; }}
+        [data-testid="stMetricLabel"] {{ font-size: .72rem !important; }}
+        /* tighter page gutters so cards get more width */
+        .main .block-container {{ padding-left: .6rem !important; padding-right: .6rem !important; }}
+        /* section headings a touch smaller on phone */
+        .main h3 {{ font-size: 1.05rem !important; }}
+        /* charts never overflow the viewport */
+        [data-testid="stPlotlyChart"], .js-plotly-plot {{ max-width: 100% !important; }}
+    }}
     /* ============================================================================= */
     </style>
     """, unsafe_allow_html=True)
