@@ -23,7 +23,22 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# Windows consoles default to cp1252 and crash when printing Hebrew. Make all
+# stdout/stderr writes encoding-safe so logging can never kill the bot.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from whatsapp_bot import handle, _summary  # reuse the command logic
+
+
+def _log(msg: str) -> None:
+    try:
+        print(msg, flush=True)
+    except Exception:
+        pass
 
 ROOT = Path(__file__).resolve().parent
 CFG_PATH = ROOT / "telegram_config.json"
@@ -61,7 +76,7 @@ def send_report() -> None:
 
 def poll_forever() -> None:
     offset = 0
-    print("Telegram bot live. Send it a message…")
+    _log("Telegram bot live.")
     # greet the saved chat on startup if known
     cfg = _cfg()
     if cfg.get("chat_id"):
@@ -73,28 +88,32 @@ def poll_forever() -> None:
         try:
             res = _api("getUpdates", {"offset": offset, "timeout": 50})
         except Exception as exc:
-            print("poll error:", str(exc)[:120])
+            _log("poll error: " + str(exc)[:120])
             time.sleep(5)
             continue
         for u in res.get("result", []):
             offset = u["update_id"] + 1
-            msg = u.get("message") or u.get("edited_message")
-            if not msg:
-                continue
-            chat_id = msg.get("chat", {}).get("id")
-            text = msg.get("text", "")
-            # persist chat_id on first contact
-            cfg = _cfg()
-            if str(cfg.get("chat_id") or "") != str(chat_id):
-                cfg["chat_id"] = chat_id
-                _save_cfg(cfg)
-                print("learned chat_id:", chat_id)
+            # one bad message must never kill the loop
             try:
-                reply = handle(text)
+                msg = u.get("message") or u.get("edited_message")
+                if not msg:
+                    continue
+                chat_id = msg.get("chat", {}).get("id")
+                text = msg.get("text", "")
+                # persist chat_id on first contact
+                cfg = _cfg()
+                if str(cfg.get("chat_id") or "") != str(chat_id):
+                    cfg["chat_id"] = chat_id
+                    _save_cfg(cfg)
+                    _log(f"learned chat_id: {chat_id}")
+                try:
+                    reply = handle(text)
+                except Exception as exc:
+                    reply = f"שגיאה: {str(exc)[:200]}"
+                send(chat_id, reply)
+                _log(f"  handled update {offset}")
             except Exception as exc:
-                reply = f"שגיאה: {str(exc)[:200]}"
-            send(chat_id, reply)
-            print(f"  <- {text!r}  -> {reply[:60]!r}")
+                _log(f"  update error: {str(exc)[:120]}")
 
 
 if __name__ == "__main__":
