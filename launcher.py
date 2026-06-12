@@ -110,19 +110,72 @@ def _spawn_streamlit_child(app_path: Path, port: int) -> subprocess.Popen:
     )
 
 
-def _open_window(url: str) -> None:
-    import webview
+def _find_browser() -> str | None:
+    """Locate Edge or Chrome — both support chromeless --app windows."""
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+    ]
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return None
 
-    webview.create_window(
-        title="Portfolio OS",
-        url=url,
-        width=1440, height=900,
-        min_size=(900, 600),
-        resizable=True,
-        background_color="#0f172a",
-        text_select=True,
-    )
-    webview.start(debug=False, http_server=False)
+
+def _open_window(url: str) -> "subprocess.Popen | None":
+    """Open the app in a chromeless browser app-window (Edge/Chrome). This is
+    robust and instant — it avoids the fragile pywebview/.NET/pythonnet bundling
+    that can fail with 'specified module could not be found'. Returns the browser
+    Popen (so the caller can wait on it), or None if it fell back to pywebview
+    (which blocks) or the default browser.
+
+    A dedicated --user-data-dir keeps it an isolated app window (its own taskbar
+    entry, no interference with the user's normal browsing profile)."""
+    browser = _find_browser()
+    if browser:
+        try:
+            profile_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "PortfolioOS" / "appwin"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            creationflags = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+            return subprocess.Popen(
+                [
+                    browser,
+                    f"--app={url}",
+                    f"--user-data-dir={profile_dir}",
+                    "--window-size=1440,900",
+                    "--window-position=120,80",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+                creationflags=creationflags,
+            )
+        except Exception:
+            pass
+
+    # Fallback 1: pywebview (original native window) — blocks until closed.
+    try:
+        import webview
+        webview.create_window(
+            title="Portfolio OS", url=url,
+            width=1440, height=900, min_size=(900, 600),
+            resizable=True, background_color="#0f172a", text_select=True,
+        )
+        webview.start(debug=False, http_server=False)
+        return None
+    except Exception:
+        pass
+
+    # Fallback 2: default browser.
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
+    return None
 
 
 def main() -> int:
@@ -140,7 +193,14 @@ def main() -> int:
     # and shows the latest app.py the user runs locally.
     persistent_url = f"http://127.0.0.1:{PERSISTENT_PORT}/"
     if _wait_for_streamlit(persistent_url, timeout_s=1.5):
-        _open_window(persistent_url)
+        win = _open_window(persistent_url)
+        # The always-on server isn't ours to manage; just keep this process
+        # tied to the window if we got a handle (tidier taskbar lifetime).
+        if win is not None:
+            try:
+                win.wait()
+            except Exception:
+                pass
         return 0
 
     # ── FALLBACK: no always-on server → spawn our own bundled Streamlit ──
@@ -163,7 +223,14 @@ def main() -> int:
                 pass
             return 2
 
-        _open_window(url)
+        win = _open_window(url)
+        # Browser app-window: block until the user closes it so we keep the
+        # bundled server alive meanwhile. pywebview already blocks (win is None).
+        if win is not None:
+            try:
+                win.wait()
+            except Exception:
+                pass
     finally:
         # User closed window → kill child
         try:
