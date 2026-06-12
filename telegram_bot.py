@@ -33,17 +33,29 @@ for _stream in (sys.stdout, sys.stderr):
 
 from whatsapp_bot import handle as _quick_handle, _summary  # quick fixed-commands
 import telegram_agent
+import telegram_agent_cc  # Claude-Code-backed agent (uses your MAX subscription, no API key)
 
 
 def handle(text: str) -> str:
-    """Full dispatch: when an Anthropic key is configured, send the prompt to the
-    AI agent (any request, like chatting with Claude). Otherwise fall back to the
-    fixed quick-commands so the bot still works without a key."""
+    """Full dispatch, in order of preference:
+    1. Claude Code CLI (your MAX subscription) — a TRUE free-text agent, zero API cost.
+    2. Anthropic API agent — only if an API key is configured.
+    3. Fixed quick-commands — always works as a last resort.
+    """
+    # 1) Claude Code via the local MAX-subscription CLI
+    if telegram_agent_cc.cc_available():
+        try:
+            return telegram_agent_cc.run_agent_cc(text)
+        except Exception as exc:
+            # fall through to the next backend on any failure
+            _log(f"cc agent error: {str(exc)[:160]}")
+    # 2) Anthropic API agent (paid key)
     if telegram_agent.agent_available():
         try:
             return telegram_agent.run_agent(text)
         except Exception as exc:
             return f"שגיאת סוכן: {str(exc)[:200]}\n(נופל לפקודות הבסיסיות)\n\n" + _quick_handle(text)
+    # 3) Fixed quick-commands
     return _quick_handle(text)
 
 
@@ -76,6 +88,14 @@ def _api(method: str, params: dict | None = None, timeout: int = 65) -> dict:
 
 def send(chat_id: str | int, text: str) -> None:
     _api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+
+
+def send_typing(chat_id: str | int) -> None:
+    """Show the 'typing…' indicator while the agent works (calls can take ~60s)."""
+    try:
+        _api("sendChatAction", {"chat_id": chat_id, "action": "typing"}, timeout=10)
+    except Exception:
+        pass
 
 
 def send_report() -> None:
@@ -119,6 +139,7 @@ def poll_forever() -> None:
                     cfg["chat_id"] = chat_id
                     _save_cfg(cfg)
                     _log(f"learned chat_id: {chat_id}")
+                send_typing(chat_id)
                 try:
                     reply = handle(text)
                 except Exception as exc:

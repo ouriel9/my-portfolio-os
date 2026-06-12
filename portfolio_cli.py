@@ -23,6 +23,14 @@ import sys
 import urllib.request
 from pathlib import Path
 
+# Windows consoles default to cp1252 and crash when printing Hebrew ticker/status
+# values. Make stdout/stderr UTF-8 so the snapshot never dies on encoding.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / "app_local_config.json"
 
