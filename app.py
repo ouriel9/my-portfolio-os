@@ -8631,6 +8631,147 @@ def _run_data_migrations() -> None:
         pass
 
 
+DIVIDENDS_FILE = _DATA_DIR / "dividends.json"
+
+
+def _load_dividends() -> list:
+    try:
+        if DIVIDENDS_FILE.exists():
+            data = json.loads(DIVIDENDS_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
+
+
+def _save_dividends(rows: list) -> None:
+    try:
+        DIVIDENDS_FILE.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
+    """Self-contained value-add panel: Smart Insights, Rebalancing advisor, and
+    Dividend tracking. Each section is wrapped in try/except so a failure in one
+    never breaks the dashboard. Added 2026-06-12. Marker: PP-SMART-FEATURES."""
+    def _t(en, he):
+        return he if language == LANG_HE else en
+
+    # ── 1. Smart Insights ────────────────────────────────────────────────
+    with st.expander("💡 " + _t("Smart Insights", "תובנות חכמות"), expanded=True):
+        try:
+            df = open_trades.copy()
+            for c in ("Current_Value_ILS", "Cost_ILS"):
+                if c not in df.columns:
+                    df[c] = 0.0
+                df[c] = df[c].map(_num)
+            total_val = float(df["Current_Value_ILS"].sum())
+            if total_val <= 0:
+                st.info(_t("No open positions to analyse.", "אין פוזיציות פתוחות לניתוח."))
+            else:
+                by_tkr = df.groupby("Ticker", as_index=False)["Current_Value_ILS"].sum()
+                weights = (by_tkr["Current_Value_ILS"] / total_val)
+                hhi = float((weights ** 2).sum())
+                top = by_tkr.loc[by_tkr["Current_Value_ILS"].idxmax()]
+                top_w = float(top["Current_Value_ILS"]) / total_val
+                df["_y"] = (df["Current_Value_ILS"] - df["Cost_ILS"]) / df["Cost_ILS"].where(df["Cost_ILS"] > 0, other=pd.NA)
+                tkr_y = df.dropna(subset=["_y"]).groupby("Ticker")["_y"].mean()
+                crypto_mask = df.get("Type", pd.Series(dtype=str)).map(lambda x: _clean(x) == "קריפטו")
+                crypto_share = float(df.loc[crypto_mask, "Current_Value_ILS"].sum()) / total_val if total_val else 0.0
+                msgs = []
+                if top_w >= 0.30:
+                    msgs.append(("⚠️", _t(f"High concentration: {top['Ticker']} is {top_w:.0%} of the portfolio.",
+                                          f"ריכוזיות גבוהה: {top['Ticker']} מהווה {top_w:.0%} מהתיק.")))
+                msgs.append(("📊", _t(f"Concentration index (HHI): {hhi:.2f} ({'diversified' if hhi < 0.25 else 'concentrated'}).",
+                                      f"מדד ריכוזיות (HHI): {hhi:.2f} ({'מפוזר' if hhi < 0.25 else 'מרוכז'}).")))
+                if not tkr_y.empty:
+                    w, l = tkr_y.idxmax(), tkr_y.idxmin()
+                    msgs.append(("🏆", _t(f"Best: {w} ({tkr_y[w]:+.1%}) · Worst: {l} ({tkr_y[l]:+.1%}).",
+                                          f"מוביל: {w} ({tkr_y[w]:+.1%}) · מפגר: {l} ({tkr_y[l]:+.1%}).")))
+                msgs.append(("🪙", _t(f"Crypto is {crypto_share:.0%} of the portfolio.",
+                                      f"קריפטו מהווה {crypto_share:.0%} מהתיק.")))
+                for icon, m in msgs:
+                    st.markdown(f"<div style='padding:.45rem .7rem;margin:.3rem 0;border-radius:10px;"
+                                f"background:rgba(99,102,241,.08);unicode-bidi:plaintext'>{icon} {m}</div>",
+                                unsafe_allow_html=True)
+        except Exception as exc:
+            st.caption(_t("Insights unavailable.", "תובנות לא זמינות.") + f" ({str(exc)[:60]})")
+
+    # ── 2. Rebalancing advisor ───────────────────────────────────────────
+    with st.expander("⚖️ " + _t("Rebalancing Advisor", "יועץ איזון מחדש")):
+        try:
+            df = open_trades.copy()
+            df["Current_Value_ILS"] = df.get("Current_Value_ILS", pd.Series(dtype=float)).map(_num)
+            total_val = float(df["Current_Value_ILS"].sum())
+            def _cls(row):
+                t = _clean(row.get("Type", ""))
+                if t == "קריפטו":
+                    return _t("Crypto", "קריפטו")
+                if "ETF" in _clean(row.get("Ticker", "")).upper() or t == "ETF":
+                    return "ETF"
+                return _t("Stocks", "מניות")
+            if total_val <= 0:
+                st.info(_t("No open positions.", "אין פוזיציות פתוחות."))
+            else:
+                df["_cls"] = df.apply(_cls, axis=1)
+                cur = df.groupby("_cls")["Current_Value_ILS"].sum()
+                classes = list(cur.index)
+                st.caption(_t("Set your target % per class (must sum to ~100):",
+                              "קבע אחוז יעד לכל סוג נכס (סכום ~100):"))
+                cols = st.columns(len(classes))
+                targets = {}
+                default = round(100.0 / len(classes), 1)
+                for i, c in enumerate(classes):
+                    targets[c] = cols[i].number_input(c, min_value=0.0, max_value=100.0,
+                                                      value=float(round(cur[c] / total_val * 100, 1)),
+                                                      step=1.0, key=f"rebal_{c}")
+                rows = []
+                for c in classes:
+                    cur_v = float(cur[c])
+                    tgt_v = total_val * targets[c] / 100.0
+                    delta = tgt_v - cur_v
+                    rows.append({
+                        _t("Class", "סוג"): c,
+                        _t("Current", "נוכחי"): f"₪{cur_v:,.0f} ({cur_v/total_val:.0%})",
+                        _t("Target", "יעד"): f"₪{tgt_v:,.0f} ({targets[c]:.0f}%)",
+                        _t("Action", "פעולה"): (_t("Buy", "קנה") if delta > 0 else _t("Sell", "מכור")) + f" ₪{abs(delta):,.0f}"
+                        if abs(delta) > total_val * 0.005 else _t("On target", "מאוזן"),
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.caption(_t("Rebalancing unavailable.", "איזון לא זמין.") + f" ({str(exc)[:60]})")
+
+    # ── 3. Dividend tracker ──────────────────────────────────────────────
+    with st.expander("💰 " + _t("Dividend Tracker", "מעקב דיבידנדים")):
+        try:
+            divs = _load_dividends()
+            with st.form("add_dividend", clear_on_submit=True):
+                c1, c2, c3 = st.columns([1, 1, 1])
+                d_tkr = c1.text_input(_t("Ticker", "טיקר"), key="div_tkr")
+                d_amt = c2.number_input(_t("Amount (₪)", "סכום (₪)"), min_value=0.0, step=10.0, key="div_amt")
+                d_date = c3.text_input(_t("Date (YYYY-MM-DD)", "תאריך"), key="div_date")
+                if st.form_submit_button("➕ " + _t("Add", "הוסף")) and _clean(d_tkr) and d_amt > 0:
+                    divs.append({"ticker": _clean(d_tkr).upper(), "amount": float(d_amt),
+                                 "date": _clean(d_date) or "—"})
+                    _save_dividends(divs)
+                    st.rerun()
+            if divs:
+                ddf = pd.DataFrame(divs)
+                total = float(ddf["amount"].sum())
+                this_year = float(ddf[ddf["date"].astype(str).str[:4] == "2026"]["amount"].sum())
+                m1, m2 = st.columns(2)
+                m1.metric(_t("Total received", "סך התקבל"), f"₪{total:,.0f}")
+                m2.metric(_t("This year (2026)", "השנה (2026)"), f"₪{this_year:,.0f}")
+                by_t = ddf.groupby("ticker", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
+                st.dataframe(by_t.rename(columns={"ticker": _t("Ticker", "טיקר"), "amount": _t("Total (₪)", "סה\"כ (₪)")}),
+                             use_container_width=True, hide_index=True)
+            else:
+                st.info(_t("No dividends recorded yet. Add one above.", "עדיין לא נרשמו דיבידנדים. הוסף למעלה."))
+        except Exception as exc:
+            st.caption(_t("Dividend tracker unavailable.", "מעקב דיבידנדים לא זמין.") + f" ({str(exc)[:60]})")
+
+
 def main() -> None:
     # Run one-time data migrations before anything else
     _run_data_migrations()
@@ -10511,6 +10652,11 @@ def main() -> None:
 
         with tab_reports:
             reports_payload = _shared_reports_payload
+            try:
+                render_smart_features(open_trades, language)
+                st.markdown("---")
+            except Exception as _sf_exc:
+                st.caption(f"Smart features unavailable ({str(_sf_exc)[:60]})")
             report_options = {
                 tr("Crypto Concentration", "ריכוזיות קריפטו"): "concentration_table",
                 tr("Winner / Loser", "המנצח / המפסיד"): "winner_loser_table",

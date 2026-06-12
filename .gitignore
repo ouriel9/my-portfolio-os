@@ -26,6 +26,10 @@ manual_deposits_store.json
 sim_user_prefs.json
 snapshot_cache.csv
 verified_data.csv
+dividends.json
+# Raw broker/exchange statements & exports (PDF/CSV/XLS/screenshots) — never publish
+DATA/
+*.pre-redesign-backup
 
 # === LOGS ===
 *.log
