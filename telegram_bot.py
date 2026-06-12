@@ -31,7 +31,20 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from whatsapp_bot import handle, _summary  # reuse the command logic
+from whatsapp_bot import handle as _quick_handle, _summary  # quick fixed-commands
+import telegram_agent
+
+
+def handle(text: str) -> str:
+    """Full dispatch: when an Anthropic key is configured, send the prompt to the
+    AI agent (any request, like chatting with Claude). Otherwise fall back to the
+    fixed quick-commands so the bot still works without a key."""
+    if telegram_agent.agent_available():
+        try:
+            return telegram_agent.run_agent(text)
+        except Exception as exc:
+            return f"שגיאת סוכן: {str(exc)[:200]}\n(נופל לפקודות הבסיסיות)\n\n" + _quick_handle(text)
+    return _quick_handle(text)
 
 
 def _log(msg: str) -> None:
