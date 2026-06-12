@@ -7,6 +7,8 @@
 # ─────────────────────────────────────────────────────────────────────
 
 # === SECRETS / CREDENTIALS (never commit) ===
+bit2c_api.json
+whatsapp_config.json
 app_local_config.json
 .streamlit/secrets.toml
 # GCP service-account private keys (any name)
