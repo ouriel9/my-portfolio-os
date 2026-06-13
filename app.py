@@ -5962,6 +5962,21 @@ def build_demo_snapshot_data() -> pd.DataFrame:
     return _normalize_snapshot_df(df)
 
 
+def _local_store_age_seconds(meta: Dict[str, object]) -> float:
+    """Seconds since the local store was last synced from the sheet.
+    Returns a large number (treat as very stale) if unknown/unparseable."""
+    raw = _clean(str((meta or {}).get("_last_synced", "")))
+    if not raw:
+        return 1e12
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            ts = datetime.strptime(raw[:19], fmt)
+            return max(0.0, (datetime.utcnow() - ts).total_seconds())
+        except Exception:
+            continue
+    return 1e12
+
+
 def load_snapshot_data(
     web_app_url: str,
     token: str,
@@ -5976,9 +5991,29 @@ def load_snapshot_data(
       2. snapshot_cache.csv / verified_data.csv       ← auto-migrate on first run
       3. Google Sheets (Apps Script or gspread)       ← used on first run / after sync
     """
-    # ── 1. Local store (primary) ─────────────────────────────────────
+    # ── 1. Local store (primary, but refreshed when stale) ───────────
     local_df, _meta = load_local_portfolio()
     if not local_df.empty:
+        # Auto-pull the live sheet when the local store is stale AND there are
+        # no pending offline edits. This keeps the dashboard accurate (the old
+        # behaviour served a month-stale store and never re-read the sheet)
+        # while still preserving offline-first editing: if there are unsynced
+        # local changes, we keep them and never clobber.
+        try:
+            clean_url0 = _clean(web_app_url)
+            if (clean_url0 and is_apps_script_web_app_url(clean_url0)
+                    and not _apps_script_on_cooldown()
+                    and _local_store_age_seconds(_meta) > 1800   # > 30 min stale
+                    and count_dirty_local_trades() == 0):
+                df_remote = load_google_snapshot_data(clean_url0, token)
+                _clear_apps_script_cooldown()
+                _save_local_snapshot_cache(df_remote)
+                save_local_portfolio(df_remote, preserve_dirty=False)
+                return df_remote, "apps_script"
+        except Exception as _exc:
+            if _is_timeout_error(_exc):
+                _mark_apps_script_timeout()
+            # any failure → fall back to the local store below
         return local_df, "local_store"
 
     # ── 1b. Auto-migrate from snapshot_cache / verified_data ─────────
