@@ -7947,8 +7947,21 @@ def render_advanced_analytics(
                     display_labels = [sym_to_tkr.get(c, c) for c in corr.columns]
                     corr.columns = display_labels
                     corr.index = display_labels
+                    # Adapt the color range to the ACTUAL off-diagonal data so the
+                    # heatmap is readable. A fixed [-1, 1] range washes everything to
+                    # one wall of red when (as here) all real correlations sit in
+                    # ~0.45..1.0. If all correlations are non-negative use a sequential
+                    # Reds ramp (high corr = dark red = "less diversified"); only fall
+                    # back to a diverging scale when genuine negative correlations exist.
+                    _cv = corr.values.astype(float).copy()
+                    np.fill_diagonal(_cv, np.nan)
+                    _cmin = float(np.nanmin(_cv)) if np.isfinite(np.nanmin(_cv)) else -1.0
+                    if _cmin >= 0:
+                        _zmin, _cscale = max(0.0, round(_cmin - 0.05, 2)), "Reds"
+                    else:
+                        _zmin, _cscale = -1.0, "RdBu_r"
                     heat_fig = px.imshow(
-                        corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                        corr, color_continuous_scale=_cscale, zmin=_zmin, zmax=1,
                         text_auto=".2f", aspect="auto",
                         title=tr("Return Correlation Heatmap (1Y daily)",
                                  "מפת מתאמים של תשואות (יומי, שנה)"),
