@@ -1554,11 +1554,25 @@ function buildDashboard() {
     totalCostILS += costIls;
     totalValILS += valueIls;
   });
-  homeSheet.getRange("B2:H2").merge().setValue("💼 לוח בקרה - התיק הפעיל").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#1A365D").setFontColor("white");
-  const totalYield = totalCostILS ? (totalValILS - totalCostILS) / totalCostILS : 0;
-  const summaryText = "שווי פעיל כולל: ₪" + totalValILS.toLocaleString("en-US", { maximumFractionDigits: 0 }) + "  |  עלות (כולל עמלות): ₪" + totalCostILS.toLocaleString("en-US", { maximumFractionDigits: 0 }) + "  |  תשואה נטו: " + (totalYield * 100).toFixed(2) + "%";
-  homeSheet.getRange("B3:H3").merge().setValue(summaryText).setFontSize(14).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#EBF8FF").setFontColor(totalYield >= 0 ? "#276749" : "#C53030");
-  homeSheet.getRange("B2:H3").setBorder(true, true, true, true, false, false, "black", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  // ── KPI strip: deposits / value / cash / total account / P&L / return ──
+  let totalDeposits = 0;
+  try { (readManualDeposits_("live").rows || []).forEach(function (dr) { totalDeposits += parseNum(dr.Manual_Deposit_ILS); }); } catch (e) {}
+  const netPL = totalValILS - totalCostILS;
+  const totalYield = totalCostILS ? netPL / totalCostILS : 0;
+  const cashEst = totalDeposits - totalCostILS;
+  const totalAccount = totalValILS + cashEst;
+  const nis = function (v) { return "₪" + Math.round(v).toLocaleString("en-US"); };
+
+  homeSheet.getRange("B2:H2").merge().setValue("💼 לוח בקרה — תיק ההשקעות של אוריאל").setFontSize(20).setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setBackground("#1A365D").setFontColor("white");
+  const kpiLabels = [["💰 הפקדות בפועל", "📊 שווי תיק", "💵 מזומן", "🏦 שווי חשבון כולל", "📈 רווח/הפסד שוק", "🎯 תשואה"]];
+  const kpiValues = [[nis(totalDeposits), nis(totalValILS), nis(cashEst), nis(totalAccount), nis(netPL), (totalYield * 100).toFixed(2) + "%"]];
+  homeSheet.getRange(3, 2, 1, 6).setValues(kpiLabels).setFontWeight("bold").setFontSize(10).setBackground("#2B6CB0").setFontColor("white").setHorizontalAlignment("center").setVerticalAlignment("middle");
+  homeSheet.getRange(4, 2, 1, 6).setValues(kpiValues).setFontWeight("bold").setFontSize(15).setHorizontalAlignment("center").setVerticalAlignment("middle").setBackground("#EBF8FF");
+  homeSheet.getRange(4, 6).setFontColor(netPL >= 0 ? "#276749" : "#C53030");      // P/L cell (F4)
+  homeSheet.getRange(4, 7).setFontColor(totalYield >= 0 ? "#276749" : "#C53030"); // return cell (G4)
+  homeSheet.getRange("H3:H4").setBackground("#EBF8FF");
+  homeSheet.getRange("B2:H4").setBorder(true, true, true, true, true, true, "#1A365D", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  homeSheet.setRowHeight(4, 32);
   homeSheet.getRange("I2").setValue("🔄 רענון").setFontSize(12).setFontWeight("bold").setHorizontalAlignment("center").setBackground("#4A5568").setFontColor("white");
   homeSheet.getRange("I3").insertCheckboxes().setBackground("#F7FAFC").setHorizontalAlignment("center").setVerticalAlignment("middle");
   homeSheet.getRange("I2:I3").setBorder(true, true, true, true, false, false, "black", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
