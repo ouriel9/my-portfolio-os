@@ -922,7 +922,11 @@ function doPost(e) {
       const props = PropertiesService.getScriptProperties();
       if (payload.telegram_token) props.setProperty("TELEGRAM_TOKEN", cleanText(payload.telegram_token));
       if (payload.allowed_chat_id) props.setProperty("TELEGRAM_CHAT_ID", cleanText(String(payload.allowed_chat_id)));
-      return jsonResponse_({ ok: true, hasToken: !!props.getProperty("TELEGRAM_TOKEN"), chat: props.getProperty("TELEGRAM_CHAT_ID") || "" });
+      if (payload.gemini_api_key) props.setProperty("GEMINI_API_KEY", cleanText(payload.gemini_api_key));
+      if (payload.gemini_model) props.setProperty("GEMINI_MODEL", cleanText(payload.gemini_model));
+      return jsonResponse_({ ok: true, hasToken: !!props.getProperty("TELEGRAM_TOKEN"),
+        chat: props.getProperty("TELEGRAM_CHAT_ID") || "", hasGemini: !!props.getProperty("GEMINI_API_KEY"),
+        geminiModel: props.getProperty("GEMINI_MODEL") || "gemini-2.0-flash" });
     }
     if (action === "tg_answer") {
       // Compute an answer without sending — lets us verify the brain over the API.
@@ -1889,6 +1893,94 @@ function tgSend_(chatId, text) {
   return tgApi_("sendMessage", { chat_id: chatId, text: text, parse_mode: "HTML", disable_web_page_preview: true });
 }
 
+// Send a file (e.g. a generated PDF report) to the chat as a Telegram document.
+function tgSendDocument_(chatId, blob, caption) {
+  const token = cleanText(PropertiesService.getScriptProperties().getProperty("TELEGRAM_TOKEN") || "");
+  if (!token) return { ok: false };
+  const res = UrlFetchApp.fetch("https://api.telegram.org/bot" + token + "/sendDocument", {
+    method: "post",
+    payload: { chat_id: String(chatId), caption: caption || "", document: blob },
+    muteHttpExceptions: true
+  });
+  try { return JSON.parse(res.getContentText()); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+// ---- LLM brain: Google Gemini (free tier; runs 24/7 in the cloud) ----
+function geminiGenerate_(systemText, history, userText) {
+  const key = cleanText(PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY") || "");
+  if (!key) return null;
+  const model = cleanText(PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL") || "") || "gemini-2.0-flash";
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + key;
+  const contents = [];
+  (history || []).forEach(function (h) {
+    contents.push({ role: (h.role === "bot" ? "model" : "user"), parts: [{ text: String(h.text || "") }] });
+  });
+  contents.push({ role: "user", parts: [{ text: userText }] });
+  const payload = {
+    systemInstruction: { parts: [{ text: systemText }] },
+    contents: contents,
+    generationConfig: { temperature: 0.4, maxOutputTokens: 1500 }
+  };
+  try {
+    const res = UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", payload: JSON.stringify(payload), muteHttpExceptions: true });
+    const code = res.getResponseCode();
+    const j = JSON.parse(res.getContentText());
+    if (code >= 300) { try { appendAudit_("gemini_error", "TG", String(code), JSON.stringify(j).slice(0, 300)); } catch (e) {} return null; }
+    const c = j && j.candidates && j.candidates[0];
+    const t = c && c.content && c.content.parts && c.content.parts.map(function (pp) { return pp.text || ""; }).join("");
+    return (t && t.trim()) ? t.trim() : null;
+  } catch (e) { try { appendAudit_("gemini_error", "TG", "EXC", String(e).slice(0, 200)); } catch (e2) {} return null; }
+}
+
+// ---- per-chat conversation memory (last ~8 turns, in Script Properties) ----
+function tgHistGet_(chatId) {
+  try { return JSON.parse(PropertiesService.getScriptProperties().getProperty("TG_HIST_" + chatId) || "[]"); } catch (e) { return []; }
+}
+function tgHistPush_(chatId, role, text) {
+  try {
+    const h = tgHistGet_(chatId);
+    h.push({ role: role, text: String(text || "").slice(0, 1500) });
+    while (h.length > 8) h.shift();
+    PropertiesService.getScriptProperties().setProperty("TG_HIST_" + chatId, JSON.stringify(h));
+  } catch (e) {}
+}
+function tgHistClear_(chatId) { try { PropertiesService.getScriptProperties().deleteProperty("TG_HIST_" + chatId); } catch (e) {} }
+
+// ---- full live data context handed to the LLM each turn ----
+function portfolioContextForLLM_() {
+  const S = computePortfolioStats_();
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  const L = [];
+  L.push("LIVE PORTFOLIO DATA (ILS ₪, as of " + Utilities.formatDate(new Date(), tz, "dd/MM/yyyy HH:mm") + "):");
+  L.push("totals: open_value=" + Math.round(S.totVal) + " cost=" + Math.round(S.totCost) +
+    " unrealized_pnl=" + Math.round(S.netPL) + " return=" + (S.ret * 100).toFixed(2) + "%" +
+    " realized_pnl=" + Math.round(S.realized) + " cash=" + Math.round(S.cash) +
+    " total_account=" + Math.round(S.totalAccount) + " deposits=" + Math.round(S.deposits) +
+    " commissions=" + Math.round(S.totFeeIls) + " usd_ils=" + S.rate.toFixed(4) +
+    " open_lots=" + S.openCount + " days_invested=" + S.days +
+    " crypto_value=" + Math.round(S.cryptoVal) + " equity_value=" + Math.round(S.equityVal) +
+    " top3_concentration=" + (S.conc * 100).toFixed(1) + "%");
+  L.push("holdings [ticker: qty cost value pnl return type]:");
+  S.tks.forEach(function (t) {
+    const o = S.byTicker[t]; const pl = o.val - o.cost; const y = o.cost ? pl / o.cost * 100 : 0;
+    L.push("  " + t + ": qty=" + (Math.round(o.qty * 10000) / 10000) + " cost=" + Math.round(o.cost) + " value=" + Math.round(o.val) + " pnl=" + Math.round(pl) + " ret=" + y.toFixed(2) + "% type=" + (o.type || ""));
+  });
+  L.push("platforms [name: deposit cost value pnl return]:");
+  Object.keys(S.byPlat).forEach(function (p) {
+    const o = S.byPlat[p]; const pl = o.val - o.cost; const y = o.cost ? pl / o.cost * 100 : 0;
+    L.push("  " + p + ": deposit=" + Math.round(o.dep) + " cost=" + Math.round(o.cost) + " value=" + Math.round(o.val) + " pnl=" + Math.round(pl) + " ret=" + y.toFixed(2) + "%");
+  });
+  if (Object.keys(S.closedAgg).length) {
+    L.push("closed positions [ticker: cost proceeds realized_pnl]:");
+    Object.keys(S.closedAgg).forEach(function (t) { const o = S.closedAgg[t]; L.push("  " + t + ": cost=" + Math.round(o.cost) + " proceeds=" + Math.round(o.val) + " realized_pnl=" + Math.round(o.val - o.cost)); });
+  }
+  return L.join("\n");
+}
+
+function tgSystemPrompt_() {
+  return "You are Ouriel's personal investment-portfolio assistant on Telegram. You have his FULL live portfolio data below and may analyze it freely and in depth — returns, allocation, risk, concentration, comparisons, what-if scenarios, and concrete suggestions. Reply in HEBREW, concise and clear for a phone (short paragraphs or bullets; you may use emoji and simple HTML <b>bold</b>). Currency is ₪ (ILS). NEVER invent numbers — use ONLY the data provided; if something isn't present, say so plainly. Maintain continuity with the conversation so far. If the user asks for a report/document/PDF (דוח/טופס), a PDF is attached automatically by the system.\n\n" + portfolioContextForLLM_();
+}
+
 function handleTelegramUpdate_(update) {
   const msg = update.message || update.edited_message;
   if (!msg || !msg.chat) return;
@@ -1898,10 +1990,70 @@ function handleTelegramUpdate_(update) {
   if (allowed && chatId !== allowed) { tgSend_(chatId, "מצטער, זהו בוט פרטי של אוריאל 🔒"); return; }
   const text = cleanText(msg.text || "");
   if (!text) { tgSend_(chatId, tgHelp_()); return; }
-  let answer;
-  try { answer = answerPortfolioQuestion_(text); }
-  catch (e) { answer = "אירעה שגיאה בחישוב: " + String(e).slice(0, 200); }
+
+  // reset conversation memory
+  if (text === "/reset" || text === "/clear" || text === "אפס שיחה" || text === "התחל מחדש") {
+    tgHistClear_(chatId); tgSend_(chatId, "השיחה אופסה — מתחילים מחדש 🙂"); return;
+  }
+
+  // report / document request → generate a PDF and send it as a file
+  if (/דו\"?ח|דוח|טופס|report|pdf|מסמך/i.test(text)) {
+    try {
+      tgSend_(chatId, "מכין דוח PDF... 📄");
+      const S = computePortfolioStats_();
+      const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+      const pdf = Utilities.newBlob(buildReportHtml_(S), "text/html", "report.html").getAs("application/pdf").setName("Portfolio_Report.pdf");
+      tgSendDocument_(chatId, pdf, "📄 דוח תיק — " + Utilities.formatDate(new Date(), tz, "dd/MM/yyyy"));
+      tgHistPush_(chatId, "user", text); tgHistPush_(chatId, "bot", "[שלחתי דוח PDF של מצב התיק]");
+      return;
+    } catch (e) { try { appendAudit_("tg_report_error", "TG", "ERR", String(e).slice(0, 200)); } catch (e2) {} }
+  }
+
+  // LLM answer (Gemini) with full data context + conversation memory;
+  // fall back to the rule-based engine if no key / call fails.
+  let answer = null;
+  try { answer = geminiGenerate_(tgSystemPrompt_(), tgHistGet_(chatId), text); } catch (e) { answer = null; }
+  if (!answer) {
+    try { answer = answerPortfolioQuestion_(text); } catch (e) { answer = "אירעה שגיאה: " + String(e).slice(0, 150); }
+  }
+  tgHistPush_(chatId, "user", text);
+  tgHistPush_(chatId, "bot", answer);
   tgSend_(chatId, answer);
+}
+
+// Build a clean RTL HTML portfolio report (rendered to PDF for Telegram).
+function buildReportHtml_(S) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  const m = function (v) { return "₪" + Math.round(v).toLocaleString("en-US"); };
+  const p = function (v) { return (v * 100).toFixed(2) + "%"; };
+  const rows = S.tks.map(function (t) {
+    const o = S.byTicker[t]; const pl = o.val - o.cost; const y = o.cost ? pl / o.cost : 0;
+    const col = pl >= 0 ? "#1E7E34" : "#C53030";
+    return "<tr><td><b>" + t + "</b></td><td>" + (Math.round(o.qty * 10000) / 10000) + "</td><td>" + m(o.cost) + "</td><td>" + m(o.val) + "</td><td style='color:" + col + "'>" + m(pl) + "</td><td style='color:" + col + "'>" + p(y) + "</td></tr>";
+  }).join("");
+  const plats = Object.keys(S.byPlat).map(function (pn) {
+    const o = S.byPlat[pn]; const pl = o.val - o.cost; const y = o.cost ? pl / o.cost : 0;
+    return "<tr><td>" + pn + "</td><td>" + m(o.cost) + "</td><td>" + m(o.val) + "</td><td>" + m(pl) + "</td><td>" + p(y) + "</td></tr>";
+  }).join("");
+  return "<html dir='rtl'><head><meta charset='utf-8'><style>"
+    + "body{font-family:Arial,Helvetica,sans-serif;margin:28px;color:#1a202c}"
+    + "h1{color:#0F2A4A;margin:0} h2{color:#2C5282;margin:22px 0 4px}"
+    + "table{border-collapse:collapse;width:100%} th,td{border:1px solid #cbd5e0;padding:6px 8px;text-align:right;font-size:13px} th{background:#2C5282;color:#fff}"
+    + ".kpi{display:inline-block;margin:6px 16px 6px 0;font-size:15px}"
+    + "</style></head><body>"
+    + "<h1>📊 דוח תיק — אוריאל</h1>"
+    + "<div style='color:#718096;margin-top:4px'>עודכן " + Utilities.formatDate(new Date(), tz, "dd/MM/yyyy HH:mm") + " · שער דולר/שקל " + S.rate.toFixed(3) + "</div>"
+    + "<h2>סיכום</h2>"
+    + "<div class='kpi'>שווי תיק: <b>" + m(S.totVal) + "</b></div>"
+    + "<div class='kpi'>מזומן: <b>" + m(S.cash) + "</b></div>"
+    + "<div class='kpi'>שווי כולל: <b>" + m(S.totalAccount) + "</b></div>"
+    + "<div class='kpi'>הפקדות: <b>" + m(S.deposits) + "</b></div>"
+    + "<div class='kpi'>רווח/הפסד: <b style='color:" + (S.netPL >= 0 ? "#1E7E34" : "#C53030") + "'>" + m(S.netPL) + " (" + p(S.ret) + ")</b></div>"
+    + "<div class='kpi'>רווח ממומש: <b>" + m(S.realized) + "</b></div>"
+    + "<div class='kpi'>חשיפת קריפטו: <b>" + (S.totVal ? (S.cryptoVal / S.totVal * 100).toFixed(1) : 0) + "%</b></div>"
+    + "<h2>אחזקות</h2><table><tr><th>נכס</th><th>כמות</th><th>עלות</th><th>שווי</th><th>רווח/הפסד</th><th>תשואה</th></tr>" + rows + "</table>"
+    + "<h2>פלטפורמות</h2><table><tr><th>פלטפורמה</th><th>עלות</th><th>שווי</th><th>רווח/הפסד</th><th>תשואה</th></tr>" + plats + "</table>"
+    + "</body></html>";
 }
 
 // ---- formatting helpers ----
@@ -1910,16 +2062,15 @@ function tgPct_(v) { return (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%"; }
 function tgDot_(v) { return v >= 0 ? "🟢" : "🔴"; }
 
 function tgHelp_() {
-  return "🤖 <b>בוט התיק של אוריאל</b> — שאל אותי בחופשיות. דוגמאות:\n\n" +
-    "• <b>סיכום</b> — מצב התיק המלא\n" +
-    "• <b>תשואה</b> / תשואה שבועית / חודשית / שנתית\n" +
-    "• <b>רווח</b> / הפסד / רווח ממומש\n" +
-    "• <b>מזומן</b> / הפקדות / עמלות\n" +
-    "• <b>פילוח</b> לפי פלטפורמה / אקסלנס / הורייזון / Bit2C\n" +
-    "• <b>הקצאה</b> (קריפטו מול מניות)\n" +
-    "• <b>מנצחים</b> / מפסידים\n" +
-    "• שם נכס (למשל <b>BTC</b>, VOO, IBIT) — פירוט אחזקה\n" +
-    "• <b>שער דולר</b>\n\nאני עובד 24/7 גם כשהמחשב כבוי ☁️";
+  return "🤖 <b>בוט התיק של אוריאל</b> — דבר איתי חופשי בשפה טבעית, אני זוכר את ההקשר של השיחה ויש לי גישה לכל נתוני התיק החיים.\n\n" +
+    "אפשר לשאול כל דבר, למשל:\n" +
+    "• \"מה מצב התיק?\" · \"כמה הפסדתי החודש?\"\n" +
+    "• \"נתח לי את הסיכון והריכוזיות\"\n" +
+    "• \"כמה כדאי שאחסוך כדי לפרוש בגיל 60?\"\n" +
+    "• \"השווה בין הקריפטו למניות\" · \"מה האחזקה הכי גרועה ולמה?\"\n" +
+    "• \"תכין לי <b>דוח</b>\" — ואשלח PDF של מצב התיק 📄\n\n" +
+    "פקודות: <b>/reset</b> — לאפס את זיכרון השיחה.\n" +
+    "אני עובד 24/7 גם כשהמחשב כבוי ☁️";
 }
 
 function computePortfolioStats_() {
