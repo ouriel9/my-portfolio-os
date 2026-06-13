@@ -4187,9 +4187,7 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
         fx_df = _download_close_matrix(("USDILS=X",), days=max(int(days), 30))
         if not fx_df.empty and "USDILS=X" in fx_df.columns:
             fx_series = pd.to_numeric(fx_df["USDILS=X"], errors="coerce")
-        fx_spot = _safe_quote("USDILS=X")
-        if fx_spot <= 0:
-            fx_spot = 3.6
+        fx_spot = _usd_ils_rate()
 
     frames = []
     for ticker, qty in qty_by_ticker.items():
@@ -4215,9 +4213,7 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
 
 def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict[str, float]] = []
-    usd_ils_rate = _safe_quote("USDILS=X")
-    if usd_ils_rate <= 0:
-        usd_ils_rate = 3.6
+    usd_ils_rate = _usd_ils_rate()
 
     for ticker, tdf in trades.sort_values("Purchase_Date").groupby("Ticker"):
         lots: List[FifoLot] = []
@@ -4344,6 +4340,26 @@ def _safe_quote(symbol: str) -> float:
     return 0.0
 
 
+def _usd_ils_rate(default: float = 3.3) -> float:
+    """Robust USD/ILS rate. Prefers a live quote; on failure uses the last good
+    value seen this session; only as a true last resort uses `default`.
+
+    Replaces a previously hard-coded 3.6 fallback that, when the live FX fetch
+    failed, silently inflated every USD position by ~20%+ vs the real ~2.9 rate."""
+    live = _safe_quote("USDILS=X")
+    try:
+        if live and live > 0:
+            st.session_state["_last_good_usdils"] = float(live)
+            return float(live)
+        cached = float(st.session_state.get("_last_good_usdils", 0) or 0)
+        if cached > 0:
+            return cached
+    except Exception:
+        if live and live > 0:
+            return float(live)
+    return default
+
+
 def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None, help_text: Optional[str] = None) -> str:
     cleaned = sorted({_clean(v) for v in options if _clean(v)})
     tr_local = tr_fn or (lambda en, he: he)
@@ -4393,9 +4409,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     eth_usd = _safe_quote("ETH-USD")
     sol_usd = _safe_quote("SOL-USD")
 
-    fx = usd_ils
-    if fx <= 0:
-        fx = 3.6
+    fx = usd_ils if usd_ils and usd_ils > 0 else _usd_ils_rate()
 
     work["Cost_Origin_With_Fee"] = work["Cost_Origin"] + work["Commission"]
     work["Value_Origin_Est"] = np.where(
@@ -6194,7 +6208,7 @@ def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
     live_prices = fetch_prices(tickers)
     usd_ils = _safe_quote("USDILS=X")
     if usd_ils <= 0:
-        usd_ils = 3.6
+        usd_ils = _usd_ils_rate()
     out["מחיר שוק"] = out["Ticker"].map(live_prices).fillna(0.0) if "Ticker" in out.columns else 0.0
     qty_series = out["Quantity"].map(_num) if "Quantity" in out.columns else 0.0
     out["שווי שוק (יחסי מטבע מקור)"] = qty_series * out["מחיר שוק"]
@@ -6243,8 +6257,7 @@ def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
     live_prices = fetch_prices(tickers)
     usd_ils = _safe_quote("USDILS=X")
     if usd_ils <= 0:
-        usd_ils = 3.6
-
+        usd_ils = _usd_ils_rate()
     for idx in open_idx:
         row = out.loc[idx]
         ticker = _clean(str(row.get("Ticker", "")))
@@ -10239,7 +10252,7 @@ def main() -> None:
                     with st.spinner(tr("🔄 Fetching live prices…", "🔄 טוען שערים חיים…")):
                         cached_prices = fetch_prices(tickers_tuple)
                 if cached_prices:
-                    usd_ils_val = _safe_quote("USDILS=X") or 3.6
+                    usd_ils_val = _usd_ils_rate()
                     has_status = "Status" in df.columns
                     if has_status:
                         status_norm = df["Status"].map(_clean).str.lower()
@@ -10296,8 +10309,7 @@ def main() -> None:
 
         fx = _safe_quote("USDILS=X")
         if fx <= 0:
-            fx = 3.6
-
+            fx = _usd_ils_rate()
         dashboard_df = enrich_open_trades_with_prices(open_trades)
         dashboard_df["Cost_Origin_With_Fee"] = dashboard_df["Cost_Origin"] + dashboard_df["Commission"]
         dashboard_df["Value_Origin_Est"] = np.where(
@@ -10377,7 +10389,7 @@ def main() -> None:
                             t for t in open_trades["Ticker"].dropna().unique() if _clean(t)
                         ))
                         _lpx = fetch_live_prices(_tks)
-                        _ufx = _safe_quote("USDILS=X") or 3.6
+                        _ufx = _usd_ils_rate()
                         if _lpx:
                             _enriched_kpi = open_trades.copy()
                             _enriched_kpi["מחיר שוק"] = _enriched_kpi["Ticker"].map(_lpx).fillna(0.0)
@@ -10603,7 +10615,7 @@ def main() -> None:
                     return pd.DataFrame(columns=["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"])
                 fx_local = _safe_quote("USDILS=X")
                 if fx_local <= 0:
-                    fx_local = 3.6
+                    fx_local = _usd_ils_rate()
                 local_df = enrich_open_trades_with_prices(local_open_trades.copy())
                 local_df["Cost_Origin_With_Fee"] = local_df["Cost_Origin"] + local_df["Commission"]
                 local_df["Value_Origin_Est"] = np.where(
@@ -10795,7 +10807,7 @@ def main() -> None:
                             ))
                             _live_px = fetch_live_prices(_live_tickers)
                             if _live_px:
-                                _fx = _safe_quote("USDILS=X") or 3.6
+                                _fx = _usd_ils_rate()
                                 _enriched = open_trades.copy()
                                 _enriched["מחיר שוק"] = _enriched["Ticker"].map(_live_px).fillna(0.0)
                                 _qty = _enriched["Quantity"].map(_num)
@@ -10896,7 +10908,7 @@ def main() -> None:
                             ))
                             _lpx_ov = fetch_live_prices(_tks_ov)
                             if _lpx_ov:
-                                _fx_ov = _safe_quote("USDILS=X") or 3.6
+                                _fx_ov = _usd_ils_rate()
                                 _ov_e = open_trades.copy()
                                 _ov_e["מחיר שוק"] = _ov_e["Ticker"].map(_lpx_ov).fillna(0.0)
                                 _qty_ov = _ov_e["Quantity"].map(_num)
@@ -11538,7 +11550,7 @@ def main() -> None:
                     _tx = _base.copy()
                     # Re-fetch live prices (TTL=25 s — yfinance 1-min intraday data)
                     if "Ticker" in _tx.columns:
-                        _fx = _safe_quote("USDILS=X") or 3.6
+                        _fx = _usd_ils_rate()
                         _tks = tuple(sorted({_clean(v).upper() for v in _tx["Ticker"].tolist() if _clean(v)}))
                         _lpm = fetch_live_prices(_tks) if _tks else {}
 
@@ -11889,7 +11901,7 @@ def main() -> None:
         trade_view = trades.copy()
         manage_fx = _safe_quote("USDILS=X")
         if manage_fx <= 0:
-            manage_fx = 3.6
+            manage_fx = _usd_ils_rate()
         trade_qty_abs = trade_view.get("Quantity", 0).map(_num).abs()
         trade_origin_currency = trade_view.get("Origin_Currency", "").map(_normalize_currency_code)
         trade_current_ils = trade_view.get("Current_Value_ILS", 0).map(_num)
