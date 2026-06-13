@@ -857,6 +857,12 @@ function doGet() {
 function doPost(e) {
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+    // Telegram webhook updates carry no api token — identify by update_id/message and
+    // handle them on a fully separate path so they can never affect the apps' API.
+    if (payload && (payload.update_id !== undefined || payload.message || payload.edited_message)) {
+      try { handleTelegramUpdate_(payload); } catch (tgErr) { try { appendAudit_("telegram_error", "TG", "ERROR", String(tgErr)); } catch (e2) {} }
+      return ContentService.createTextOutput("ok");
+    }
     validateToken_(payload.token);
 
     const rawAction = cleanText(payload.action || payload.Action || "");
@@ -909,6 +915,29 @@ function doPost(e) {
     if (action === "dedupe_snapshot_schema") {
       const result = dedupeSnapshotSchemaOnce_();
       return jsonResponse_(result);
+    }
+
+    // ---- Telegram bot setup/diagnostics (token-guarded) ----
+    if (action === "tg_set_config") {
+      const props = PropertiesService.getScriptProperties();
+      if (payload.telegram_token) props.setProperty("TELEGRAM_TOKEN", cleanText(payload.telegram_token));
+      if (payload.allowed_chat_id) props.setProperty("TELEGRAM_CHAT_ID", cleanText(String(payload.allowed_chat_id)));
+      return jsonResponse_({ ok: true, hasToken: !!props.getProperty("TELEGRAM_TOKEN"), chat: props.getProperty("TELEGRAM_CHAT_ID") || "" });
+    }
+    if (action === "tg_answer") {
+      // Compute an answer without sending — lets us verify the brain over the API.
+      return jsonResponse_({ ok: true, answer: answerPortfolioQuestion_(cleanText(payload.text || "סיכום")) });
+    }
+    if (action === "tg_webhook_info") {
+      return jsonResponse_({ ok: true, result: tgApi_("getWebhookInfo", {}) });
+    }
+    if (action === "tg_send_test") {
+      const chat = payload.chat_id || PropertiesService.getScriptProperties().getProperty("TELEGRAM_CHAT_ID");
+      return jsonResponse_({ ok: true, result: tgSend_(chat, answerPortfolioQuestion_(cleanText(payload.text || "סיכום"))) });
+    }
+    if (action === "log_value") {
+      logPortfolioValue_();
+      return jsonResponse_({ ok: true });
     }
 
     if (readAliases[action]) {
@@ -1805,6 +1834,316 @@ function buildDashboardV2() {
   } catch (e) {}
 
   sh.setFrozenRows(3);
+}
+
+// ============================================================
+//  Telegram bot — runs 24/7 inside Apps Script (works with PC off).
+//  Replies are computed live from the sheet (which has GOOGLEFINANCE
+//  prices), so it can actually answer instead of deflecting.
+// ============================================================
+const VALUE_LOG_SHEET = "היסטוריית שווי";
+
+function tgApi_(method, params) {
+  const token = cleanText(PropertiesService.getScriptProperties().getProperty("TELEGRAM_TOKEN") || "");
+  if (!token) return { ok: false, error: "no token" };
+  const res = UrlFetchApp.fetch("https://api.telegram.org/bot" + token + "/" + method, {
+    method: "post", contentType: "application/json",
+    payload: JSON.stringify(params || {}), muteHttpExceptions: true
+  });
+  try { return JSON.parse(res.getContentText()); } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+function tgSend_(chatId, text) {
+  return tgApi_("sendMessage", { chat_id: chatId, text: text, parse_mode: "HTML", disable_web_page_preview: true });
+}
+
+function handleTelegramUpdate_(update) {
+  const msg = update.message || update.edited_message;
+  if (!msg || !msg.chat) return;
+  const chatId = String(msg.chat.id);
+  // Privacy: only answer the owner (the web app is anonymous-accessible).
+  const allowed = cleanText(PropertiesService.getScriptProperties().getProperty("TELEGRAM_CHAT_ID") || "");
+  if (allowed && chatId !== allowed) { tgSend_(chatId, "מצטער, זהו בוט פרטי של אוריאל 🔒"); return; }
+  const text = cleanText(msg.text || "");
+  if (!text) { tgSend_(chatId, tgHelp_()); return; }
+  let answer;
+  try { answer = answerPortfolioQuestion_(text); }
+  catch (e) { answer = "אירעה שגיאה בחישוב: " + String(e).slice(0, 200); }
+  tgSend_(chatId, answer);
+}
+
+// ---- formatting helpers ----
+function tgMoney_(v) { return "₪" + Math.round(v).toLocaleString("en-US"); }
+function tgPct_(v) { return (v >= 0 ? "+" : "") + (v * 100).toFixed(2) + "%"; }
+function tgDot_(v) { return v >= 0 ? "🟢" : "🔴"; }
+
+function tgHelp_() {
+  return "🤖 <b>בוט התיק של אוריאל</b> — שאל אותי בחופשיות. דוגמאות:\n\n" +
+    "• <b>סיכום</b> — מצב התיק המלא\n" +
+    "• <b>תשואה</b> / תשואה שבועית / חודשית / שנתית\n" +
+    "• <b>רווח</b> / הפסד / רווח ממומש\n" +
+    "• <b>מזומן</b> / הפקדות / עמלות\n" +
+    "• <b>פילוח</b> לפי פלטפורמה / אקסלנס / הורייזון / Bit2C\n" +
+    "• <b>הקצאה</b> (קריפטו מול מניות)\n" +
+    "• <b>מנצחים</b> / מפסידים\n" +
+    "• שם נכס (למשל <b>BTC</b>, VOO, IBIT) — פירוט אחזקה\n" +
+    "• <b>שער דולר</b>\n\nאני עובד 24/7 גם כשהמחשב כבוי ☁️";
+}
+
+function computePortfolioStats_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const main = ss.getSheetByName("תמונת מצב");
+  const data = main.getDataRange().getValues();
+  const map = buildSnapshotHeaderIndexMap_(data[0] || []);
+  const all = data.slice(1).filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) !== ""; });
+  let rate = 0; try { rate = parseNum(main.getRange("AA1").getValue()); } catch (e) {}
+  if (!rate) rate = 1;
+  const isClosed = function (r) { return cleanText(rowVal_(r, map, "status")) === "סגור"; };
+  const open = all.filter(function (r) { return !isClosed(r); });
+  const closed = all.filter(isClosed);
+  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1, "MSTR": 1 };
+  let totCost = 0, totVal = 0, totFeeIls = 0, usdVal = 0, firstDate = null;
+  const byTicker = {}, byPlat = {};
+  open.forEach(function (r) {
+    const t = cleanText(rowVal_(r, map, "ticker")), p = cleanText(rowVal_(r, map, "platform"));
+    const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
+    const tp = cleanText(rowVal_(r, map, "type")), cur = cleanText(rowVal_(r, map, "currency"));
+    const qty = parseNum(rowVal_(r, map, "quantity")), fee = parseNum(rowVal_(r, map, "fee"));
+    totCost += ci; totVal += vi; totFeeIls += (cur === "USD" ? fee * rate : fee);
+    if (cur === "USD") usdVal += vi;
+    if (!byTicker[t]) byTicker[t] = { qty: 0, cost: 0, val: 0, type: tp };
+    byTicker[t].qty += qty; byTicker[t].cost += ci; byTicker[t].val += vi;
+    if (!byPlat[p]) byPlat[p] = { cost: 0, val: 0, dep: 0 };
+    byPlat[p].cost += ci; byPlat[p].val += vi;
+    const d = normalizeDateOnly_(rowVal_(r, map, "purchaseDate"));
+    if (d && (!firstDate || d < firstDate)) firstDate = d;
+  });
+  let realized = 0; const closedAgg = {};
+  closed.forEach(function (r) {
+    const t = cleanText(rowVal_(r, map, "ticker"));
+    const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
+    const cur = cleanText(rowVal_(r, map, "currency")), fee = parseNum(rowVal_(r, map, "fee"));
+    realized += (vi - ci); totFeeIls += (cur === "USD" ? fee * rate : fee);
+    if (!closedAgg[t]) closedAgg[t] = { cost: 0, val: 0 };
+    closedAgg[t].cost += ci; closedAgg[t].val += vi;
+  });
+  let deposits = 0; const depByPlat = {};
+  try { (readManualDeposits_("live").rows || []).forEach(function (d) { deposits += parseNum(d.Manual_Deposit_ILS); depByPlat[cleanText(d.Platform)] = parseNum(d.Manual_Deposit_ILS); }); } catch (e) {}
+  Object.keys(depByPlat).forEach(function (p) { if (byPlat[p]) byPlat[p].dep = depByPlat[p]; });
+  const cash = deposits - totCost, totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
+  let cryptoVal = 0, equityVal = 0;
+  Object.keys(byTicker).forEach(function (t) { if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
+  const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
+  let top3 = 0; tks.slice(0, 3).forEach(function (t) { top3 += byTicker[t].val; });
+  const ranked = tks.filter(function (t) { return byTicker[t].cost > 0; })
+    .map(function (t) { return { t: t, y: (byTicker[t].val - byTicker[t].cost) / byTicker[t].cost, pl: byTicker[t].val - byTicker[t].cost }; })
+    .sort(function (a, b) { return b.y - a.y; });
+  let days = 0; if (firstDate) { try { days = Math.round((new Date() - new Date(firstDate + "T00:00:00")) / 86400000); } catch (e) {} }
+  return { rate: rate, deposits: deposits, totCost: totCost, totVal: totVal, cash: cash, totalAccount: totalAccount, netPL: netPL, ret: ret, realized: realized, totFeeIls: totFeeIls, usdVal: usdVal, cryptoVal: cryptoVal, equityVal: equityVal, byTicker: byTicker, byPlat: byPlat, tks: tks, ranked: ranked, closedAgg: closedAgg, conc: totVal ? top3 / totVal : 0, days: days, openCount: open.length };
+}
+
+function answerPortfolioQuestion_(text) {
+  const s = (text || "").toLowerCase();
+  const has = function () { for (var i = 0; i < arguments.length; i++) { if (s.indexOf(arguments[i]) >= 0) return true; } return false; };
+  const S = computePortfolioStats_();
+
+  if (has("עזרה", "מה אתה יכול", "מה אתה יודע", "/help", "/start", "פקודות")) return tgHelp_();
+
+  // specific ticker (Latin symbol or Hebrew alias)
+  const upper = " " + text.toUpperCase().replace(/[^A-Z]/g, " ") + " ";
+  const aliases = { "ביטקוין": "BTC", "ביטקואין": "BTC", "אתריום": "ETH", "את'ריום": "ETH", "סולנה": "SOL", "אית'ריום": "ETH" };
+  let tk = null;
+  S.tks.forEach(function (t) { if (upper.indexOf(" " + t + " ") >= 0) tk = t; });
+  Object.keys(aliases).forEach(function (k) { if (s.indexOf(k) >= 0 && S.byTicker[aliases[k]]) tk = aliases[k]; });
+  if (tk) return tgTicker_(S, tk);
+
+  // period returns
+  if (has("שבוע")) return tgPeriod_(S, 7, "שבועית");
+  if (has("חודש")) return tgPeriod_(S, 30, "חודשית");
+  if (has("שנתי") || (has("שנה") && has("תשוא"))) return tgPeriod_(S, 365, "שנתית");
+  if (has("מתחיל", "מההתחלה", "כל הזמן", "מאז")) return tgSinceStart_(S);
+
+  // platform
+  const platNames = { "אקסלנס": "אקסלנס", "אקסלנט": "אקסלנס", "הורייזון": "הורייזון", "הוריזון": "הורייזון", "horizon": "הורייזון", "bit2c": "Bit2C", "ביט2c": "Bit2C", "ביטטוסי": "Bit2C", "ביט": "Bit2C" };
+  let askPlat = null;
+  Object.keys(platNames).forEach(function (k) { if (s.indexOf(k) >= 0) askPlat = platNames[k]; });
+  if (askPlat && S.byPlat[askPlat]) return tgPlatform_(S, askPlat);
+  if (has("פלטפורמ", "פילוח", "התפלגות")) return tgAllPlatforms_(S);
+
+  if (has("הקצא", "חלוק", "אלוקצ", "קריפטו מול", "כמה קריפטו", "כמה מניות")) return tgAllocation_(S);
+  if (has("מנצח", "הכי טוב", "מוביל", "הרוויח הכי", "ביצועים הכי")) return tgMovers_(S, true);
+  if (has("מפסיד", "הכי גרוע", "הכי הפסיד", "הכי ירד")) return tgMovers_(S, false);
+  if (has("מזומן", "נזיל", "כסף פנוי", "פנוי")) return "💵 מזומן פנוי: <b>" + tgMoney_(S.cash) + "</b>\n(הפקדות " + tgMoney_(S.deposits) + " − עלות רכישות " + tgMoney_(S.totCost) + ")";
+  if (has("הפקד", "השקעתי", "הכנסתי כסף")) return tgDeposits_(S);
+  if (has("עמלה", "עמלות")) return "💸 סך העמלות ששולמו: <b>" + tgMoney_(S.totFeeIls) + "</b>\n(מחושב על כל העסקאות, פתוחות וסגורות)";
+  if (has("ממומש", "מכרתי", "מכירות", "סגרתי")) return tgRealized_(S);
+  if (has("דולר", "מטבע", "שער", "fx", "מט\"ח", "מטח")) return "💱 שער דולר/שקל: <b>" + S.rate.toFixed(4) + "</b>\nחשיפת מט\"ח (USD) בתיק: " + (S.totVal ? (S.usdVal / S.totVal * 100).toFixed(1) : 0) + "%";
+  if (has("שווי", "ערך", "כמה יש", "כמה שווה", "גודל התיק")) return "📊 שווי התיק (אחזקות): <b>" + tgMoney_(S.totVal) + "</b>\n🏦 שווי חשבון כולל (כולל מזומן): <b>" + tgMoney_(S.totalAccount) + "</b>\n💵 מזומן: " + tgMoney_(S.cash);
+  if (has("תשוא", "רווח", "הפסד", "הרווחתי", "הפסדתי", "עליתי", "ירדתי")) return tgTotalReturn_(S);
+
+  // default: full summary
+  return tgSummary_(S);
+}
+
+function tgSummary_(S) {
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  const big = S.tks.slice(0, 3).map(function (t) { return t + " " + (S.totVal ? (S.byTicker[t].val / S.totVal * 100).toFixed(0) : 0) + "%"; }).join(" · ");
+  return "📊 <b>סיכום התיק</b>  (" + Utilities.formatDate(new Date(), tz, "dd/MM/yyyy HH:mm") + ")\n\n" +
+    "🏦 שווי חשבון כולל: <b>" + tgMoney_(S.totalAccount) + "</b>\n" +
+    "📊 שווי אחזקות: " + tgMoney_(S.totVal) + "\n" +
+    "💵 מזומן פנוי: " + tgMoney_(S.cash) + "\n" +
+    "💰 הפקדות בפועל: " + tgMoney_(S.deposits) + "\n\n" +
+    tgDot_(S.netPL) + " רווח/הפסד לא ממומש: <b>" + tgMoney_(S.netPL) + "</b> (" + tgPct_(S.ret) + ")\n" +
+    tgDot_(S.realized) + " רווח/הפסד ממומש: " + tgMoney_(S.realized) + "\n\n" +
+    "🥇 הגדולות: " + big + "\n" +
+    "₿ קריפטו " + (S.totVal ? (S.cryptoVal / S.totVal * 100).toFixed(0) : 0) + "% · 📈 מניות " + (S.totVal ? (S.equityVal / S.totVal * 100).toFixed(0) : 0) + "%\n" +
+    "💱 דולר/שקל " + S.rate.toFixed(3);
+}
+
+function tgTotalReturn_(S) {
+  return "🎯 <b>תשואה כוללת</b> (מתחילת ההשקעה)\n" +
+    tgDot_(S.ret) + " <b>" + tgPct_(S.ret) + "</b>\n" +
+    "רווח/הפסד לא ממומש: " + tgMoney_(S.netPL) + "\n" +
+    "רווח/הפסד ממומש: " + tgMoney_(S.realized) + "\n" +
+    "שווי " + tgMoney_(S.totVal) + " מול עלות " + tgMoney_(S.totCost);
+}
+
+function tgTicker_(S, t) {
+  const o = S.byTicker[t]; const pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0, w = S.totVal ? o.val / S.totVal : 0;
+  return "🔎 <b>" + t + "</b>\n" +
+    "כמות: " + (Math.round(o.qty * 10000) / 10000) + "\n" +
+    "שווי: <b>" + tgMoney_(o.val) + "</b> (" + (w * 100).toFixed(1) + "% מהתיק)\n" +
+    "עלות: " + tgMoney_(o.cost) + "\n" +
+    tgDot_(pl) + " רווח/הפסד: <b>" + tgMoney_(pl) + "</b> (" + tgPct_(y) + ")";
+}
+
+function tgAllPlatforms_(S) {
+  let out = "🏦 <b>פילוח לפי פלטפורמה</b>\n\n";
+  Object.keys(S.byPlat).sort(function (a, b) { return S.byPlat[b].val - S.byPlat[a].val; }).forEach(function (p) {
+    const o = S.byPlat[p], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0;
+    out += "<b>" + p + "</b>: " + tgMoney_(o.val) + "  " + tgDot_(pl) + " " + tgPct_(y) + "\n";
+  });
+  out += "\nסה\"כ: " + tgMoney_(S.totVal) + "  " + tgDot_(S.netPL) + " " + tgPct_(S.ret);
+  return out;
+}
+
+function tgPlatform_(S, p) {
+  const o = S.byPlat[p], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0;
+  return "🏦 <b>" + p + "</b>\n" +
+    "הפקדה: " + tgMoney_(o.dep) + "\n" +
+    "עלות רכישות: " + tgMoney_(o.cost) + "\n" +
+    "שווי נוכחי: <b>" + tgMoney_(o.val) + "</b>\n" +
+    tgDot_(pl) + " רווח/הפסד: " + tgMoney_(pl) + " (" + tgPct_(y) + ")";
+}
+
+function tgAllocation_(S) {
+  const c = S.totVal ? S.cryptoVal / S.totVal : 0;
+  return "🍩 <b>הקצאת נכסים</b>\n" +
+    "₿ קריפטו (כולל קרנות סל): <b>" + (c * 100).toFixed(1) + "%</b>  (" + tgMoney_(S.cryptoVal) + ")\n" +
+    "📈 מניות / ETF רחב: <b>" + ((1 - c) * 100).toFixed(1) + "%</b>  (" + tgMoney_(S.equityVal) + ")\n" +
+    "⚖️ ריכוז 3 הגדולות: " + (S.conc * 100).toFixed(1) + "%";
+}
+
+function tgMovers_(S, winners) {
+  const list = winners ? S.ranked.slice(0, 3) : S.ranked.slice(-3).reverse();
+  let out = winners ? "🥇 <b>המנצחים</b>\n" : "🔻 <b>המפסידים</b>\n";
+  list.forEach(function (r) { out += (winners ? "🟢 " : "🔴 ") + "<b>" + r.t + "</b>  " + tgPct_(r.y) + "  (" + tgMoney_(r.pl) + ")\n"; });
+  return out;
+}
+
+function tgDeposits_(S) {
+  let out = "💰 <b>הפקדות בפועל</b>: " + tgMoney_(S.deposits) + "\n\n";
+  Object.keys(S.byPlat).forEach(function (p) { if (S.byPlat[p].dep) out += p + ": " + tgMoney_(S.byPlat[p].dep) + "\n"; });
+  return out;
+}
+
+function tgRealized_(S) {
+  const keys = Object.keys(S.closedAgg);
+  if (!keys.length) return "אין עדיין פוזיציות סגורות.";
+  let out = "✅ <b>רווח ממומש (פוזיציות שנסגרו)</b>: " + tgMoney_(S.realized) + "\n\n";
+  keys.forEach(function (t) { const o = S.closedAgg[t], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0; out += "<b>" + t + "</b>: " + tgDot_(pl) + " " + tgMoney_(pl) + " (" + tgPct_(y) + ")\n"; });
+  return out;
+}
+
+// ---- value history + period returns ----
+function ensureValueLogSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let ws = ss.getSheetByName(VALUE_LOG_SHEET);
+  if (!ws) {
+    ws = ss.insertSheet(VALUE_LOG_SHEET);
+    ws.getRange(1, 1, 1, 6).setValues([["תאריך", "שווי אחזקות (₪)", "עלות (₪)", "מזומן (₪)", "שווי כולל (₪)", "תשואה"]])
+      .setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
+    ws.setFrozenRows(1);
+    ws.setColumnWidth(1, 110);
+  }
+  return ws;
+}
+
+function logPortfolioValue_() {
+  const ws = ensureValueLogSheet_();
+  const S = computePortfolioStats_();
+  const tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  const today = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+  const row = [today, Math.round(S.totVal), Math.round(S.totCost), Math.round(S.cash), Math.round(S.totalAccount), S.ret];
+  const last = ws.getLastRow();
+  let target = last + 1;
+  if (last >= 2 && String(ws.getRange(last, 1).getDisplayValue()).indexOf(today) >= 0) target = last; // overwrite today
+  ws.getRange(target, 1, 1, 6).setValues([row]);
+  ws.getRange(target, 2, 1, 4).setNumberFormat("#,##0");
+  ws.getRange(target, 6).setNumberFormat("0.00%");
+}
+
+// Daily trigger target (non-underscore so it can be selected/run from the editor).
+function logPortfolioValueDaily() { logPortfolioValue_(); }
+
+function tgPeriod_(S, days, label) {
+  const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(VALUE_LOG_SHEET);
+  if (!ws || ws.getLastRow() < 2) {
+    try { logPortfolioValue_(); } catch (e) {}
+    return "📈 <b>תשואה " + label + "</b>\nהתחלתי לתעד את שווי התיק רק עכשיו, אז אין עדיין היסטוריה להשוואה. המדד יתמלא בימים הקרובים.\n\nבינתיים — תשואה מתחילת ההשקעה (" + S.days + " ימים): " + tgDot_(S.ret) + " <b>" + tgPct_(S.ret) + "</b>";
+  }
+  const rows = ws.getRange(2, 1, ws.getLastRow() - 1, 6).getValues();
+  const nowMs = new Date().getTime(), targetMs = nowMs - days * 86400000;
+  let pick = null, earliest = null;
+  rows.forEach(function (r) {
+    const ds = String(r[0]); const dms = new Date(ds.length <= 10 ? ds + "T00:00:00" : ds).getTime();
+    if (isNaN(dms)) return;
+    if (!earliest || dms < earliest.ms) earliest = { ms: dms, acc: parseNum(r[4]), ret: parseNum(r[5]) };
+    if (dms <= targetMs && (!pick || dms > pick.ms)) pick = { ms: dms, acc: parseNum(r[4]), ret: parseNum(r[5]) };
+  });
+  const base = pick || earliest;
+  const back = Math.round((nowMs - base.ms) / 86400000);
+  if (back < 1) return "📈 <b>תשואה " + label + "</b>\nעדיין אין מספיק היסטוריה (תיעוד התחיל היום). נסה שוב בעוד יום-יומיים.\nתשואה מתחילת ההשקעה: " + tgDot_(S.ret) + " " + tgPct_(S.ret);
+  const nowAcc = S.totalAccount, thenAcc = base.acc;
+  const chg = thenAcc ? (nowAcc - thenAcc) / thenAcc : 0;
+  const note = pick ? "" : "\n<i>(אין נתון מלפני " + days + " ימים — מציג מאז תחילת התיעוד, לפני " + back + " ימים)</i>";
+  return "📈 <b>תשואה " + label + "</b> (" + back + " ימים)\n" +
+    "שווי חשבון: " + tgMoney_(thenAcc) + " → " + tgMoney_(nowAcc) + "\n" +
+    tgDot_(chg) + " שינוי: <b>" + tgPct_(chg) + "</b>" + note;
+}
+
+function tgSinceStart_(S) {
+  return "📈 <b>תשואה מתחילת ההשקעה</b> (" + S.days + " ימים)\n" +
+    tgDot_(S.ret) + " <b>" + tgPct_(S.ret) + "</b>\n" +
+    "רווח/הפסד: " + tgMoney_(S.netPL) + " (לא ממומש) + " + tgMoney_(S.realized) + " (ממומש)";
+}
+
+// One-time setup — RUN THIS ONCE FROM THE APPS SCRIPT EDITOR to authorize the
+// bot (UrlFetchApp for Telegram + a daily value-logging trigger). Safe to re-run.
+function authorizeBot() {
+  // 1) daily trigger to log portfolio value (for weekly/monthly returns)
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === "logPortfolioValueDaily") ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger("logPortfolioValueDaily").timeBased().everyDays(1).atHour(22).create();
+  logPortfolioValue_();
+  // 2) point Telegram at this web app (idempotent)
+  const url = ScriptApp.getService().getUrl();
+  const wh = tgApi_("setWebhook", { url: url, allowed_updates: ["message", "edited_message"], drop_pending_updates: true });
+  // 3) confirm to the owner
+  const chat = PropertiesService.getScriptProperties().getProperty("TELEGRAM_CHAT_ID");
+  if (chat) tgSend_(chat, "✅ הבוט מחובר ופעיל 24/7 (גם כשהמחשב כבוי). שלח 'סיכום' כדי לנסות.");
+  return { webhookUrl: url, setWebhook: wh };
 }
 
 function buildDashboard() {
