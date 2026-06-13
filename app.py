@@ -9063,7 +9063,7 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
         return he if language == LANG_HE else en
 
     # ── 1. Smart Insights ────────────────────────────────────────────────
-    with st.expander("💡 " + _t("Smart Insights", "תובנות חכמות"), expanded=True):
+    with st.expander("💡 " + _t("Smart Insights", "תובנות חכמות"), expanded=False):
         try:
             df = open_trades.copy()
             for c in ("Current_Value_ILS", "Cost_ILS"):
@@ -9725,8 +9725,12 @@ def main() -> None:
             nav_icon_color = "#93c5fd" if is_dark else "#2563eb"
             nav_text_color = "#e2e8f0" if is_dark else "#0f172a"
             nav_hover_color = "#334155" if is_dark else "#e5e7eb"
-            nav_selected_bg = "#374151" if is_dark else "#e2e8f0"
-            nav_selected_text = "#ffffff" if is_dark else "#0f172a"
+            # Selected item = solid accent-blue pill with white text, in BOTH themes.
+            # (Previously a theme-conditional light/grey bg could end up light-on-light
+            # — e.g. under "system" theme or a theme-detection mismatch — making the
+            # clicked page's label nearly invisible. A saturated pill is always legible.)
+            nav_selected_bg = "#4f46e5"
+            nav_selected_text = "#ffffff"
             with st.sidebar:
                 # NOTE: streamlit-option-menu requires a stable `key` so the
                 # component's selected state persists across reruns. Without a
