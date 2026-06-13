@@ -8155,16 +8155,60 @@ def _sim_default(key: str) -> object:
     return defaults.get(key, 0.0)
 
 
-def load_sim_prefs() -> Dict[str, object]:
-    """Load previously saved simulator inputs from disk (per-user persistence).
-    The on-disk JSON mirrors session_state keys 1:1 (already namespaced)."""
-    if not SIM_PREFS_FILE.exists():
+def _sim_remote_cfg() -> Tuple[str, str]:
+    try:
+        s = load_local_settings()
+        return _clean(s.get("web_app_url", "")), _clean(s.get("api_token", ""))
+    except Exception:
+        return "", ""
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _remote_sim_prefs_read_cached(url: str, token: str) -> Dict[str, object]:
+    if not url:
         return {}
     try:
-        raw = json.loads(SIM_PREFS_FILE.read_text(encoding="utf-8"))
-        return raw if isinstance(raw, dict) else {}
+        r = call_apps_script_(url, {"token": token, "action": "read_sim_prefs"})
+        p = r.get("prefs", {}) if isinstance(r, dict) else {}
+        return p if isinstance(p, dict) else {}
     except Exception:
         return {}
+
+
+def _remote_sim_prefs_read() -> Dict[str, object]:
+    url, token = _sim_remote_cfg()
+    return _remote_sim_prefs_read_cached(url, token)
+
+
+def _remote_sim_prefs_save(values: Mapping[str, object]) -> None:
+    url, token = _sim_remote_cfg()
+    if not url:
+        return
+    try:
+        payload = {k: v for k, v in dict(values).items() if v is not None}
+        call_apps_script_(url, {"token": token, "action": "save_sim_prefs", "prefs": payload})
+        try:
+            _remote_sim_prefs_read_cached.clear()  # bust cache so the next read reflects this save
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def load_sim_prefs() -> Dict[str, object]:
+    """Load simulator inputs. Merges the LOCAL on-disk cache with the SHARED
+    remote store (Apps Script), so a change on one device shows on all others
+    (desktop, phone, Next.js). Remote is the cross-device source of truth."""
+    local: Dict[str, object] = {}
+    if SIM_PREFS_FILE.exists():
+        try:
+            raw = json.loads(SIM_PREFS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                local = raw
+        except Exception:
+            local = {}
+    remote = _remote_sim_prefs_read()
+    return {**local, **remote}
 
 
 def save_sim_prefs(values: Mapping[str, object]) -> bool:
@@ -8200,6 +8244,8 @@ def save_sim_prefs(values: Mapping[str, object]) -> bool:
             json.dumps(merged, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        # Push to the shared store so other devices (phone, Next.js) pick it up.
+        _remote_sim_prefs_save(merged)
         return True
     except Exception:
         return False

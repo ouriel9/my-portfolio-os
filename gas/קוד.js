@@ -957,6 +957,21 @@ function doPost(e) {
       return jsonResponse_({ ok: true, processed: n });
     }
 
+    // ---- Shared simulator preferences (synced across desktop / phone / Next.js) ----
+    if (action === "read_sim_prefs") {
+      const raw = PropertiesService.getScriptProperties().getProperty("SIM_PREFS") || "{}";
+      let prefs = {}; try { prefs = JSON.parse(raw); } catch (e) { prefs = {}; }
+      return jsonResponse_({ ok: true, prefs: prefs });
+    }
+    if (action === "save_sim_prefs") {
+      const props = PropertiesService.getScriptProperties();
+      let cur = {}; try { cur = JSON.parse(props.getProperty("SIM_PREFS") || "{}"); } catch (e) { cur = {}; }
+      const incoming = payload.prefs || {};
+      Object.keys(incoming).forEach(function (k) { if (incoming[k] !== null && incoming[k] !== undefined) cur[k] = incoming[k]; });
+      props.setProperty("SIM_PREFS", JSON.stringify(cur));
+      return jsonResponse_({ ok: true, prefs: cur });
+    }
+
     if (readAliases[action]) {
       const data = readSnapshotRows_();
       return jsonResponse_({ ok: true, data: data });
