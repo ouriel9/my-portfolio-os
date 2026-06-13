@@ -10695,19 +10695,42 @@ def main() -> None:
                 if exposure_view.empty:
                     st.info(tr("No open positions to show in Exposure Table.", "אין פוזיציות פתוחות להצגה בטבלת החשיפה."))
                 else:
-                    exposure_styled = exposure_view.style.format(
-                        {
-                            current_price_col: "{:,.4f}",
-                            localize_column_name("Open_Qty", language): "{:.8f}",
-                            localize_column_name("Cost_ILS", language): "{:,.0f}",
-                            localize_column_name("Value_ILS", language): "{:,.0f}",
-                            pnl_col: "{:,.0f}",
-                            yield_origin_col: "{:.2%}",
-                            yield_ils_col: "{:.2%}",
-                        },
-                        na_rep="",
-                    )
-                    exposure_styled = _apply_signed_color(exposure_styled, [pnl_col, yield_origin_col, yield_ils_col])
+                    def _fmt_qty(v):
+                        # Sensible quantity precision: whole share counts show no
+                        # decimals; fractional (crypto) shows up to 6 decimals with
+                        # trailing zeros trimmed — instead of always 8 decimals
+                        # (which padded "23.00000000" and bloated the column width).
+                        try:
+                            f = float(v)
+                        except Exception:
+                            return ""
+                        if f == 0:
+                            return "0"
+                        if f == int(f) or abs(f) >= 100:
+                            return f"{f:,.0f}"
+                        return f"{f:,.6f}".rstrip("0").rstrip(".")
+                    # On mobile the full 8-column table overflows the viewport and the
+                    # last column ("שווי כולל") gets silently clipped. Show only the
+                    # essential columns there so everything fits and nothing is cut.
+                    if is_mobile:
+                        _keep = [localize_column_name(x, language)
+                                 for x in ["Ticker", "Open_Qty", "Value_ILS", "Net_PnL_ILS", "Yield_ILS"]]
+                        _keep = [c for c in _keep if c in exposure_view.columns]
+                        if _keep:
+                            exposure_view = exposure_view[_keep]
+                    _fmt_map = {
+                        current_price_col: "{:,.4f}",
+                        localize_column_name("Open_Qty", language): _fmt_qty,
+                        localize_column_name("Cost_ILS", language): "{:,.0f}",
+                        localize_column_name("Value_ILS", language): "{:,.0f}",
+                        pnl_col: "{:,.0f}",
+                        yield_origin_col: "{:.2%}",
+                        yield_ils_col: "{:.2%}",
+                    }
+                    _fmt_map = {k: v for k, v in _fmt_map.items() if k in exposure_view.columns}
+                    exposure_styled = exposure_view.style.format(_fmt_map, na_rep="")
+                    _color_cols = [c for c in [pnl_col, yield_origin_col, yield_ils_col] if c in exposure_view.columns]
+                    exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
                     # Mobile browsers sometimes drop Styler colors in virtualized grid;
                     # st.table preserves static styled colors/percent formatting reliably.
                     if is_mobile:
