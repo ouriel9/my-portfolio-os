@@ -102,3 +102,7 @@ build_clean/
 gas/.clasp.json
 gas/*.backup
 .clasprc.json
+
+# Mobile APK build (Capacitor) — node_modules + generated android project
+apk_streamlit/node_modules/
+apk_streamlit/android/

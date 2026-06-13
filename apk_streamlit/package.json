@@ -1,0 +1,13 @@
+{
+  "name": "portfolio-os-streamlit-apk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thin Capacitor shell that loads the hosted Streamlit app full-screen",
+  "devDependencies": {
+    "@capacitor/cli": "^8.3.1"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/core": "^8.3.1"
+  }
+}

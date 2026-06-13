@@ -1,0 +1,9 @@
+{
+  "appId": "com.ouriel.portfolio_streamlit",
+  "appName": "Portfolio OS (Streamlit)",
+  "webDir": "www",
+  "server": {
+    "url": "https://djt7ecnaumycu5zame4xnc.streamlit.app",
+    "cleartext": false
+  }
+}
