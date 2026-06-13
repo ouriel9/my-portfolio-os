@@ -426,6 +426,7 @@ function getColumnMap_(sheet) {
   ix.currency = findAny_(["מטבע", "Origin_Currency"]);
   ix.fee = findAny_(["עמלה", "Commission"]);
   ix.status = findAny_(["סטטוס", "Status"]);
+  ix.sellPrice = findAny_(["שער מכירה", "Sell_Price_Origin"]);
   ix.sellDate = findAny_(["תאריך מכירה", "Sell_Date"]);
   ix.tradeId = findAny_(["Trade_ID", "Trade ID", "מזהה עסקה", "trade_id"]);
 
@@ -673,6 +674,28 @@ function correctionRules_() {
       feeTo: 0.37280056,
       locationTo: "Bit2C (זירת מסחר)",
       note: "Raw Bit2C export precision correction"
+    },
+    {
+      platform: "אקסלנס",
+      ticker: "SCHD",
+      date: "2025-05-01",
+      qtyFrom: 216,
+      qtyTo: 216,
+      costTo: 5454,
+      feeTo: 2,
+      sellPriceTo: 26.47,
+      note: "SCHD real sale price (formula previously showed live market price)"
+    },
+    {
+      platform: "אקסלנס",
+      ticker: "VT",
+      date: "2025-05-01",
+      qtyFrom: 43,
+      qtyTo: 43,
+      costTo: 4945,
+      feeTo: 2,
+      sellPriceTo: 132.83,
+      note: "VT real sale price (formula previously showed live market price)"
     }
   ];
 }
@@ -720,6 +743,7 @@ function applyCrossCheckPatches_(rows, ix) {
       r[ix.quantity] = rule.qtyTo;
       r[ix.cost] = rule.costTo;
       r[ix.fee] = rule.feeTo;
+      if (rule.sellPriceTo !== undefined && ix.sellPrice >= 0) r[ix.sellPrice] = rule.sellPriceTo;
       if (ix.location >= 0 && rule.locationTo) r[ix.location] = rule.locationTo;
       r[ix.tradeId] = tradeIdFromRow_(r, ix);
       updates++;
@@ -921,16 +945,18 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
   const map = buildSnapshotHeaderIndexMap_(headers);
   const r = rowNum;
   const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
+  const sRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "-1), 2, 2), $AA$1)), $AA$1)";
   const formulas = {
     spotUsd: '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0)))',
     costUsd: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) / IF($I' + r + '="USD", 1, ' + hRate + '))',
     costIls: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * IF($I' + r + '="ILS", 1, ' + hRate + '))',
-    valueUsd: '=IF(F' + r + '="", 0, F' + r + '*M' + r + ')',
-    valueIls: '=IF(P' + r + '="","", P' + r + ' * $AA$1)',
+    valueUsd: '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
+    valueIls: '=IF(P' + r + '="","", P' + r + ' * IF(K' + r + '="סגור", ' + sRate + ', $AA$1))',
     buyUsd: '=IF(G' + r + '="","", IF($I' + r + '="USD", $G' + r + ', $G' + r + ' / ' + hRate + '))',
     buyIls: '=IF(G' + r + '="","", IF($I' + r + '="ILS", $G' + r + ', $G' + r + ' * ' + hRate + '))',
     spotIls: '=IF(M' + r + '="","", M' + r + ' * $AA$1)',
-    sellPrice: '=IF(K' + r + '<>"סגור", "", IF(F' + r + '="", "", IF($I' + r + '="USD", P' + r + '/F' + r + ', Q' + r + '/F' + r + ')))',
+    // שער מכירה (U) is a STORED value (the real sale price) for closed positions,
+    // entered at sell time — NOT auto-computed from the live market price.
     yieldAtSale: '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
     yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
     yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
@@ -1344,7 +1370,7 @@ function InstallSystem() {
   }
   // Keep Sell_Date values in V intact; only clear formula regions around it.
   mainSheet.getRange("L1").setValue("סטטוס מכירה");
-  mainSheet.getRange("M:U").clear();
+  mainSheet.getRange("M:T").clear();  // preserve U (שער מכירה) — it's stored sale-price data now
   mainSheet.getRange("W:AE").clear();
   const metricHeaders = [["שער נוכחי USD", "עלות USD", "עלות ILS", "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי ILS", "שער מכירה"]];
   mainSheet.getRange("M1:U1").setValues(metricHeaders).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
@@ -1360,16 +1386,16 @@ function InstallSystem() {
   for (let i = 0; i < numRows; i++) {
     const r = i + 2;
     const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
+    const sRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "-1), 2, 2), $AA$1)), $AA$1)";
     pricingFormulas.push([
       '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0)))',
       '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) / IF($I' + r + '="USD", 1, ' + hRate + '))',
       '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * IF($I' + r + '="ILS", 1, ' + hRate + '))',
-      '=IF(F' + r + '="", 0, F' + r + '*M' + r + ')',
-      '=IF(P' + r + '="","", P' + r + ' * $AA$1)',
+      '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
+      '=IF(P' + r + '="","", P' + r + ' * IF(K' + r + '="סגור", ' + sRate + ', $AA$1))',
       '=IF(G' + r + '="","", IF($I' + r + '="USD", $G' + r + ', $G' + r + ' / ' + hRate + '))',
       '=IF(G' + r + '="","", IF($I' + r + '="ILS", $G' + r + ', $G' + r + ' * ' + hRate + '))',
-      '=IF(M' + r + '="","", M' + r + ' * $AA$1)',
-      '=IF(K' + r + '<>"סגור", "", IF(F' + r + '="", "", IF($I' + r + '="USD", P' + r + '/F' + r + ', Q' + r + '/F' + r + ')))'
+      '=IF(M' + r + '="","", M' + r + ' * $AA$1)'
     ]);
     yieldFormulas.push([
       '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
@@ -1378,7 +1404,7 @@ function InstallSystem() {
     ]);
   }
   if (numRows > 0) {
-    mainSheet.getRange(2, 13, numRows, 9).setFormulas(pricingFormulas); // M:U
+    mainSheet.getRange(2, 13, numRows, 8).setFormulas(pricingFormulas); // M:T (U=שער מכירה is stored data)
     mainSheet.getRange(2, 23, numRows, 3).setFormulas(yieldFormulas);   // W:Y
   }
 

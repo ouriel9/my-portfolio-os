@@ -97,3 +97,8 @@ _refs/
 # Parallel/clean PyInstaller build dirs
 dist_clean/
 build_clean/
+
+# clasp working dir + OAuth creds (never commit)
+gas/.clasp.json
+gas/*.backup
+.clasprc.json
