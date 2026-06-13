@@ -8163,6 +8163,17 @@ def _sim_default(key: str) -> object:
     return defaults.get(key, 0.0)
 
 
+def _sim_allowed_keys() -> set:
+    """The ONLY session_state keys that may be restored from saved prefs /
+    localStorage. Excludes widget keys like the reset button (`sim_reset_prefs_*`)
+    — pre-setting a button's session_state value raises a Streamlit error."""
+    s = set(_SIM_GLOBAL_KEYS)
+    for _m in ("mine", "clean"):
+        for _k in _SIM_MODE_KEYS:
+            s.add(_sim_key(_m, _k))
+    return s
+
+
 def _sim_remote_cfg() -> Tuple[str, str]:
     try:
         s = load_local_settings()
@@ -8588,8 +8599,9 @@ def render_simulator_page(
             _ls_dict = json.loads(_ls_raw) if isinstance(_ls_raw, str) else _ls_raw
             if not isinstance(_ls_dict, dict):
                 return
+            _allow = _sim_allowed_keys()
             for _k, _v in _ls_dict.items():
-                if _k not in st.session_state and _v is not None:
+                if _k in _allow and _k not in st.session_state and _v is not None:
                     st.session_state[_k] = _v
         except Exception:
             pass
@@ -8601,8 +8613,9 @@ def render_simulator_page(
     if not st.session_state.get("_sim_prefs_hydrated", False):
         try:
             _prefs = load_sim_prefs()
+            _allow = _sim_allowed_keys()
             for _k, _v in _prefs.items():
-                if _k not in st.session_state and _v is not None:
+                if _k in _allow and _k not in st.session_state and _v is not None:
                     st.session_state[_k] = _v
         except Exception:
             pass
@@ -8639,8 +8652,9 @@ def render_simulator_page(
     if _mode_keys_missing:
         try:
             _disk_prefs = load_sim_prefs()
+            _allow = _sim_allowed_keys()
             for _k, _v in _disk_prefs.items():
-                if _k not in st.session_state:
+                if _k in _allow and _k not in st.session_state and _v is not None:
                     st.session_state[_k] = _v
         except Exception:
             pass
@@ -8896,7 +8910,7 @@ def render_simulator_page(
     try:
         _sim_prefs_snapshot = {
             k: v for k, v in
-            {k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")}.items()
+            {k: st.session_state.get(k) for k in list(st.session_state.keys()) if k in _sim_allowed_keys()}.items()
             if v is not None
         }
         save_sim_prefs(_sim_prefs_snapshot)
@@ -9148,7 +9162,7 @@ def render_simulator_page(
                 st.session_state.pop(_sim_key(mode_id, _k), None)
             try:
                 # Persist immediately so on-disk reflects the deletion
-                save_sim_prefs({k: st.session_state.get(k) for k in list(st.session_state.keys()) if k.startswith("sim_")})
+                save_sim_prefs({k: st.session_state.get(k) for k in list(st.session_state.keys()) if k in _sim_allowed_keys()})
             except Exception:
                 pass
             st.rerun()
