@@ -1580,131 +1580,228 @@ function buildDashboardV2() {
   sh.clear();
   try { sh.getCharts().forEach(function (c) { sh.removeChart(c); }); } catch (e) {}
   try { sh.getBandings().forEach(function (b) { b.remove(); }); } catch (e) {}
+  try { sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart(); } catch (e) {}
   sh.setRightToLeft(true);
   try { sh.setHiddenGridlines(true); } catch (e) {}
 
-  // ---------- gather data ----------
+  // ===================== gather data =====================
   const data = main.getDataRange().getValues();
   const map = buildSnapshotHeaderIndexMap_(data[0] || []);
-  const open = data.slice(1).filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) !== "" && cleanText(rowVal_(r, map, "status")) !== "סגור"; });
-  let totCost = 0, totVal = 0;
+  const all = data.slice(1).filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) !== ""; });
+  let rate = 0; try { rate = parseNum(main.getRange("AA1").getValue()); } catch (e) {}
+  if (!rate) rate = 1;
+  const isClosed = function (r) { return cleanText(rowVal_(r, map, "status")) === "סגור"; };
+  const open = all.filter(function (r) { return !isClosed(r); });
+  const closed = all.filter(isClosed);
+
+  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1, "MSTR": 1 };
+  let totCost = 0, totVal = 0, totFeeIls = 0, usdVal = 0, firstDate = null;
   const byTicker = {}, byPlat = {};
   open.forEach(function (r) {
     const t = cleanText(rowVal_(r, map, "ticker")), p = cleanText(rowVal_(r, map, "platform"));
-    const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls")), tp = cleanText(rowVal_(r, map, "type"));
+    const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
+    const tp = cleanText(rowVal_(r, map, "type")), cur = cleanText(rowVal_(r, map, "currency"));
+    const qty = parseNum(rowVal_(r, map, "quantity")), fee = parseNum(rowVal_(r, map, "fee"));
     totCost += ci; totVal += vi;
-    if (!byTicker[t]) byTicker[t] = { qty: 0, cost: 0, val: 0, type: tp };
-    byTicker[t].qty += parseNum(rowVal_(r, map, "quantity")); byTicker[t].cost += ci; byTicker[t].val += vi;
-    if (!byPlat[p]) byPlat[p] = { cost: 0, val: 0 };
+    totFeeIls += (cur === "USD" ? fee * rate : fee);
+    if (cur === "USD") usdVal += vi;
+    if (!byTicker[t]) byTicker[t] = { qty: 0, cost: 0, val: 0, type: tp, cur: cur };
+    byTicker[t].qty += qty; byTicker[t].cost += ci; byTicker[t].val += vi;
+    if (!byPlat[p]) byPlat[p] = { cost: 0, val: 0, dep: 0 };
     byPlat[p].cost += ci; byPlat[p].val += vi;
+    const d = normalizeDateOnly_(rowVal_(r, map, "purchaseDate"));
+    if (d && (!firstDate || d < firstDate)) firstDate = d;
   });
-  let deposits = 0;
-  try { (readManualDeposits_("live").rows || []).forEach(function (d) { deposits += parseNum(d.Manual_Deposit_ILS); }); } catch (e) {}
+  // realized P&L from closed positions
+  let realized = 0;
+  const closedAgg = {};
+  closed.forEach(function (r) {
+    const t = cleanText(rowVal_(r, map, "ticker"));
+    const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
+    const cur = cleanText(rowVal_(r, map, "currency")), fee = parseNum(rowVal_(r, map, "fee"));
+    realized += (vi - ci);
+    totFeeIls += (cur === "USD" ? fee * rate : fee);
+    if (!closedAgg[t]) closedAgg[t] = { cost: 0, val: 0 };
+    closedAgg[t].cost += ci; closedAgg[t].val += vi;
+  });
+  // deposits (total + per platform)
+  let deposits = 0; const depByPlat = {};
+  try { (readManualDeposits_("live").rows || []).forEach(function (d) { deposits += parseNum(d.Manual_Deposit_ILS); depByPlat[cleanText(d.Platform)] = parseNum(d.Manual_Deposit_ILS); }); } catch (e) {}
+  Object.keys(depByPlat).forEach(function (p) { if (byPlat[p]) byPlat[p].dep = depByPlat[p]; });
+
   const cash = deposits - totCost, totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
-  let rate = 0; try { rate = parseNum(main.getRange("AA1").getValue()); } catch (e) {}
-  const money = function (v) { return "₪" + Math.round(v).toLocaleString("en-US"); };
-  // crypto-exposure classification (direct crypto + crypto ETFs count as crypto)
-  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1, "MSTR": 1 };
   let cryptoVal = 0, equityVal = 0;
-  Object.keys(byTicker).forEach(function (t) {
-    if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val;
-  });
+  Object.keys(byTicker).forEach(function (t) { if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
+  const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
+  let top3 = 0; tks.slice(0, 3).forEach(function (t) { top3 += byTicker[t].val; });
+  const conc = totVal ? top3 / totVal : 0;
+  let days = 0; if (firstDate) { try { days = Math.round((new Date() - new Date(firstDate + "T00:00:00")) / 86400000); } catch (e) {} }
+  // ranked returns for winners/losers
+  const ranked = tks.filter(function (t) { return byTicker[t].cost > 0; })
+    .map(function (t) { return { t: t, y: (byTicker[t].val - byTicker[t].cost) / byTicker[t].cost }; })
+    .sort(function (a, b) { return b.y - a.y; });
 
-  // ---------- layout ----------
-  for (let c = 1; c <= 13; c++) sh.setColumnWidth(c, c === 1 ? 22 : 110);
-
-  sh.getRange("B2:M2").merge().setValue("📊 דשבורד — תיק ההשקעות של אוריאל")
-    .setFontSize(22).setFontWeight("bold").setFontColor("white").setBackground("#0F2A4A").setHorizontalAlignment("center").setVerticalAlignment("middle");
-  sh.setRowHeight(2, 48);
-  sh.getRange("B3:M3").merge().setValue("עודכן " + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm") + "   •   שער דולר/שקל: " + rate.toFixed(3) + "   •   " + Object.keys(byTicker).length + " אחזקות, " + Object.keys(byPlat).length + " פלטפורמות")
-    .setFontSize(10).setFontColor("#718096").setHorizontalAlignment("center");
-
-  // KPI cards (rows 5-6)
-  const cards = [
-    { i: "💰", l: "הפקדות בפועל", v: money(deposits), bg: "#EBF4FF", fc: "#1A365D" },
-    { i: "📊", l: "שווי תיק", v: money(totVal), bg: "#EBF4FF", fc: "#1A365D" },
-    { i: "💵", l: "מזומן פנוי", v: money(cash), bg: "#EBF4FF", fc: "#1A365D" },
-    { i: "🏦", l: "שווי חשבון כולל", v: money(totalAccount), bg: "#E6FFFA", fc: "#234E52" },
-    { i: "📈", l: "רווח/הפסד", v: money(netPL), bg: netPL >= 0 ? "#F0FFF4" : "#FFF5F5", fc: netPL >= 0 ? "#1E7E34" : "#C53030" },
-    { i: "🎯", l: "תשואה", v: (ret * 100).toFixed(2) + "%", bg: ret >= 0 ? "#F0FFF4" : "#FFF5F5", fc: ret >= 0 ? "#1E7E34" : "#C53030" }
-  ];
-  cards.forEach(function (c, i) {
-    const col = 2 + i * 2;
-    sh.getRange(5, col, 1, 2).merge().setValue(c.i + " " + c.l).setBackground("#2B6CB0").setFontColor("white").setFontWeight("bold").setFontSize(10).setHorizontalAlignment("center").setVerticalAlignment("middle");
-    sh.getRange(6, col, 1, 2).merge().setValue(c.v).setBackground(c.bg).setFontColor(c.fc).setFontWeight("bold").setFontSize(16).setHorizontalAlignment("center").setVerticalAlignment("middle");
-    sh.getRange(5, col, 2, 2).setBorder(true, true, true, true, false, false, "#2B6CB0", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
-  });
-  sh.setRowHeight(5, 24); sh.setRowHeight(6, 42);
-
-  // section header helper
-  const sec = function (row, col, span, title) {
-    sh.getRange(row, col, 1, span).merge().setValue(title).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setFontSize(12).setHorizontalAlignment("center").setVerticalAlignment("middle");
-  };
+  const money = function (v) { return "₪" + Math.round(v).toLocaleString("en-US"); };
+  const pct = function (v) { return (v * 100).toFixed(2) + "%"; };
+  const plBg = function (v) { return v >= 0 ? "#F0FFF4" : "#FFF5F5"; };
+  const plFc = function (v) { return v >= 0 ? "#1E7E34" : "#C53030"; };
   const colorPL = function (rng, v) { rng.setFontColor(v >= 0 ? "#1E7E34" : "#C53030").setFontWeight("bold"); };
 
-  // LEFT: per-platform (B..F), starts row 8
-  let r = 8;
-  sec(r, 2, 5, "🏦 פילוח לפי פלטפורמה"); r++;
-  sh.getRange(r, 2, 1, 5).setValues([["פלטפורמה", "עלות (₪)", "שווי (₪)", "רווח/הפסד", "תשואה"]]).setBackground("#BEE3F8").setFontWeight("bold").setHorizontalAlignment("center"); r++;
-  Object.keys(byPlat).sort().forEach(function (p, i) {
-    const o = byPlat[p], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0;
-    sh.getRange(r, 2, 1, 5).setValues([[p, Math.round(o.cost), Math.round(o.val), Math.round(pl), y]]).setHorizontalAlignment("center");
-    sh.getRange(r, 3, 1, 3).setNumberFormat("#,##0"); sh.getRange(r, 6).setNumberFormat("0.00%");
-    colorPL(sh.getRange(r, 5), pl); colorPL(sh.getRange(r, 6), y);
-    if (i % 2 === 1) sh.getRange(r, 2, 1, 5).setBackground("#F7FAFC");
+  // ===================== layout =====================
+  for (let c = 1; c <= 14; c++) sh.setColumnWidth(c, c === 1 ? 24 : 112);
+
+  // ---- hero ----
+  sh.getRange("B2:M2").merge().setValue("📊  דשבורד — תיק ההשקעות של אוריאל")
+    .setFontSize(24).setFontWeight("bold").setFontColor("white").setBackground("#0F2A4A").setHorizontalAlignment("center").setVerticalAlignment("middle");
+  sh.setRowHeight(2, 54);
+  sh.getRange("B3:M3").merge().setValue("עודכן " + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm") + "    •    שער דולר/שקל " + rate.toFixed(3) + "    •    " + tks.length + " אחזקות פתוחות · " + Object.keys(byPlat).length + " פלטפורמות · " + days + " ימי השקעה")
+    .setFontSize(10).setFontColor("#A0AEC0").setBackground("#0F2A4A").setHorizontalAlignment("center").setVerticalAlignment("middle");
+  sh.setRowHeight(3, 22);
+
+  // ---- KPI cards (two rows of 6) ----
+  const kpi = function (row, col, icon, label, value, bg, fc) {
+    sh.getRange(row, col, 1, 2).merge().setValue(icon + "  " + label).setBackground("#2B6CB0").setFontColor("white").setFontWeight("bold").setFontSize(9).setHorizontalAlignment("center").setVerticalAlignment("middle");
+    sh.getRange(row + 1, col, 1, 2).merge().setValue(value).setBackground(bg).setFontColor(fc).setFontWeight("bold").setFontSize(15).setHorizontalAlignment("center").setVerticalAlignment("middle");
+    sh.getRange(row, col, 2, 2).setBorder(true, true, true, true, false, false, "#2B6CB0", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  };
+  const blue = "#EBF4FF", bf = "#1A365D", teal = "#E6FFFA", tf = "#234E52", amber = "#FFFAF0", af = "#9C4221", purp = "#FAF5FF", pf = "#553C9A";
+  kpi(5, 2, "💰", "הפקדות בפועל", money(deposits), blue, bf);
+  kpi(5, 4, "📊", "שווי תיק", money(totVal), blue, bf);
+  kpi(5, 6, "💵", "מזומן פנוי", money(cash), blue, bf);
+  kpi(5, 8, "🏦", "שווי חשבון כולל", money(totalAccount), teal, tf);
+  kpi(5, 10, "📈", "רווח/הפסד לא ממומש", money(netPL), plBg(netPL), plFc(netPL));
+  kpi(5, 12, "🎯", "תשואה כוללת", pct(ret), plBg(ret), plFc(ret));
+  sh.setRowHeight(5, 22); sh.setRowHeight(6, 40);
+  kpi(8, 2, "✅", "רווח/הפסד ממומש", money(realized), plBg(realized), plFc(realized));
+  kpi(8, 4, "💸", "עמלות ששולמו", money(totFeeIls), amber, af);
+  kpi(8, 6, "🔢", "עסקאות פתוחות", String(open.length), blue, bf);
+  kpi(8, 8, "📅", "ימי השקעה", String(days), blue, bf);
+  kpi(8, 10, "⚖️", "ריכוז 3 הגדולות", pct(conc), purp, pf);
+  kpi(8, 12, "🌎", "חשיפת מט\"ח (USD)", pct(totVal ? usdVal / totVal : 0), amber, af);
+  sh.setRowHeight(8, 22); sh.setRowHeight(9, 40);
+
+  const sec = function (row, col, span, title) {
+    sh.getRange(row, col, 1, span).merge().setValue(title).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setFontSize(12).setHorizontalAlignment("center").setVerticalAlignment("middle");
+    sh.setRowHeight(row, 26);
+  };
+
+  // ---- per-platform table (B..H = 7 cols) ----
+  let r = 11;
+  sec(r, 2, 7, "🏦 פילוח לפי פלטפורמה"); r++;
+  sh.getRange(r, 2, 1, 7).setValues([["פלטפורמה", "הפקדה (₪)", "עלות (₪)", "שווי (₪)", "רווח/הפסד", "תשואה", "משקל"]]).setBackground("#BEE3F8").setFontWeight("bold").setHorizontalAlignment("center"); r++;
+  const platTop = r - 1;
+  Object.keys(byPlat).sort(function (a, b) { return byPlat[b].val - byPlat[a].val; }).forEach(function (p, i) {
+    const o = byPlat[p], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0, w = totVal ? o.val / totVal : 0;
+    sh.getRange(r, 2, 1, 7).setValues([[p, Math.round(o.dep), Math.round(o.cost), Math.round(o.val), Math.round(pl), y, w]]).setHorizontalAlignment("center");
+    sh.getRange(r, 3, 1, 4).setNumberFormat("#,##0"); sh.getRange(r, 7).setNumberFormat("0.00%"); sh.getRange(r, 8).setNumberFormat("0.0%");
+    colorPL(sh.getRange(r, 6), pl); colorPL(sh.getRange(r, 7), y);
+    if (i % 2 === 1) sh.getRange(r, 2, 1, 7).setBackground("#F7FAFC");
     r++;
   });
-  sh.getRange(8, 2, r - 8, 5).setBorder(true, true, true, true, true, true, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
-  const platBottom = r;
+  sh.getRange(r, 2, 1, 7).setValues([["סה\"כ", Math.round(deposits), Math.round(totCost), Math.round(totVal), Math.round(netPL), ret, 1]]).setFontWeight("bold").setBackground("#2C5282").setFontColor("white").setHorizontalAlignment("center");
+  sh.getRange(r, 3, 1, 4).setNumberFormat("#,##0"); sh.getRange(r, 7).setNumberFormat("0.00%"); sh.getRange(r, 8).setNumberFormat("0.0%");
+  r++;
+  sh.getRange(platTop, 2, r - platTop, 7).setBorder(true, true, true, true, true, true, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
 
-  // LEFT: top holdings (sorted by value)
+  // ---- full holdings table (B..K = 10 cols, with weight bar) ----
   r += 1;
-  sec(r, 2, 5, "🏆 אחזקות מובילות"); r++;
-  sh.getRange(r, 2, 1, 5).setValues([["נכס", "כמות", "שווי (₪)", "רווח/הפסד", "תשואה"]]).setBackground("#BEE3F8").setFontWeight("bold").setHorizontalAlignment("center"); r++;
-  const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
+  sec(r, 2, 10, "🏆 כל האחזקות הפתוחות"); r++;
+  sh.getRange(r, 2, 1, 10).setValues([["נכס", "כמות", "עלות ₪/יח'", "מחיר ₪/יח'", "עלות (₪)", "שווי (₪)", "רווח/הפסד", "תשואה", "משקל", "פילוח"]]).setBackground("#BEE3F8").setFontWeight("bold").setHorizontalAlignment("center"); r++;
+  const holdTop = r - 1;
   tks.forEach(function (t, i) {
-    const o = byTicker[t], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0;
-    sh.getRange(r, 2, 1, 5).setValues([[t, o.qty, Math.round(o.val), Math.round(pl), y]]).setHorizontalAlignment("center");
-    sh.getRange(r, 3).setNumberFormat("#,##0.####"); sh.getRange(r, 4).setNumberFormat("#,##0"); sh.getRange(r, 5).setNumberFormat("#,##0"); sh.getRange(r, 6).setNumberFormat("0.00%");
-    colorPL(sh.getRange(r, 5), pl); colorPL(sh.getRange(r, 6), y);
+    const o = byTicker[t], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0, w = totVal ? o.val / totVal : 0;
+    const avg = o.qty ? o.cost / o.qty : 0, cur = o.qty ? o.val / o.qty : 0;
+    const bar = "█".repeat(Math.max(0, Math.min(22, Math.round(w * 70))));
+    sh.getRange(r, 2, 1, 10).setValues([[t, o.qty, Math.round(avg), Math.round(cur), Math.round(o.cost), Math.round(o.val), Math.round(pl), y, w, bar]]).setHorizontalAlignment("center");
+    sh.getRange(r, 3).setNumberFormat("#,##0.####"); sh.getRange(r, 4, 1, 5).setNumberFormat("#,##0"); sh.getRange(r, 9).setNumberFormat("0.00%"); sh.getRange(r, 10).setNumberFormat("0.0%");
+    sh.getRange(r, 11).setHorizontalAlignment("right").setFontColor("#2B6CB0").setFontFamily("Consolas");
+    colorPL(sh.getRange(r, 8), pl); colorPL(sh.getRange(r, 9), y);
     sh.getRange(r, 2).setFontWeight("bold");
-    if (i % 2 === 1) sh.getRange(r, 2, 1, 5).setBackground("#F7FAFC");
+    if (i % 2 === 1) sh.getRange(r, 2, 1, 10).setBackground("#F7FAFC");
     r++;
   });
-  sh.getRange(platBottom + 1, 2, r - (platBottom + 1), 5).setBorder(true, true, true, true, true, true, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
+  sh.getRange(holdTop, 2, r - holdTop, 10).setBorder(true, true, true, true, true, true, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
 
-  // RIGHT column (H..M) — allocation + winner/loser + crypto exposure
-  let rr = 8;
-  sec(rr, 8, 6, "🍩 הקצאת נכסים"); rr++;
-  const allocPct = totVal ? (cryptoVal / totVal) : 0;
-  sh.getRange(rr, 8, 1, 6).merge().setValue("קריפטו (כולל קרנות סל): " + (allocPct * 100).toFixed(1) + "%   |   מניות/ETF רחב: " + ((1 - allocPct) * 100).toFixed(1) + "%").setHorizontalAlignment("center").setBackground("#F7FAFC"); rr++;
-  // winner / loser
-  let win = null, los = null;
-  Object.keys(byTicker).forEach(function (t) {
-    const o = byTicker[t]; if (o.cost <= 0) return; const y = (o.val - o.cost) / o.cost;
-    if (!win || y > win.y) win = { t: t, y: y };
-    if (!los || y < los.y) los = { t: t, y: y };
+  // ---- two side-by-side panels: realized (B..F) + allocation/movers (H..M) ----
+  const panelTop = r + 1;
+  // LEFT: closed / realized positions
+  let lr = panelTop;
+  sec(lr, 2, 5, "✅ פוזיציות שנסגרו (רווח ממומש)"); lr++;
+  sh.getRange(lr, 2, 1, 5).setValues([["נכס", "עלות (₪)", "תמורה (₪)", "רווח/הפסד", "תשואה"]]).setBackground("#C6F6D5").setFontWeight("bold").setHorizontalAlignment("center"); lr++;
+  const closedKeys = Object.keys(closedAgg);
+  if (closedKeys.length === 0) {
+    sh.getRange(lr, 2, 1, 5).merge().setValue("אין פוזיציות סגורות").setHorizontalAlignment("center").setFontColor("#718096"); lr++;
+  } else {
+    closedKeys.sort(function (a, b) { return (closedAgg[b].val - closedAgg[b].cost) - (closedAgg[a].val - closedAgg[a].cost); }).forEach(function (t, i) {
+      const o = closedAgg[t], pl = o.val - o.cost, y = o.cost ? pl / o.cost : 0;
+      sh.getRange(lr, 2, 1, 5).setValues([[t, Math.round(o.cost), Math.round(o.val), Math.round(pl), y]]).setHorizontalAlignment("center");
+      sh.getRange(lr, 3, 1, 2).setNumberFormat("#,##0"); sh.getRange(lr, 5).setNumberFormat("#,##0"); sh.getRange(lr, 6).setNumberFormat("0.00%");
+      colorPL(sh.getRange(lr, 5), pl); colorPL(sh.getRange(lr, 6), y);
+      sh.getRange(lr, 2).setFontWeight("bold");
+      if (i % 2 === 1) sh.getRange(lr, 2, 1, 5).setBackground("#F7FAFC");
+      lr++;
+    });
+  }
+  sh.getRange(panelTop, 2, lr - panelTop, 5).setBorder(true, true, true, true, true, true, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
+
+  // RIGHT: allocation + top movers
+  let pr = panelTop;
+  sec(pr, 8, 6, "🍩 הקצאת נכסים"); pr++;
+  sh.getRange(pr, 8, 1, 6).setValues([["קטגוריה", "", "שווי (₪)", "", "אחוז", ""]]); // spacer headers
+  sh.getRange(pr, 8, 1, 2).merge().setValue("קטגוריה"); sh.getRange(pr, 10, 1, 2).merge().setValue("שווי (₪)"); sh.getRange(pr, 12, 1, 2).merge().setValue("אחוז");
+  sh.getRange(pr, 8, 1, 6).setBackground("#BEE3F8").setFontWeight("bold").setHorizontalAlignment("center"); pr++;
+  const allocRows = [["₿ קריפטו (כולל קרנות סל)", cryptoVal], ["📈 מניות / ETF רחב", equityVal]];
+  allocRows.forEach(function (a) {
+    sh.getRange(pr, 8, 1, 2).merge().setValue(a[0]).setHorizontalAlignment("center");
+    sh.getRange(pr, 10, 1, 2).merge().setValue(Math.round(a[1])).setNumberFormat("#,##0").setHorizontalAlignment("center");
+    sh.getRange(pr, 12, 1, 2).merge().setValue(totVal ? a[1] / totVal : 0).setNumberFormat("0.0%").setHorizontalAlignment("center");
+    pr++;
   });
-  rr++;
-  sec(rr, 8, 6, "🥇 מנצח / מפסיד"); rr++;
-  if (win) { sh.getRange(rr, 8, 1, 6).merge().setValue("🟢 מנצח: " + win.t + "  (" + (win.y * 100).toFixed(2) + "%)").setFontColor("#1E7E34").setFontWeight("bold").setHorizontalAlignment("center"); rr++; }
-  if (los) { sh.getRange(rr, 8, 1, 6).merge().setValue("🔴 מפסיד: " + los.t + "  (" + (los.y * 100).toFixed(2) + "%)").setFontColor("#C53030").setFontWeight("bold").setHorizontalAlignment("center"); rr++; }
-  rr++;
-  sec(rr, 8, 6, "💱 שער מטבע"); rr++;
-  sh.getRange(rr, 8, 1, 6).merge().setValue("דולר / שקל (USD/ILS): " + rate.toFixed(4)).setHorizontalAlignment("center").setBackground("#FFF9DB").setFontWeight("bold"); rr++;
+  pr++;
+  sec(pr, 8, 6, "🥇 מנצחים / 🔻 מפסידים"); pr++;
+  const topN = ranked.slice(0, 3), botN = ranked.slice(-3).reverse();
+  for (let i = 0; i < 3; i++) {
+    const wn = topN[i], ls = botN[i];
+    sh.getRange(pr, 8, 1, 3).merge().setValue(wn ? "🟢 " + wn.t + "   " + pct(wn.y) : "").setFontColor("#1E7E34").setFontWeight("bold").setHorizontalAlignment("center");
+    sh.getRange(pr, 11, 1, 3).merge().setValue(ls ? "🔴 " + ls.t + "   " + pct(ls.y) : "").setFontColor("#C53030").setFontWeight("bold").setHorizontalAlignment("center");
+    pr++;
+  }
+  sh.getRange(panelTop, 8, pr - panelTop, 6).setBorder(true, true, true, true, false, false, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
 
-  // Donut chart of holdings by value (data in a hidden far-right helper block)
+  // ===================== charts (2x2 grid) =====================
+  const chartTop = Math.max(lr, pr) + 2;
   try {
-    const dr = 2, dc = 16;
-    sh.getRange(dr, dc, 1, 2).setValues([["נכס", "שווי"]]);
-    tks.forEach(function (t, i) { sh.getRange(dr + 1 + i, dc, 1, 2).setValues([[t, Math.round(byTicker[t].val)]]); });
-    const chartData = sh.getRange(dr, dc, tks.length + 1, 2);
-    const chartAnchorRow = Math.max(r, rr) + 2;
-    const chart = sh.newChart().asPieChart().addRange(chartData).setPosition(chartAnchorRow, 2, 5, 0)
-      .setOption("title", "פילוח התיק לפי שווי (₪)").setOption("pieHole", 0.45)
-      .setOption("width", 780).setOption("height", 340).setOption("legend", { position: "right" }).build();
-    sh.insertChart(chart);
-    sh.hideColumns(16, 2);
+    // helper data blocks in hidden far-right columns (P=16 onward)
+    sh.getRange(2, 16, 1, 2).setValues([["נכס", "שווי"]]);
+    tks.forEach(function (t, i) { sh.getRange(3 + i, 16, 1, 2).setValues([[t, Math.round(byTicker[t].val)]]); });
+    const dataHold = sh.getRange(2, 16, tks.length + 1, 2);
+
+    sh.getRange(2, 19, 1, 2).setValues([["קטגוריה", "שווי"]]);
+    sh.getRange(3, 19, 1, 2).setValues([["קריפטו", Math.round(cryptoVal)]]);
+    sh.getRange(4, 19, 1, 2).setValues([["מניות/ETF", Math.round(equityVal)]]);
+    const dataAlloc = sh.getRange(2, 19, 3, 2);
+
+    sh.getRange(2, 22, 1, 2).setValues([["נכס", "רווח/הפסד (₪)"]]);
+    tks.forEach(function (t, i) { sh.getRange(3 + i, 22, 1, 2).setValues([[t, Math.round(byTicker[t].val - byTicker[t].cost)]]); });
+    const dataPL = sh.getRange(2, 22, tks.length + 1, 2);
+
+    const platKeys = Object.keys(byPlat);
+    sh.getRange(2, 25, 1, 3).setValues([["פלטפורמה", "עלות", "שווי"]]);
+    platKeys.forEach(function (p, i) { sh.getRange(3 + i, 25, 1, 3).setValues([[p, Math.round(byPlat[p].cost), Math.round(byPlat[p].val)]]); });
+    const dataPlat = sh.getRange(2, 25, platKeys.length + 1, 3);
+
+    const W = 470, H = 300;
+    sh.insertChart(sh.newChart().asPieChart().addRange(dataHold).setPosition(chartTop, 2, 5, 0)
+      .setOption("title", "פילוח התיק לפי אחזקה (₪)").setOption("pieHole", 0.45).setOption("width", W).setOption("height", H).setOption("legend", { position: "right" }).build());
+    sh.insertChart(sh.newChart().asPieChart().addRange(dataAlloc).setPosition(chartTop, 8, 5, 0)
+      .setOption("title", "קריפטו מול מניות").setOption("pieHole", 0.5).setOption("width", W).setOption("height", H)
+      .setOption("colors", ["#DD6B20", "#3182CE"]).setOption("legend", { position: "right" }).build());
+    sh.insertChart(sh.newChart().asColumnChart().addRange(dataPL).setPosition(chartTop + 16, 2, 5, 0)
+      .setOption("title", "רווח/הפסד לפי אחזקה (₪)").setOption("width", W).setOption("height", H).setOption("legend", { position: "none" }).build());
+    sh.insertChart(sh.newChart().asColumnChart().addRange(dataPlat).setPosition(chartTop + 16, 8, 5, 0)
+      .setOption("title", "עלות מול שווי לפי פלטפורמה (₪)").setOption("width", W).setOption("height", H)
+      .setOption("colors", ["#A0AEC0", "#2B6CB0"]).setOption("legend", { position: "top" }).build());
+    sh.hideColumns(16, 12);
   } catch (e) {}
 
   sh.setFrozenRows(3);
