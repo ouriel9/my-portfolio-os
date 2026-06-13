@@ -9211,17 +9211,39 @@ def render_simulator_page(
 GEMINI_CHAT_MODEL = "gemini-flash-latest"
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_gemini_key_remote(url: str, token: str) -> str:
+    """Fetch the Gemini key from the Apps Script backend (so cloud-hosted apps /
+    the phone get it automatically, without pasting it into each platform)."""
+    try:
+        r = call_apps_script_(url, {"token": token, "action": "get_gemini_key"})
+        return _clean(r.get("key", "")) if isinstance(r, dict) else ""
+    except Exception:
+        return ""
+
+
 def _gemini_api_key() -> str:
-    """Gemini key from Streamlit Cloud secrets (phone) or local config (desktop)."""
+    """Gemini key — Streamlit Cloud secrets → local config → Apps Script backend."""
     try:
         if "gemini_api_key" in st.secrets:
-            return _clean(st.secrets.get("gemini_api_key", ""))
+            k = _clean(st.secrets.get("gemini_api_key", ""))
+            if k:
+                return k
     except Exception:
         pass
     try:
         if LOCAL_SETTINGS_FILE.exists():
             raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
-            return _clean(raw.get("gemini_api_key", ""))
+            k = _clean(raw.get("gemini_api_key", ""))
+            if k:
+                return k
+    except Exception:
+        pass
+    try:
+        s = load_local_settings()
+        url = _clean(s.get("web_app_url", "")); tok = _clean(s.get("api_token", ""))
+        if url and tok:
+            return _fetch_gemini_key_remote(url, tok)
     except Exception:
         pass
     return ""
@@ -9364,7 +9386,32 @@ def _claude_chat(user_text: str, history: List[Dict[str, str]], data_context: st
 
 
 def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile) -> None:
-    st.markdown("### 🤖 " + tr("AI Chat — your portfolio agent", "צ'אט AI — סוכן התיק שלך"))
+    # ── Professional, Gemini-like chat styling (theme-aware, app accent) ──
+    _abg = "#1f2937" if is_dark else "#ffffff"
+    _abd = "rgba(255,255,255,0.08)" if is_dark else "#e6e9f0"
+    _atx = "#e5e7eb" if is_dark else "#1f2937"
+    _chip_bg = "rgba(255,255,255,0.05)" if is_dark else "#f4f6fb"
+    st.markdown(
+        "<style>"
+        "[data-testid='stChatMessage']{background:transparent!important;border:none!important;padding:3px 0!important;}"
+        "[data-testid='stChatMessage'] [data-testid='stChatMessageContent']{border-radius:16px!important;"
+        "padding:11px 15px!important;line-height:1.6!important;box-shadow:0 1px 3px rgba(15,23,42,0.10)!important;max-width:90%!important;}"
+        "[data-testid='stChatMessage']:has([data-testid='stChatMessageAvatarAssistant']) [data-testid='stChatMessageContent']{"
+        f"background:{_abg}!important;border:1px solid {_abd}!important;color:{_atx}!important;}}"
+        "[data-testid='stChatMessage']:has([data-testid='stChatMessageAvatarUser']){flex-direction:row-reverse!important;}"
+        "[data-testid='stChatMessage']:has([data-testid='stChatMessageAvatarUser']) [data-testid='stChatMessageContent']{"
+        "background:linear-gradient(135deg,#6366f1,#4f46e5)!important;color:#fff!important;border:none!important;}"
+        "[data-testid='stChatMessageAvatarUser'],[data-testid='stChatMessageAvatarAssistant']{box-shadow:0 2px 6px rgba(79,70,229,.25)!important;}"
+        "[data-testid='stChatInput']{border-radius:18px!important;}[data-testid='stChatInput'] textarea{font-size:15px!important;}"
+        ".agent-hero{background:linear-gradient(120deg,#4f46e5,#6366f1 55%,#38bdf8);border-radius:16px;padding:14px 18px;"
+        "color:#fff;margin-bottom:10px;box-shadow:0 10px 28px -12px rgba(79,70,229,.6);}"
+        ".agent-hero h3{margin:0;color:#fff;font-size:1.18rem;font-weight:700;}"
+        ".agent-hero p{margin:3px 0 0;opacity:.92;font-size:.85rem;}"
+        f".agent-chip{{display:inline-block;padding:8px 13px;margin:4px 6px 4px 0;border-radius:13px;"
+        f"background:{_chip_bg};border:1px solid {_abd};color:{_atx};font-size:.85rem;}}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
 
     has_gemini = bool(_gemini_api_key())
     claude_ok = (not getattr(sys, "frozen", False)) and (_claude_cli_path() is not None)
@@ -9373,22 +9420,42 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         providers.append("Gemini ☁️"); pmap["Gemini ☁️"] = "gemini"
     if claude_ok:
         providers.append("Claude 🧠"); pmap["Claude 🧠"] = "claude"
+
+    _eng = " · ".join(providers) if providers else tr("no engine", "אין מנוע")
+    st.markdown(
+        f"<div class='agent-hero'><h3>🤖 {tr('AGENT AI', 'AI סוכן')}</h3>"
+        f"<p>{tr('Your portfolio agent — full data access, image understanding, analysis & advice', 'סוכן התיק שלך — גישה לכל הנתונים, הבנת תמונות, ניתוח וייעוץ')}"
+        f" · {_eng}</p></div>",
+        unsafe_allow_html=True,
+    )
+
     if not providers:
         st.warning(tr("No AI engine configured. Add a free Gemini API key (gemini_api_key) in settings/secrets.",
                       "לא הוגדר מנוע AI. הוסף מפתח Gemini חינמי (gemini_api_key) בהגדרות/secrets."))
         return
 
-    c1, c2 = st.columns([3, 1])
-    with c2:
-        prov_label = st.radio(tr("Engine", "מנוע"), providers, horizontal=False, key="ai_chat_provider")
-        if st.button(tr("🗑 Clear chat", "🗑 נקה שיחה"), use_container_width=True):
+    cc1, cc2 = st.columns([3, 1])
+    with cc1:
+        prov_label = st.radio(tr("Engine", "מנוע"), providers, horizontal=True,
+                              key="ai_chat_provider", label_visibility="collapsed")
+    with cc2:
+        if st.button(tr("🗑 Clear", "🗑 נקה"), use_container_width=True):
             st.session_state["ai_chat_history"] = []
             st.rerun()
     provider = pmap.get(prov_label, "gemini")
 
     hist = st.session_state.setdefault("ai_chat_history", [])
+    if not hist:
+        st.markdown("<div style='margin:8px 0 2px;opacity:.75'>" + tr("Try asking:", "נסה לשאול:") + "</div>",
+                    unsafe_allow_html=True)
+        _chips = [tr("Analyze my risk", "נתח לי את הסיכון"),
+                  tr("How am I doing this month?", "איך אני מתקדם החודש?"),
+                  tr("Crypto vs stocks", "קריפטו מול מניות"),
+                  tr("Worst holding & why?", "האחזקה הכי גרועה ולמה?")]
+        st.markdown("".join("<span class='agent-chip'>" + c + "</span>" for c in _chips), unsafe_allow_html=True)
     for m in hist:
-        with st.chat_message("user" if m["role"] == "user" else "assistant"):
+        _role = "user" if m["role"] == "user" else "assistant"
+        with st.chat_message(_role, avatar=("🧑" if _role == "user" else "🤖")):
             st.markdown(m["text"])
 
     placeholder = tr("Ask anything, edit trades, or attach a buy/sell screenshot…",
@@ -9415,7 +9482,7 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         except Exception:
             pass
 
-    with st.chat_message("user"):
+    with st.chat_message("user", avatar="🧑"):
         st.markdown(user_text or "📎 " + tr("(image)", "(תמונה)"))
         for (mime, data) in images:
             st.image(data, width=220)
@@ -9429,7 +9496,7 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         "If asked to add/edit/delete a trade, extract the fields and present them clearly for confirmation "
         "(full trade write-back is being wired in).\n\n" + ctx)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="🤖"):
         with st.spinner(tr("Thinking…", "חושב…")):
             if provider == "claude":
                 answer = _claude_chat(user_text, hist, ctx, img_paths)
@@ -10115,7 +10182,7 @@ def main() -> None:
     page_risk = tr("Risk & FIFO", "סיכונים ופיפו") if not _is_mobile_client() else tr("Risk", "סיכון")
     page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
-    page_chat = tr("AI Chat", "צ'אט AI")
+    page_chat = tr("AGENT AI", "AI סוכן")
     page_id_to_label = {
         "dashboard": page_dashboard,
         "manage": page_manage,
@@ -10142,14 +10209,15 @@ def main() -> None:
             tr("💼 Trades", "💼 עסקאות"): "manage",
             tr("🛡 Risk", "🛡 סיכון"): "risk",
             tr("🧮 Sim", "🧮 סימולטור"): "simulator",
-            tr("🤖 Chat", "🤖 צ'אט"): "chat",
         }
         mobile_options = list(mobile_label_to_id.keys())
 
         # If we're on the "Data" page (entered via the sidebar button), show
         # a compact breadcrumb + back button rather than the 4-pill radio so
         # the page switcher doesn't force-override the selection.
-        if active_page_id == "quality":
+        if active_page_id in ("quality", "chat"):
+            _bc_icon, _bc_label = (("📋", tr("Data", "נתונים")) if active_page_id == "quality"
+                                   else ("🤖", tr("AGENT AI", "AI סוכן")))
             brc1, brc2 = st.columns([4, 1])
             with brc1:
                 st.markdown(
@@ -10157,15 +10225,15 @@ def main() -> None:
                     f"padding:8px 12px;border-radius:10px;"
                     f"background:rgba(99,102,241,0.08);"
                     f"border:1px solid rgba(99,102,241,0.25);"
-                    f"font-weight:600;unicode-bidi:plaintext'>📋 "
-                    f"{tr('Data', 'נתונים')}</div>",
+                    f"font-weight:600;unicode-bidi:plaintext'>{_bc_icon} "
+                    f"{_bc_label}</div>",
                     unsafe_allow_html=True,
                 )
             with brc2:
                 if st.button(
                     tr("⬅ Back", "⬅ חזור"),
                     use_container_width=True,
-                    key="mobile_data_back",
+                    key="mobile_page_back",
                 ):
                     st.session_state["active_page_id"] = "dashboard"
                     st.rerun()
@@ -10629,6 +10697,20 @@ def main() -> None:
             st.rerun()
 
         connection_state_box = st.empty()
+
+    # ── Mobile-only: AI Agent button at the BOTTOM of the sidebar ──
+    # (Desktop keeps it in the option_menu nav.) The top nav pills stay 4-wide.
+    if is_mobile:
+        _chat_active = (active_page_id == "chat")
+        if st.sidebar.button(
+            ("🤖 " + tr("AGENT AI", "AI סוכן")) + ("  ✓" if _chat_active else ""),
+            use_container_width=True,
+            type=("primary" if _chat_active else "secondary"),
+            help=tr("Chat with your AI portfolio agent.", "שיחה עם סוכן ה-AI של התיק."),
+            key="sidebar_chat_nav_btn",
+        ):
+            st.session_state["active_page_id"] = "chat"
+            st.rerun()
 
     if _looks_like_private_key_blob(api_token):
         st.error(tr("API Token appears invalid (looks like a private key). Paste your Apps Script API token instead.", "נראה שבשדה API Token הודבק מפתח פרטי. יש להדביק את ה-API Token של Apps Script."))

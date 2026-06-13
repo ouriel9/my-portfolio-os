@@ -962,6 +962,11 @@ function doPost(e) {
     }
 
     // ---- Shared simulator preferences (synced across desktop / phone / Next.js) ----
+    if (action === "get_gemini_key") {
+      // Lets the cloud-hosted apps (phone) fetch the Gemini key without the user
+      // pasting it into each platform's secrets. Token-guarded (same trust as data).
+      return jsonResponse_({ ok: true, key: cleanText(PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY") || ""), model: cleanText(PropertiesService.getScriptProperties().getProperty("GEMINI_MODEL") || "") || "gemini-flash-latest" });
+    }
     if (action === "read_sim_prefs") {
       const raw = PropertiesService.getScriptProperties().getProperty("SIM_PREFS") || "{}";
       let prefs = {}; try { prefs = JSON.parse(raw); } catch (e) { prefs = {}; }
