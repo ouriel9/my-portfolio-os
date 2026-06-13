@@ -9309,12 +9309,17 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                     cur_v = float(cur[c])
                     tgt_v = total_val * targets[c] / 100.0
                     delta = tgt_v - cur_v
+                    # Wrap each ₪ amount in an LTR isolate (U+2066…U+2069) so the
+                    # shekel sign + digits render as one left-to-right unit and do
+                    # NOT get reordered (e.g. "109,440₪") inside the RTL table.
+                    _iso = lambda s: "⁦" + s + "⁩"
                     rows.append({
                         _t("Class", "סוג"): c,
-                        _t("Current", "נוכחי"): f"₪{cur_v:,.0f} ({cur_v/total_val:.0%})",
-                        _t("Target", "יעד"): f"₪{tgt_v:,.0f} ({targets[c]:.0f}%)",
-                        _t("Action", "פעולה"): (_t("Buy", "קנה") if delta > 0 else _t("Sell", "מכור")) + f" ₪{abs(delta):,.0f}"
-                        if abs(delta) > total_val * 0.005 else _t("On target", "מאוזן"),
+                        _t("Current", "נוכחי"): _iso(f"₪{cur_v:,.0f} ({cur_v/total_val:.0%})"),
+                        _t("Target", "יעד"): _iso(f"₪{tgt_v:,.0f} ({targets[c]:.0f}%)"),
+                        _t("Action", "פעולה"): (
+                            (_t("Buy", "קנה") if delta > 0 else _t("Sell", "מכור")) + " " + _iso(f"₪{abs(delta):,.0f}")
+                        ) if abs(delta) > total_val * 0.005 else _t("On target", "מאוזן"),
                     })
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         except Exception as exc:
