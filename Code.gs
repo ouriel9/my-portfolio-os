@@ -782,21 +782,63 @@ function fixSnapshotSheet_() {
     }
   }
 
+  // Remove rows flagged for deletion (canceled / never-executed orders).
+  let removed = 0;
+  const removals = removalRules_();
+  rows = rows.filter(function (r) {
+    for (let j = 0; j < removals.length; j++) {
+      const rule = removals[j];
+      if (cleanText(r[ix.platform]) === cleanText(rule.platform) &&
+          cleanText(r[ix.ticker]).toUpperCase() === cleanText(rule.ticker).toUpperCase() &&
+          normalizeDateOnly_(r[ix.purchaseDate]) === normalizeDateOnly_(rule.date) &&
+          almostEqual_(r[ix.quantity], rule.qty, 1e-8)) {
+        removed++;
+        return false;
+      }
+    }
+    return true;
+  });
+
   const dedup = dedupeRows_(rows, ix);
   const patched = applyCrossCheckPatches_(rows, ix);
 
-  // Preserve every trade row. We only normalize / patch values in-place.
-  ws.getRange(2, 1, Math.max(lastRow - 1, 1), width).setValues(patched.rows);
+  // Write the (possibly fewer) normalized rows; delete any orphaned trailing rows.
+  const outRows = patched.rows;
+  if (outRows.length > 0) {
+    ws.getRange(2, 1, outRows.length, width).setValues(outRows);
+  }
+  const orphanCount = (lastRow - 1) - outRows.length;
+  if (orphanCount > 0) {
+    ws.deleteRows(2 + outRows.length, orphanCount);
+  }
 
-  // Restore formulas/formatting expected by your original dashboard logic.
+  // Restore formulas/formatting, then rebuild the per-platform sheets AND the
+  // home dashboard so EVERYTHING (snapshot, אקסלנס/Bit2C/הורייזון, דף הבית)
+  // stays in sync with the corrected data.
   InstallSystem();
+  SpreadsheetApp.flush();
+  try { RefreshAllData(); } catch (e) {}
 
   return {
     rows: patched.rows.length,
     removedDuplicates: dedup.duplicates,
+    removed: removed,
     updated: patched.updates,
     added: patched.adds
   };
+}
+
+function removalRules_() {
+  // Rows to DELETE entirely — orders that never actually executed.
+  return [
+    {
+      platform: "הורייזון",
+      ticker: "BTC",
+      date: "2025-09-07",
+      qty: 0.01777571,
+      note: "Canceled limit order @ $110,500 (never filled) — confirmed Canceled on Horizon trade dashboard"
+    }
+  ];
 }
 
 
@@ -846,6 +888,19 @@ function doPost(e) {
       const stats = fixSnapshotSheet_();
       appendAudit_("fix", "SYSTEM", "OK", JSON.stringify(stats));
       return jsonResponse_({ ok: true, stats: stats });
+    }
+
+    if (action === "dump_all") {
+      const ssd = SpreadsheetApp.getActiveSpreadsheet();
+      const out = {};
+      ssd.getSheets().forEach(function (sh) {
+        const lr = sh.getLastRow(), lc = sh.getLastColumn();
+        out[sh.getName()] = {
+          rows: lr, cols: lc,
+          data: (lr > 0 && lc > 0) ? sh.getRange(1, 1, Math.min(lr, 80), Math.min(lc, 32)).getDisplayValues() : []
+        };
+      });
+      return jsonResponse_({ ok: true, sheets: out });
     }
 
     if (action === "dedupe_snapshot_schema") {
@@ -1699,9 +1754,27 @@ function renderReport(reportName, homeSheet) {
       paintReportTable_(homeSheet, reportRow - 1, 11, 3, 3);
       reportRow += 4;
     } else if (rep === "סך השקעה נטו (הפקדות)") {
+      // Uses REAL deposits (money transferred in) from the manual-deposits sheet —
+      // NOT invested cost. Shows deposits, invested cost, est. cash, value, P/L.
       const tbl = [];
-      Object.keys(platformCosts).sort().forEach(function (p) { if (platformCosts[p] > 0) tbl.push(["הפקדות - " + p, platformCosts[p]]); });
-      tbl.push(["סה\"כ הפקדות בתיק (עלות בפועל)", totalCost], ["שווי התיק הנוכחי", totalVal], ["רווח / הפסד נטו (₪)", totalVal - totalCost]);
+      let totDep = 0;
+      try {
+        const deps = readManualDeposits_("live").rows || [];
+        deps.forEach(function (dRow) {
+          const amt = parseNum(dRow.Manual_Deposit_ILS);
+          if (amt > 0) { tbl.push(["הפקדה בפועל - " + cleanText(dRow.Platform), amt]); totDep += amt; }
+        });
+      } catch (e) {}
+      if (totDep <= 0) {
+        Object.keys(platformCosts).sort().forEach(function (p) { if (platformCosts[p] > 0) { tbl.push(["עלות - " + p, platformCosts[p]]); totDep += platformCosts[p]; } });
+      }
+      const cashEst = totDep - totalCost;
+      tbl.push(["סה\"כ הפקדות בפועל", totDep]);
+      tbl.push(["עלות מושקעת (כולל עמלות)", totalCost]);
+      tbl.push(["מזומן משוער (לא מושקע)", cashEst]);
+      tbl.push(["שווי תיק נוכחי", totalVal]);
+      tbl.push(["שווי חשבון כולל (תיק + מזומן)", totalVal + cashEst]);
+      tbl.push(["רווח/הפסד שוק (₪)", totalVal - totalCost]);
       homeSheet.getRange(reportRow, 11, tbl.length, 2).setValues(tbl).setBackground("#F7FAFC").setHorizontalAlignment("center");
       homeSheet.getRange(reportRow, 11, tbl.length, 1).setFontWeight("bold");
       homeSheet.getRange(reportRow, 12, tbl.length, 1).setNumberFormat("#,##0.00").setFontWeight("bold");
