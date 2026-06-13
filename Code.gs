@@ -692,10 +692,10 @@ function correctionRules_() {
       date: "2025-05-01",
       qtyFrom: 43,
       qtyTo: 43,
-      costTo: 4945,
-      feeTo: 2,
+      costTo: 4699.71,
+      feeTo: 12,
       sellPriceTo: 132.83,
-      note: "VT real sale price (formula previously showed live market price)"
+      note: "VT real cost (22@108.9 + 21@109.71) + $6×2 fee + real sale price $132.83"
     }
   ];
 }
@@ -1890,30 +1890,75 @@ function drawSingleAssetTable(ticker, allRows, homeSheet, startRow) {
 }
 
 function distributeToPlatformSheets() {
+  // Clean, read-only per-platform VIEW sheets. We copy computed VALUES (not the
+  // snapshot formulas, which referenced $AA$1 / per-row infra that doesn't exist
+  // here and broke to 0 / -100%). Curated columns + header + per-platform totals.
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const mainSheet = ss.getSheetByName("תמונת מצב");
   if (!mainSheet) return;
   const data = mainSheet.getDataRange().getValues();
   const map = buildSnapshotHeaderIndexMap_(data[0] || []);
-  const width = mainSheet.getLastColumn();
+  const cols = [
+    { k: "ticker", h: "טיקר", fmt: null },
+    { k: "type", h: "סוג נכס", fmt: null },
+    { k: "purchaseDate", h: "תאריך רכישה", fmt: null },
+    { k: "quantity", h: "כמות", fmt: "#,##0.00000000" },
+    { k: "buyPrice", h: "שער קנייה", fmt: "#,##0.00" },
+    { k: "currency", h: "מטבע", fmt: null },
+    { k: "costOrigin", h: "עלות (מקור)", fmt: "#,##0.00" },
+    { k: "fee", h: "עמלה", fmt: "#,##0.00" },
+    { k: "costIls", h: "עלות (₪)", fmt: "#,##0.00" },
+    { k: "valueIls", h: "שווי נוכחי (₪)", fmt: "#,##0.00" },
+    { k: "yieldOrigin", h: "תשואה (מקור)", fmt: "0.00%" },
+    { k: "yieldIls", h: "תשואה (₪)", fmt: "0.00%" },
+    { k: "sellPrice", h: "שער מכירה", fmt: "#,##0.00" },
+    { k: "status", h: "סטטוס", fmt: null }
+  ];
+  const nc = cols.length;
+  const idxOf = function (key) { for (let i = 0; i < cols.length; i++) if (cols[i].k === key) return i; return -1; };
   ["אקסלנס", "Bit2C", "הורייזון"].forEach(function (platform) {
-    const targetSheet = ss.getSheetByName(platform);
-    if (!targetSheet) return;
-    if (targetSheet.getLastRow() > 1) targetSheet.getRange(2, 1, targetSheet.getLastRow(), width).clearContent();
-    const filteredData = data.filter(function (row, idx) {
-      if (idx === 0) return false;
-      return cleanText(rowVal_(row, map, "platform")) === platform;
-    });
-    if (filteredData.length > 0) {
-      targetSheet.getRange(2, 1, filteredData.length, filteredData[0].length).setValues(filteredData);
-      const formulas = mainSheet.getRange(2, 1, 1, width).getFormulas()[0];
-      for (let col = 0; col < width; col++) {
-        if (formulas[col] !== "") {
-          mainSheet.getRange(2, col + 1).copyTo(targetSheet.getRange(2, col + 1, filteredData.length, 1), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
-        }
+    const ts = ss.getSheetByName(platform);
+    if (!ts) return;
+    ts.clear();
+    ts.getBandings().forEach(function (b) { b.remove(); });
+    ts.setRightToLeft(true);
+    ts.getRange(1, 1, 1, nc).merge().setValue("📂 " + platform + " — פירוט אחזקות").setFontSize(16).setFontWeight("bold").setBackground("#1A365D").setFontColor("white").setHorizontalAlignment("center").setVerticalAlignment("middle");
+    ts.getRange(2, 1).setValue("🏠 חזור לראשי").setFontColor("#2B6CB0").setFontWeight("bold");
+    ts.getRange(3, 1, 1, nc).setValues([cols.map(function (c) { return c.h; })]).setFontWeight("bold").setBackground("#2B6CB0").setFontColor("white").setHorizontalAlignment("center").setVerticalAlignment("middle");
+    const rows = data.filter(function (r, idx) { return idx > 0 && cleanText(rowVal_(r, map, "platform")) === platform && cleanText(rowVal_(r, map, "ticker")) !== ""; });
+    let totCostIls = 0, totValIls = 0;
+    const body = rows.map(function (r) {
+      if (cleanText(rowVal_(r, map, "status")) !== "סגור") {
+        totCostIls += parseNum(rowVal_(r, map, "costIls"));
+        totValIls += parseNum(rowVal_(r, map, "valueIls"));
       }
-      mainSheet.getRange(2, 1, 1, width).copyTo(targetSheet.getRange(2, 1, filteredData.length, width), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+      return cols.map(function (c) { const v = rowVal_(r, map, c.k); return (v === undefined || v === null) ? "" : v; });
+    });
+    if (body.length > 0) {
+      ts.getRange(4, 1, body.length, nc).setValues(body).setHorizontalAlignment("center").setVerticalAlignment("middle");
+      cols.forEach(function (c, ci) { if (c.fmt) ts.getRange(4, ci + 1, body.length, 1).setNumberFormat(c.fmt); });
+      const yo = idxOf("yieldOrigin"), yi = idxOf("yieldIls");
+      for (let i = 0; i < body.length; i++) {
+        const rr = 4 + i;
+        ts.getRange(rr, yo + 1).setFontColor(parseNum(body[i][yo]) >= 0 ? "#276749" : "#C53030").setFontWeight("bold");
+        ts.getRange(rr, yi + 1).setFontColor(parseNum(body[i][yi]) >= 0 ? "#276749" : "#C53030").setFontWeight("bold");
+        if (i % 2 === 1) ts.getRange(rr, 1, 1, nc).setBackground("#F7FAFC");
+        ts.getRange(rr, 1).setFontWeight("bold");
+      }
+      const totRow = 4 + body.length;
+      const ci = idxOf("costIls"), vi = idxOf("valueIls"), yit = idxOf("yieldIls");
+      const totLine = []; for (let q = 0; q < nc; q++) totLine.push("");
+      totLine[0] = "סה\"כ פעיל";
+      totLine[ci] = totCostIls; totLine[vi] = totValIls;
+      totLine[yit] = totCostIls ? (totValIls - totCostIls) / totCostIls : 0;
+      ts.getRange(totRow, 1, 1, nc).setValues([totLine]).setFontWeight("bold").setBackground("#EBF8FF");
+      ts.getRange(totRow, ci + 1, 1, 1).setNumberFormat("#,##0.00");
+      ts.getRange(totRow, vi + 1, 1, 1).setNumberFormat("#,##0.00");
+      ts.getRange(totRow, yit + 1, 1, 1).setNumberFormat("0.00%").setFontColor(totLine[yit] >= 0 ? "#276749" : "#C53030");
+      ts.getRange(3, 1, body.length + 2, nc).setBorder(true, true, true, true, true, true, "#CBD5E0", SpreadsheetApp.BorderStyle.SOLID);
     }
+    ts.setFrozenRows(3);
+    ts.autoResizeColumns(1, nc);
   });
 }
 
