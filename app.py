@@ -118,9 +118,14 @@ def _resolve_data_dir() -> Path:
         exe_dir = Path(sys.executable).resolve().parent
         if (exe_dir / "app_local_config.json").exists():
             return exe_dir
-        project_dir = Path(r"C:\Users\ourie\PycharmProjects\my-portfolio-os")
-        if (project_dir / "app_local_config.json").exists():
-            return project_dir
+        # Candidate source-tree locations (the project was consolidated onto the
+        # Desktop; the old PycharmProjects path is kept as a fallback).
+        for cand in (
+            Path(r"C:\Users\ourie\Desktop\Portfolio OS\my-portfolio-os"),
+            Path(r"C:\Users\ourie\PycharmProjects\my-portfolio-os"),
+        ):
+            if (cand / "app_local_config.json").exists():
+                return cand
         return exe_dir
     return Path(__file__).resolve().parent
 
