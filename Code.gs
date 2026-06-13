@@ -1514,12 +1514,40 @@ function formatMainSheet() {
   fullRange.setHorizontalAlignment("center").setVerticalAlignment("middle");
   sheet.getBandings().forEach(function (b) { b.remove(); });
   fullRange.applyRowBanding(SpreadsheetApp.BandingTheme.INDIGO, true, false);
-  sheet.autoResizeColumns(1, lastCol);
+  // Uniform header styling (aligns with the platform sheets' look)
+  sheet.getRange(1, 1, 1, Math.min(lastCol, 25)).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
+  sheet.setRowHeight(1, 40);
+  // Clean + hide the unused 'סטטוס מכירה' column (L/12): had leftover junk dates.
+  // (Physically deleting it would shift all metric columns and break the formulas.)
+  if (lastRow > 1) sheet.getRange(2, 12, lastRow - 1, 1).clearContent();
+  sheet.hideColumns(12);
+  sheet.autoResizeColumns(1, 11);
+}
+
+function styleDepositsSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ws = ss.getSheetByName("הפקדות ידניות");
+  if (!ws) return;
+  const lr = Math.max(ws.getLastRow(), 1);
+  ws.setRightToLeft(true);
+  ws.setFrozenRows(1);
+  // readManualDeposits_ reads by POSITION (r[1],r[2],r[3]) so Hebrew labels are safe.
+  ws.getRange(1, 1, 1, 4).setValues([["תאריך", "מצב", "פלטפורמה", "סכום הפקדה (₪)"]])
+    .setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center").setVerticalAlignment("middle");
+  ws.setRowHeight(1, 32);
+  if (lr > 1) {
+    ws.getRange(2, 4, lr - 1, 1).setNumberFormat("#,##0");
+    ws.getRange(1, 1, lr, 4).setHorizontalAlignment("center").setVerticalAlignment("middle");
+    ws.getBandings().forEach(function (b) { b.remove(); });
+    ws.getRange(1, 1, lr, 4).applyRowBanding(SpreadsheetApp.BandingTheme.BLUE, true, false);
+  }
+  ws.autoResizeColumns(1, 4);
 }
 
 function RefreshAllData() {
   distributeToPlatformSheets();
   buildDashboard();
+  try { styleDepositsSheet_(); } catch (e) {}
 }
 
 function buildDashboard() {
