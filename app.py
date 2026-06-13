@@ -9761,6 +9761,43 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
             st.caption(_t("Dividend tracker unavailable.", "מעקב דיבידנדים לא זמין.") + f" ({str(exc)[:60]})")
 
 
+@st.cache_resource(show_spinner=False)
+def _snapshot_ls():
+    """Browser localStorage handle for the snapshot cache (phone: instant load /
+    offline fallback). cache_resource so the component is created once."""
+    try:
+        from streamlit_local_storage import LocalStorage
+        return LocalStorage(key="_pp_snapshot_ls")
+    except Exception:
+        return None
+
+
+def _read_cached_snapshot_ls():
+    ls = _snapshot_ls()
+    if ls is None:
+        return None
+    try:
+        raw = ls.getItem("pp_snapshot")
+        if raw:
+            d = pd.read_json(_pp_io.StringIO(raw))
+            return d if (d is not None and not d.empty) else None
+    except Exception:
+        return None
+    return None
+
+
+def _save_cached_snapshot_ls(df) -> None:
+    ls = _snapshot_ls()
+    if ls is None or df is None or getattr(df, "empty", True):
+        return
+    try:
+        js = df.to_json(force_ascii=False)
+        k = "_pp_snap_save_" + str(abs(hash(js)) % 1_000_000)
+        ls.setItem("pp_snapshot", js, key=k)
+    except Exception:
+        pass
+
+
 def main() -> None:
     # Run one-time data migrations before anything else
     _run_data_migrations()
@@ -10781,6 +10818,17 @@ def main() -> None:
                 st.info("https://script.google.com/macros/s/.../exec")
             st.stop()
 
+        # Phone/cloud: hydrate the server-side local store from the BROWSER cache,
+        # so last data shows instantly and survives a slow/failed sheet read. The
+        # background refresh (auto-pull inside load_snapshot_data) then updates it.
+        try:
+            if load_local_portfolio()[0].empty:
+                _cached_df = _read_cached_snapshot_ls()
+                if _cached_df is not None and not _cached_df.empty:
+                    save_local_portfolio(_normalize_snapshot_df(_cached_df), preserve_dirty=False)
+        except Exception:
+            pass
+
         # LOCAL-FIRST: attempt to load (local store is tried first inside load_snapshot_data)
         try:
             df, source_mode = load_snapshot_data(web_url_clean, api_token, spreadsheet_ref, worksheet_name, service_account_file)
@@ -10810,6 +10858,14 @@ def main() -> None:
                 st.stop()
 
     loading_placeholder.empty()
+
+    # Keep the BROWSER snapshot cache fresh (real data only) so the phone can
+    # paint instantly / offline on the next load. Never block the data path.
+    try:
+        if source_mode not in ("demo", "empty") and df is not None and not df.empty:
+            _save_cached_snapshot_ls(df)
+    except Exception:
+        pass
 
     web_url_clean = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) if demo_mode else web_app_url)
 
