@@ -939,6 +939,23 @@ function doPost(e) {
       logPortfolioValue_();
       return jsonResponse_({ ok: true });
     }
+    if (action === "tg_setup_polling") {
+      // Switch from webhook to cloud polling (avoids the GAS 302 webhook problem).
+      // NOTE: the webhook must be deleted from outside (Python) — UrlFetchApp is not
+      // available in the anonymous web-app context. The poll trigger runs as the owner
+      // (full scopes) so it CAN call Telegram. Here we only (re)create that trigger.
+      PropertiesService.getScriptProperties().deleteProperty("TELEGRAM_OFFSET");
+      const existing = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+      ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === "pollTelegramTick") ScriptApp.deleteTrigger(t); });
+      ScriptApp.newTrigger("pollTelegramTick").timeBased().everyMinutes(1).create();
+      if (existing.indexOf("logPortfolioValueDaily") < 0) ScriptApp.newTrigger("logPortfolioValueDaily").timeBased().everyDays(1).atHour(22).create();
+      const handlers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
+      return jsonResponse_({ ok: true, mode: "polling", triggers: handlers });
+    }
+    if (action === "tg_poll_now") {
+      const n = pollTelegram_();
+      return jsonResponse_({ ok: true, processed: n });
+    }
 
     if (readAliases[action]) {
       const data = readSnapshotRows_();
@@ -2128,22 +2145,46 @@ function tgSinceStart_(S) {
     "רווח/הפסד: " + tgMoney_(S.netPL) + " (לא ממומש) + " + tgMoney_(S.realized) + " (ממומש)";
 }
 
-// One-time setup — RUN THIS ONCE FROM THE APPS SCRIPT EDITOR to authorize the
-// bot (UrlFetchApp for Telegram + a daily value-logging trigger). Safe to re-run.
+// Cloud polling — the script pulls messages from Telegram every minute (getUpdates).
+// This avoids the Apps Script web-app 302-redirect problem that breaks webhooks,
+// and runs entirely in Google's cloud (works with the PC off).
+function pollTelegram_() {
+  const props = PropertiesService.getScriptProperties();
+  const offset = parseInt(props.getProperty("TELEGRAM_OFFSET") || "0", 10) || 0;
+  let resp;
+  try {
+    resp = tgApi_("getUpdates", { offset: offset, timeout: 0, allowed_updates: ["message", "edited_message"] });
+  } catch (e) {
+    try { appendAudit_("telegram_error", "GETUPDATES", "ERROR", String(e)); } catch (e2) {}
+    return -1;
+  }
+  if (!resp || !resp.ok || !resp.result || !resp.result.length) return 0;
+  let maxId = offset - 1;
+  resp.result.forEach(function (u) {
+    if (u.update_id > maxId) maxId = u.update_id;
+    try { handleTelegramUpdate_(u); } catch (e) { try { appendAudit_("telegram_error", "POLL", "ERROR", String(e)); } catch (e2) {} }
+  });
+  props.setProperty("TELEGRAM_OFFSET", String(maxId + 1));
+  return resp.result.length;
+}
+
+// Trigger target (non-underscore so it can be selected/run from the editor).
+function pollTelegramTick() { pollTelegram_(); }
+
+// One-time setup — RUN ONCE FROM THE APPS SCRIPT EDITOR to authorize the bot
+// (UrlFetchApp + triggers). Sets up cloud polling + daily value log. Safe to re-run.
 function authorizeBot() {
-  // 1) daily trigger to log portfolio value (for weekly/monthly returns)
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === "logPortfolioValueDaily") ScriptApp.deleteTrigger(t);
+    const f = t.getHandlerFunction();
+    if (f === "logPortfolioValueDaily" || f === "pollTelegramTick") ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger("logPortfolioValueDaily").timeBased().everyDays(1).atHour(22).create();
+  ScriptApp.newTrigger("pollTelegramTick").timeBased().everyMinutes(1).create();
+  tgApi_("deleteWebhook", { drop_pending_updates: true }); // polling, not webhook
   logPortfolioValue_();
-  // 2) point Telegram at this web app (idempotent)
-  const url = ScriptApp.getService().getUrl();
-  const wh = tgApi_("setWebhook", { url: url, allowed_updates: ["message", "edited_message"], drop_pending_updates: true });
-  // 3) confirm to the owner
   const chat = PropertiesService.getScriptProperties().getProperty("TELEGRAM_CHAT_ID");
   if (chat) tgSend_(chat, "✅ הבוט מחובר ופעיל 24/7 (גם כשהמחשב כבוי). שלח 'סיכום' כדי לנסות.");
-  return { webhookUrl: url, setWebhook: wh };
+  return { mode: "polling" };
 }
 
 function buildDashboard() {
