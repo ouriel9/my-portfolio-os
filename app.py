@@ -8118,6 +8118,8 @@ SIM_PREFS_FILE = Path(__file__).resolve().parent / "sim_user_prefs.json"
 _SIM_MODE_KEYS = (
     # Horizon + global
     "age_now", "age_target", "swr", "annual_inflation",
+    # Financial-independence target: desired monthly income in retirement (today's ₪)
+    "fi_income",
     # Regular taxable portfolio
     "regular_initial", "regular_monthly", "regular_lump", "regular_lump_month",
     "regular_return",
@@ -8144,6 +8146,7 @@ def _sim_default(key: str) -> object:
     defaults = {
         "age_now": 30, "age_target": 67,
         "swr": 4.0, "annual_inflation": 3.0,
+        "fi_income": 12000.0,
         "regular_initial": 0.0, "regular_monthly": 2000.0,
         "regular_lump": 0.0, "regular_lump_month": 0,
         "regular_return": 7.0,
@@ -8436,6 +8439,71 @@ def sim_years_to_target(
     if hits.empty:
         return float("inf")
     return float(hits.iloc[0]["year"])
+
+
+def sim_required_monthly_for_fi(
+    years: float,
+    annual_return_pct: float,
+    portfolio_initial: float,
+    desired_monthly_income_today: float,
+    swr_pct: float,
+    inflation_pct: float,
+    pension_final: float = 0.0,
+    education_final: float = 0.0,
+    lump_sum: float = 0.0,
+    lump_sum_month: int = 0,
+) -> Dict[str, float]:
+    """How much must you save MONTHLY (into the taxable portfolio) to reach
+    financial independence by `years` from now?
+
+    FI = a nest egg whose Safe-Withdrawal-Rate withdrawal covers the desired
+    monthly income. The work pension + education funds' projected balances count
+    toward that nest egg, so only the REMAINING gap must come from monthly saving.
+
+    Returns a dict: required_monthly, required_egg_nominal, required_egg_today,
+    funds_cover (pension+education at target), gap, feasible (bool as 1.0/0.0).
+    """
+    try:
+        years = max(0.0, float(years)); swr = float(swr_pct)
+        income_today = max(0.0, float(desired_monthly_income_today))
+        infl = max(0.0, float(inflation_pct)) / 100.0
+        p0 = max(0.0, float(portfolio_initial))
+        funds = max(0.0, float(pension_final)) + max(0.0, float(education_final))
+    except (TypeError, ValueError):
+        return {"required_monthly": float("inf"), "required_egg_nominal": 0.0,
+                "required_egg_today": 0.0, "funds_cover": 0.0, "gap": 0.0, "feasible": 0.0}
+    if swr <= 0:
+        return {"required_monthly": float("inf"), "required_egg_nominal": 0.0,
+                "required_egg_today": 0.0, "funds_cover": funds, "gap": 0.0, "feasible": 0.0}
+
+    egg_today = (income_today * 12.0) / (swr / 100.0)                 # nest egg in today's ₪
+    egg_nominal = egg_today * ((1.0 + infl) ** years)                # inflated to the target date
+    gap = egg_nominal - funds                                        # what the taxable portfolio must reach
+
+    def _egg(mc: float) -> float:
+        df = sim_project_portfolio(p0, mc, annual_return_pct, years, lump_sum, lump_sum_month)
+        return float(df["balance_with_lump"].iloc[-1])
+
+    if gap <= 0 or _egg(0.0) >= gap:
+        return {"required_monthly": 0.0, "required_egg_nominal": egg_nominal,
+                "required_egg_today": egg_today, "funds_cover": funds, "gap": max(0.0, gap), "feasible": 1.0}
+
+    lo, hi = 0.0, 100.0
+    for _ in range(60):
+        if _egg(hi) >= gap:
+            break
+        hi *= 2.0
+        if hi > 5e8:
+            return {"required_monthly": float("inf"), "required_egg_nominal": egg_nominal,
+                    "required_egg_today": egg_today, "funds_cover": funds, "gap": gap, "feasible": 0.0}
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        if _egg(mid) >= gap:
+            hi = mid
+        else:
+            lo = mid
+    return {"required_monthly": hi, "required_egg_nominal": egg_nominal,
+            "required_egg_today": egg_today, "funds_cover": funds, "gap": gap, "feasible": 1.0}
 
 
 def render_simulator_page(
@@ -8892,6 +8960,66 @@ def render_simulator_page(
             "סכום כל ההפקדות (התחלתי + חודשיות + חד-פעמית) בכל שלוש הקופות.",
         ),
     )
+
+    # ── Financial-independence calculator ──────────────────────────────
+    with st.container(border=True):
+        st.markdown(f"### 🎯 {tr('Financial Independence — how much to save', 'עצמאות כלכלית — כמה צריך לחסוך')}")
+        _fi_help = tr(
+            "How much you must save MONTHLY into the regular portfolio to reach financial "
+            "independence by your target age — counting your current portfolio AND the "
+            "projected pension + education funds. FI = a nest egg whose safe-withdrawal-rate "
+            "covers your desired monthly income.",
+            "כמה צריך לחסוך בחודש בתיק הרגיל כדי להגיע לעצמאות כלכלית עד גיל היעד — בהתחשב "
+            "בתיק הנוכחי וגם בקרן הפנסיה וקרן ההשתלמות הצפויות. עצמאות כלכלית = קרן שמשיכה "
+            "בטוחה ממנה (SWR) מכסה את ההכנסה החודשית הרצויה.")
+        _fi_a, _fi_b = (st.columns(2) if not is_mobile else (st.container(), st.container()))
+        with _fi_a:
+            k_fi = _need("fi_income")
+            fi_income = float(st.number_input(
+                tr("Desired monthly income in retirement (today's ₪)",
+                   "הכנסה חודשית רצויה בפרישה (₪ של היום)"),
+                min_value=0.0, step=500.0, key=k_fi, help=_fi_help,
+            ))
+        _age_t = int(st.session_state.get(_sim_key(mode_id, "age_target")) or 67)
+        fi = sim_required_monthly_for_fi(
+            years=years_total, annual_return_pct=regular_return,
+            portfolio_initial=regular_initial,
+            desired_monthly_income_today=fi_income, swr_pct=swr_pct, inflation_pct=inflation_pct,
+            pension_final=pension_final, education_final=education_final,
+            lump_sum=regular_lump, lump_sum_month=regular_lump_month,
+        )
+        req = fi["required_monthly"]
+        with _fi_b:
+            if not fi["feasible"]:
+                st.warning(tr(
+                    "Target not reachable with realistic monthly saving — lower the target "
+                    "income, extend the horizon, or raise expected return.",
+                    "היעד אינו בר-השגה בחיסכון חודשי סביר — הורד את ההכנסה הרצויה, הארך את "
+                    "האופק, או הגדל את התשואה הצפויה."))
+            else:
+                st.metric(tr("Required monthly saving", "חיסכון חודשי נדרש"), f"₪{req:,.0f}")
+        if fi["feasible"]:
+            f1, f2, f3 = st.columns(3)
+            f1.metric(tr("Required nest egg (at retirement)", "קרן נדרשת (בפרישה)"),
+                      f"₪{fi['required_egg_nominal']:,.0f}",
+                      help=tr(f"In today's ₪: ₪{fi['required_egg_today']:,.0f}",
+                              f"בערכי היום: ₪{fi['required_egg_today']:,.0f}"))
+            f2.metric(tr("Covered by pension + education", "מכוסה ע״י פנסיה + השתלמות"),
+                      f"₪{fi['funds_cover']:,.0f}")
+            _gap_plan = req - float(regular_monthly)
+            if _gap_plan <= 0:
+                f3.metric(tr("Your current plan", "התוכנית הנוכחית"), f"₪{regular_monthly:,.0f}",
+                          delta=tr("On track ✅", "בדרך הנכונה ✅"))
+            else:
+                f3.metric(tr("Your current plan", "התוכנית הנוכחית"), f"₪{regular_monthly:,.0f}",
+                          delta=(f"₪{_gap_plan:,.0f} " + tr("short/mo", "חסר לחודש")),
+                          delta_color="inverse")
+            st.caption(tr(
+                f"Save ≈ ₪{req:,.0f}/month into the regular portfolio to reach "
+                f"₪{fi['required_egg_nominal']:,.0f} by age {_age_t}; pension + education "
+                f"funds contribute ₪{fi['funds_cover']:,.0f}.",
+                f"חסוך כ-₪{req:,.0f} לחודש בתיק הרגיל כדי להגיע ל-₪{fi['required_egg_nominal']:,.0f} "
+                f"עד גיל {_age_t}; קרן הפנסיה וההשתלמות תורמות ₪{fi['funds_cover']:,.0f}."))
 
     # ── Per-bucket breakdown ───────────────────────────────────────────
     with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=False):
