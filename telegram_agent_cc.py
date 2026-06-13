@@ -71,6 +71,22 @@ def cc_available() -> bool:
     return _find_exe() is not None
 
 
+def _agent_model() -> str:
+    """Model for the headless Claude Code agent. Defaults to 'sonnet' (included in
+    the Claude MAX subscription). 'fable'/Opus-tier may not be in every MAX plan,
+    which causes 'model may not exist or you may not have access' errors.
+    Override via telegram_config.json -> "cc_model"."""
+    try:
+        import json
+        cfg = json.loads((ROOT / "telegram_config.json").read_text(encoding="utf-8"))
+        m = str(cfg.get("cc_model", "")).strip()
+        if m:
+            return m
+    except Exception:
+        pass
+    return "sonnet"
+
+
 def run_agent_cc(user_text: str, timeout: int = 300) -> str:
     """Run one headless Claude Code turn for the given user message and return the reply."""
     exe = _find_exe()
@@ -78,6 +94,7 @@ def run_agent_cc(user_text: str, timeout: int = 300) -> str:
         return "Claude Code CLI לא נמצא במחשב."
     cmd = [
         exe, "-p",
+        "--model", _agent_model(),
         "--output-format", "text",
         "--allowedTools", _ALLOWED_TOOLS,
         "--append-system-prompt", _SYSTEM,
