@@ -9385,6 +9385,29 @@ def _claude_chat(user_text: str, history: List[Dict[str, str]], data_context: st
     return out[:3800] if out else ("לא התקבלה תשובה. " + (proc.stderr or "")[:300])
 
 
+def _claude_via_relay(prompt: str, web_app_url: str, token: str, max_wait: int = 150):
+    """Submit a Claude request to the backend and poll for the desktop's answer.
+    Lets the phone use Claude when the PC (running claude_relay.py) is on.
+    Returns the answer text, or None on timeout / no relay."""
+    if not (web_app_url and token):
+        return None
+    try:
+        r = call_apps_script_(web_app_url, {"token": token, "action": "claude_submit", "prompt": prompt})
+        rid = r.get("id") if isinstance(r, dict) else None
+        if not rid:
+            return None
+        waited = 0
+        while waited < max_wait:
+            time.sleep(3); waited += 3
+            rr = call_apps_script_(web_app_url, {"token": token, "action": "claude_result", "id": rid})
+            ans = rr.get("answer") if isinstance(rr, dict) else None
+            if ans:
+                return ans
+        return None
+    except Exception:
+        return None
+
+
 def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile) -> None:
     # ── Professional, Gemini-like chat styling (theme-aware, app accent) ──
     _abg = "#1f2937" if is_dark else "#ffffff"
@@ -9400,13 +9423,13 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         f"background:{_abg}!important;border:1px solid {_abd}!important;color:{_atx}!important;}}"
         "[data-testid='stChatMessage']:has([data-testid='stChatMessageAvatarUser']){flex-direction:row-reverse!important;}"
         "[data-testid='stChatMessage']:has([data-testid='stChatMessageAvatarUser']) [data-testid='stChatMessageContent']{"
-        "background:linear-gradient(135deg,#6366f1,#4f46e5)!important;color:#fff!important;border:none!important;}"
+        "background:linear-gradient(135deg,#f59e0b,#d97706)!important;color:#fff!important;border:none!important;}"
         "[data-testid='stChatMessageAvatarUser'],[data-testid='stChatMessageAvatarAssistant']{box-shadow:0 2px 6px rgba(79,70,229,.25)!important;}"
         "[data-testid='stChatInput']{border-radius:18px!important;}[data-testid='stChatInput'] textarea{font-size:15px!important;}"
-        ".agent-hero{background:linear-gradient(120deg,#4f46e5,#6366f1 55%,#38bdf8);border-radius:16px;padding:14px 18px;"
-        "color:#fff;margin-bottom:10px;box-shadow:0 10px 28px -12px rgba(79,70,229,.6);}"
-        ".agent-hero h3{margin:0;color:#fff;font-size:1.18rem;font-weight:700;}"
-        ".agent-hero p{margin:3px 0 0;opacity:.92;font-size:.85rem;}"
+        ".agent-hero{background:linear-gradient(120deg,#f59e0b,#fbbf24 55%,#fde047);border-radius:16px;padding:14px 18px;"
+        "color:#3f2d00;margin-bottom:10px;box-shadow:0 10px 28px -12px rgba(234,179,8,.55);}"
+        ".agent-hero h3{margin:0;color:#3f2d00;font-size:1.18rem;font-weight:700;}"
+        ".agent-hero p{margin:3px 0 0;opacity:.95;font-size:.85rem;color:#5b4708;}"
         f".agent-chip{{display:inline-block;padding:8px 13px;margin:4px 6px 4px 0;border-radius:13px;"
         f"background:{_chip_bg};border:1px solid {_abd};color:{_atx};font-size:.85rem;}}"
         "</style>",
@@ -9414,7 +9437,9 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
     )
 
     has_gemini = bool(_gemini_api_key())
-    claude_ok = (not getattr(sys, "frozen", False)) and (_claude_cli_path() is not None)
+    _local_claude = _claude_cli_path() is not None       # desktop: direct CLI
+    _relay_claude = bool(web_app_url and token)           # phone: relay to the PC (when on)
+    claude_ok = _local_claude or _relay_claude
     providers, pmap = [], {}
     if has_gemini:
         providers.append("Gemini ☁️"); pmap["Gemini ☁️"] = "gemini"
@@ -9436,8 +9461,8 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
 
     cc1, cc2 = st.columns([3, 1])
     with cc1:
-        prov_label = st.radio(tr("Engine", "מנוע"), providers, horizontal=True,
-                              key="ai_chat_provider", label_visibility="collapsed")
+        prov_label = st.radio("🧠 " + tr("Engine", "מנוע"), providers, horizontal=True,
+                              key="ai_chat_provider")
     with cc2:
         if st.button(tr("🗑 Clear", "🗑 נקה"), use_container_width=True):
             st.session_state["ai_chat_history"] = []
@@ -9496,16 +9521,33 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         "If asked to add/edit/delete a trade, extract the fields and present them clearly for confirmation "
         "(full trade write-back is being wired in).\n\n" + ctx)
 
+    def _gemini_answer(spin_note=None):
+        gh = [{"role": ("model" if h["role"] == "assistant" else "user"), "text": h["text"]} for h in hist[-8:]]
+        resp = _gemini_chat(system, gh, user_text or "(ניתחתי את התמונה המצורפת)", images)
+        txt = _gemini_text(resp)
+        if not txt:
+            txt = "⚠️ " + tr("No response", "אין תגובה") + ": " + str(resp.get("detail") or resp.get("error") or "?")[:300]
+        return (spin_note + txt) if spin_note else txt
+
     with st.chat_message("assistant", avatar="🤖"):
-        with st.spinner(tr("Thinking…", "חושב…")):
-            if provider == "claude":
+        if provider == "claude" and _claude_cli_path() is not None:
+            with st.spinner(tr("Claude is thinking…", "Claude חושב…")):
                 answer = _claude_chat(user_text, hist, ctx, img_paths)
-            else:
-                gh = [{"role": ("model" if h["role"] == "assistant" else "user"), "text": h["text"]} for h in hist[-8:]]
-                resp = _gemini_chat(system, gh, user_text or "(ניתחתי את התמונה המצורפת)", images)
-                answer = _gemini_text(resp)
-                if not answer:
-                    answer = "⚠️ " + tr("No response", "אין תגובה") + ": " + str(resp.get("detail") or resp.get("error") or "?")[:300]
+        elif provider == "claude" and not images:
+            # Phone: relay the request to the desktop's Claude (when the PC is on).
+            with st.spinner(tr("Claude is thinking on your PC…", "Claude חושב על המחשב שלך…")):
+                _convo = ""
+                for h in hist[-6:]:
+                    _convo += ("\nUser: " if h["role"] == "user" else "\nAssistant: ") + str(h["text"])[:600]
+                _full = (user_text or "(נשלחה הודעה)") + "\n\nRecent conversation:" + (_convo or " (none)") + "\n\n" + ctx
+                answer = _claude_via_relay(_full, web_app_url, token)
+            if not answer:
+                with st.spinner(tr("PC didn't answer — using Gemini…", "המחשב לא ענה — עובר ל-Gemini…")):
+                    answer = _gemini_answer(tr("⏳ Claude didn't answer (is the PC on?) — answered with Gemini:\n\n",
+                                               "⏳ Claude לא הגיב (המחשב כבוי?) — עניתי עם Gemini:\n\n"))
+        else:
+            with st.spinner(tr("Thinking…", "חושב…")):
+                answer = _gemini_answer()
         st.markdown(answer)
 
     hist.append({"role": "user", "text": user_text or "📎 (תמונה)"})
@@ -10341,6 +10383,7 @@ def main() -> None:
         "risk":      "#ef4444",   # rose — risk / warning family
         "simulator": "#f59e0b",   # amber — exploration / projection
         "quality":   "#06b6d4",   # cyan — data hygiene
+        "chat":      "#eab308",   # yellow — AI agent
     }
     # Per-accent dark variant (for gradient stops, hover, subtle bg tint)
     _page_accents_dark = {
@@ -10349,6 +10392,7 @@ def main() -> None:
         "risk":      "#b91c1c",
         "simulator": "#b45309",
         "quality":   "#0e7490",
+        "chat":      "#a16207",
     }
     _accent = _page_accents.get(active_page_id, "#6366f1")
     _accent_dark = _page_accents_dark.get(active_page_id, "#1e40af")

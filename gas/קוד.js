@@ -962,6 +962,40 @@ function doPost(e) {
     }
 
     // ---- Shared simulator preferences (synced across desktop / phone / Next.js) ----
+    // ---- Claude relay: phone submits → desktop CLI answers (Claude works on
+    //      the phone whenever the PC is on, using the MAX subscription) ----
+    if (action === "claude_submit") {
+      const id = String(new Date().getTime());
+      PropertiesService.getScriptProperties().setProperty("CLAUDE_REQ",
+        JSON.stringify({ id: id, prompt: String(payload.prompt || "").slice(0, 12000), status: "pending" }));
+      return jsonResponse_({ ok: true, id: id });
+    }
+    if (action === "claude_pending") {
+      const raw = PropertiesService.getScriptProperties().getProperty("CLAUDE_REQ") || "";
+      if (!raw) return jsonResponse_({ ok: true, request: null });
+      let r = {}; try { r = JSON.parse(raw); } catch (e) {}
+      if (r && r.status === "pending") {
+        r.status = "processing";
+        PropertiesService.getScriptProperties().setProperty("CLAUDE_REQ", JSON.stringify(r));
+        return jsonResponse_({ ok: true, request: { id: r.id, prompt: r.prompt } });
+      }
+      return jsonResponse_({ ok: true, request: null });
+    }
+    if (action === "claude_answer") {
+      const aid = String(payload.id || "");
+      if (aid) PropertiesService.getScriptProperties().setProperty("CLAUDE_ANS_" + aid, String(payload.answer || "").slice(0, 12000));
+      PropertiesService.getScriptProperties().deleteProperty("CLAUDE_REQ");
+      return jsonResponse_({ ok: true });
+    }
+    if (action === "claude_result") {
+      const rid = String(payload.id || "");
+      const ans = PropertiesService.getScriptProperties().getProperty("CLAUDE_ANS_" + rid);
+      if (ans !== null && ans !== undefined && rid) {
+        // one-shot: clean up after delivery
+        PropertiesService.getScriptProperties().deleteProperty("CLAUDE_ANS_" + rid);
+      }
+      return jsonResponse_({ ok: true, answer: (ans === undefined ? null : ans) });
+    }
     if (action === "get_gemini_key") {
       // Lets the cloud-hosted apps (phone) fetch the Gemini key without the user
       // pasting it into each platform's secrets. Token-guarded (same trust as data).
