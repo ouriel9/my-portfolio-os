@@ -8123,8 +8123,8 @@ SIM_PREFS_FILE = Path(__file__).resolve().parent / "sim_user_prefs.json"
 _SIM_MODE_KEYS = (
     # Horizon + global
     "age_now", "age_target", "swr", "annual_inflation",
-    # Financial-independence target: desired monthly income in retirement (today's ₪)
-    "fi_income",
+    # Financial-independence: desired monthly income (today's ₪) + chosen FI age
+    "fi_income", "fi_target_age",
     # Regular taxable portfolio
     "regular_initial", "regular_monthly", "regular_lump", "regular_lump_month",
     "regular_return",
@@ -8151,7 +8151,7 @@ def _sim_default(key: str) -> object:
     defaults = {
         "age_now": 30, "age_target": 67,
         "swr": 4.0, "annual_inflation": 3.0,
-        "fi_income": 12000.0,
+        "fi_income": 12000.0, "fi_target_age": 60,
         "regular_initial": 0.0, "regular_monthly": 2000.0,
         "regular_lump": 0.0, "regular_lump_month": 0,
         "regular_return": 7.0,
@@ -8661,7 +8661,7 @@ def render_simulator_page(
 
     # Defensive type-coercion for THIS mode's keys.
     _SIM_TYPES: Dict[str, type] = {
-        "age_now": int, "age_target": int, "regular_lump_month": int,
+        "age_now": int, "age_target": int, "regular_lump_month": int, "fi_target_age": int,
     }
     for k in _SIM_MODE_KEYS:
         full = _sim_key(mode_id, k)
@@ -8991,54 +8991,88 @@ def render_simulator_page(
             "כמה צריך לחסוך בחודש בתיק הרגיל כדי להגיע לעצמאות כלכלית עד גיל היעד — בהתחשב "
             "בתיק הנוכחי וגם בקרן הפנסיה וקרן ההשתלמות הצפויות. עצמאות כלכלית = קרן שמשיכה "
             "בטוחה ממנה (SWR) מכסה את ההכנסה החודשית הרצויה.")
+        _age_now_i = int(st.session_state.get(_sim_key(mode_id, "age_now")) or 30)
         _fi_a, _fi_b = (st.columns(2) if not is_mobile else (st.container(), st.container()))
         with _fi_a:
+            k_fa = _need("fi_target_age")
+            # keep the saved value within the valid range for this current age
+            if int(st.session_state.get(k_fa) or 60) <= _age_now_i:
+                st.session_state[k_fa] = min(100, _age_now_i + 30)
+            fi_age = int(st.number_input(
+                tr("Reach financial independence by age", "להגיע לעצמאות כלכלית עד גיל"),
+                min_value=_age_now_i + 1, max_value=100, step=1, key=k_fa,
+                help=tr("Choose the age by which you want to be financially independent.",
+                        "בחר את הגיל שעד אליו אתה רוצה להגיע לעצמאות כלכלית."),
+            ))
+        with _fi_b:
             k_fi = _need("fi_income")
             fi_income = float(st.number_input(
-                tr("Desired monthly income in retirement (today's ₪)",
-                   "הכנסה חודשית רצויה בפרישה (₪ של היום)"),
+                tr("Desired monthly income then (today's ₪)",
+                   "הכנסה חודשית רצויה אז (₪ של היום)"),
                 min_value=0.0, step=500.0, key=k_fi, help=_fi_help,
             ))
-        _age_t = int(st.session_state.get(_sim_key(mode_id, "age_target")) or 67)
-        fi = sim_required_monthly_for_fi(
-            years=years_total, annual_return_pct=regular_return,
-            portfolio_initial=regular_initial,
-            desired_monthly_income_today=fi_income, swr_pct=swr_pct, inflation_pct=inflation_pct,
-            pension_final=pension_final, education_final=education_final,
-            lump_sum=regular_lump, lump_sum_month=regular_lump_month,
-        )
+
+        # Compute the required monthly saving for ANY target age — re-projecting
+        # the pension + education funds to that age (they grow with the horizon).
+        def _fi_for_age(age):
+            yrs = max(0.0, float(age) - float(_age_now_i))
+            pf = sim_project_fund(pension_initial, pension_monthly, pension_return, yrs, pension_fee_acc, pension_fee_dep)
+            ef = sim_project_fund(education_initial, education_monthly, education_return, yrs, education_fee_acc, education_fee_dep)
+            res = sim_required_monthly_for_fi(
+                years=yrs, annual_return_pct=regular_return, portfolio_initial=regular_initial,
+                desired_monthly_income_today=fi_income, swr_pct=swr_pct, inflation_pct=inflation_pct,
+                pension_final=pf, education_final=ef, lump_sum=regular_lump, lump_sum_month=regular_lump_month,
+            )
+            return yrs, res
+
+        _yrs_fi, fi = _fi_for_age(fi_age)
         req = fi["required_monthly"]
-        with _fi_b:
-            if not fi["feasible"]:
-                st.warning(tr(
-                    "Target not reachable with realistic monthly saving — lower the target "
-                    "income, extend the horizon, or raise expected return.",
-                    "היעד אינו בר-השגה בחיסכון חודשי סביר — הורד את ההכנסה הרצויה, הארך את "
-                    "האופק, או הגדל את התשואה הצפויה."))
-            else:
-                st.metric(tr("Required monthly saving", "חיסכון חודשי נדרש"), f"₪{req:,.0f}")
-        if fi["feasible"]:
-            f1, f2, f3 = st.columns(3)
-            f1.metric(tr("Required nest egg (at retirement)", "קרן נדרשת (בפרישה)"),
+
+        if not fi["feasible"]:
+            st.warning(tr(
+                f"Reaching FI by age {fi_age} isn't achievable with realistic saving — "
+                "raise the age, lower the desired income, or raise expected return.",
+                f"לא ניתן להגיע לעצמאות כלכלית עד גיל {fi_age} בחיסכון סביר — "
+                "העלה את הגיל, הורד את ההכנסה הרצויה, או הגדל את התשואה הצפויה."))
+        else:
+            g1, g2, g3 = st.columns(3)
+            g1.metric(tr("Required monthly saving", "להפריש בחודש"), f"₪{req:,.0f}",
+                      help=tr(f"Into the regular portfolio, for {int(_yrs_fi)} years.",
+                              f"לתיק הרגיל, למשך {int(_yrs_fi)} שנים."))
+            g2.metric(tr("Required nest egg (at that age)", "קרן נדרשת (באותו גיל)"),
                       f"₪{fi['required_egg_nominal']:,.0f}",
                       help=tr(f"In today's ₪: ₪{fi['required_egg_today']:,.0f}",
                               f"בערכי היום: ₪{fi['required_egg_today']:,.0f}"))
-            f2.metric(tr("Covered by pension + education", "מכוסה ע״י פנסיה + השתלמות"),
-                      f"₪{fi['funds_cover']:,.0f}")
             _gap_plan = req - float(regular_monthly)
             if _gap_plan <= 0:
-                f3.metric(tr("Your current plan", "התוכנית הנוכחית"), f"₪{regular_monthly:,.0f}",
+                g3.metric(tr("Your current plan", "התוכנית הנוכחית"), f"₪{regular_monthly:,.0f}",
                           delta=tr("On track ✅", "בדרך הנכונה ✅"))
             else:
-                f3.metric(tr("Your current plan", "התוכנית הנוכחית"), f"₪{regular_monthly:,.0f}",
+                g3.metric(tr("Your current plan", "התוכנית הנוכחית"), f"₪{regular_monthly:,.0f}",
                           delta=(f"₪{_gap_plan:,.0f} " + tr("short/mo", "חסר לחודש")),
                           delta_color="inverse")
             st.caption(tr(
-                f"Save ≈ ₪{req:,.0f}/month into the regular portfolio to reach "
-                f"₪{fi['required_egg_nominal']:,.0f} by age {_age_t}; pension + education "
-                f"funds contribute ₪{fi['funds_cover']:,.0f}.",
-                f"חסוך כ-₪{req:,.0f} לחודש בתיק הרגיל כדי להגיע ל-₪{fi['required_egg_nominal']:,.0f} "
-                f"עד גיל {_age_t}; קרן הפנסיה וההשתלמות תורמות ₪{fi['funds_cover']:,.0f}."))
+                f"To be financially independent by age {fi_age} ({int(_yrs_fi)} yrs), save "
+                f"≈ ₪{req:,.0f}/month; pension + education funds contribute ₪{fi['funds_cover']:,.0f} "
+                f"toward the required ₪{fi['required_egg_nominal']:,.0f}.",
+                f"כדי להיות עצמאי כלכלית עד גיל {fi_age} (בעוד {int(_yrs_fi)} שנים), הפרש "
+                f"כ-₪{req:,.0f} לחודש; קרן הפנסיה וההשתלמות תורמות ₪{fi['funds_cover']:,.0f} "
+                f"מתוך ה-₪{fi['required_egg_nominal']:,.0f} הנדרשים."))
+
+        # Sensitivity: required monthly saving across several target ages.
+        _cand = sorted({a for a in [_age_now_i + 5, 50, 55, 60, 65, 67, 70, fi_age] if a > _age_now_i})
+        _rows = []
+        for a in _cand:
+            _, _f = _fi_for_age(a)
+            _rows.append({
+                tr("Target age", "גיל יעד"): a,
+                tr("Years", "שנים"): int(a - _age_now_i),
+                tr("Monthly saving", "חיסכון חודשי"): (tr("not reachable", "לא בר-השגה") if not _f["feasible"] else f"₪{_f['required_monthly']:,.0f}"),
+                tr("Required nest egg", "קרן נדרשת"): f"₪{_f['required_egg_nominal']:,.0f}",
+            })
+        st.caption(tr("How much to save per month, by the age you want FI:",
+                      "כמה להפריש בחודש, לפי הגיל שבו תרצה עצמאות כלכלית:"))
+        st.dataframe(pd.DataFrame(_rows), hide_index=True, use_container_width=True)
 
     # ── Per-bucket breakdown ───────────────────────────────────────────
     with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=False):
