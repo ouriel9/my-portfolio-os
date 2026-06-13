@@ -3,6 +3,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -9202,6 +9203,249 @@ def render_simulator_page(
             st.rerun()
 
 
+# ════════════════════════════════════════════════════════════════════
+#  In-app AI Chat agent — Gemini (cloud, always) / Claude (local CLI,
+#  desktop only). Full live-data context, image vision, conversation
+#  memory, free-text trade add/edit/delete, and custom-document output.
+# ════════════════════════════════════════════════════════════════════
+GEMINI_CHAT_MODEL = "gemini-flash-latest"
+
+
+def _gemini_api_key() -> str:
+    """Gemini key from Streamlit Cloud secrets (phone) or local config (desktop)."""
+    try:
+        if "gemini_api_key" in st.secrets:
+            return _clean(st.secrets.get("gemini_api_key", ""))
+    except Exception:
+        pass
+    try:
+        if LOCAL_SETTINGS_FILE.exists():
+            raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+            return _clean(raw.get("gemini_api_key", ""))
+    except Exception:
+        pass
+    return ""
+
+
+def _gemini_chat(system_text: str, history: List[Dict[str, str]], user_text: str,
+                 images: Optional[List] = None, tools: Optional[list] = None,
+                 model: Optional[str] = None) -> Dict[str, object]:
+    """One Gemini generateContent call. Returns the parsed JSON (caller reads text
+    or functionCall). images = list of (mime, bytes)."""
+    import urllib.request, urllib.error, base64
+    key = _gemini_api_key()
+    if not key:
+        return {"error": "no_key"}
+    model = model or GEMINI_CHAT_MODEL
+    url = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s" % (model, key)
+    contents: List[Dict[str, object]] = []
+    for h in (history or []):
+        contents.append({"role": ("model" if h.get("role") == "model" else "user"),
+                         "parts": [{"text": str(h.get("text", ""))}]})
+    user_parts: List[Dict[str, object]] = [{"text": user_text or ""}]
+    for (mime, data) in (images or []):
+        user_parts.append({"inline_data": {"mime_type": mime or "image/png",
+                                            "data": base64.b64encode(data).decode("ascii")}})
+    contents.append({"role": "user", "parts": user_parts})
+    payload: Dict[str, object] = {
+        "systemInstruction": {"parts": [{"text": system_text}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 2048},
+    }
+    if tools:
+        payload["tools"] = tools
+    try:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=90)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return {"error": "http_%s" % e.code, "detail": e.read().decode()[:300]}
+        except Exception:
+            return {"error": "http_%s" % e.code}
+    except Exception as e:
+        return {"error": "exc", "detail": str(e)[:200]}
+
+
+def _gemini_text(resp: Dict[str, object]) -> str:
+    try:
+        parts = resp["candidates"][0]["content"]["parts"]
+        return "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    except Exception:
+        return ""
+
+
+def _chat_data_context(df) -> str:
+    """Compact live-portfolio context for the agent, incl. individual open lots
+    (with Trade_IDs) so it can reference / edit / delete specific trades."""
+    try:
+        if df is None or df.empty:
+            return "No portfolio data available (empty)."
+        d = df.copy()
+        for c in ["Ticker", "Platform", "Type", "Status", "Origin_Currency", "Purchase_Date", "Trade_ID"]:
+            if c not in d.columns:
+                d[c] = ""
+        for c in ["Quantity", "Cost_ILS", "Current_Value_ILS", "Commission"]:
+            if c not in d.columns:
+                d[c] = 0.0
+            d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+        closed_mask = d["Status"].astype(str).str.strip().isin(["סגור", "closed", "sold", "נמכר"])
+        o = d[~closed_mask]
+        tv = float(o["Current_Value_ILS"].sum()); tc = float(o["Cost_ILS"].sum())
+        L = ["LIVE PORTFOLIO (ILS ₪):",
+             "open_value=%0.0f cost=%0.0f unrealized_pnl=%0.0f return=%0.2f%% open_rows=%d closed_rows=%d" % (
+                 tv, tc, tv - tc, ((tv - tc) / tc * 100 if tc else 0), len(o), int(closed_mask.sum()))]
+        g = o.groupby("Ticker").agg(qty=("Quantity", "sum"), cost=("Cost_ILS", "sum"), value=("Current_Value_ILS", "sum"))
+        L.append("holdings [ticker: qty cost value pnl ret%]:")
+        for tk, r in g.sort_values("value", ascending=False).iterrows():
+            pl = r["value"] - r["cost"]; y = (pl / r["cost"] * 100) if r["cost"] else 0
+            L.append("  %s: qty=%s cost=%0.0f value=%0.0f pnl=%0.0f ret=%0.2f%%" % (tk, round(float(r["qty"]), 4), r["cost"], r["value"], pl, y))
+        L.append("open lots [Trade_ID | ticker | platform | date | qty | cost_ILS | currency]:")
+        for _, r in o.iterrows():
+            L.append("  %s | %s | %s | %s | %s | %0.0f | %s" % (
+                str(r.get("Trade_ID", ""))[:14], r.get("Ticker", ""), r.get("Platform", ""),
+                r.get("Purchase_Date", ""), round(float(r.get("Quantity", 0)), 6),
+                float(r.get("Cost_ILS", 0)), r.get("Origin_Currency", "")))
+        return "\n".join(L[:160])
+    except Exception as e:
+        return "data context error: " + str(e)[:120]
+
+
+def _claude_cli_path() -> Optional[str]:
+    """Path to the local Claude Code CLI (desktop only)."""
+    cands = [
+        Path(os.environ.get("APPDATA", "")) / "npm" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe",
+        Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
+    ]
+    for c in cands:
+        try:
+            if c and c.exists():
+                return str(c)
+        except Exception:
+            continue
+    return None
+
+
+def _claude_chat(user_text: str, history: List[Dict[str, str]], data_context: str,
+                 image_paths: Optional[List[str]] = None, timeout: int = 240) -> str:
+    """Route a turn through the local Claude Code CLI (uses the MAX subscription;
+    it can run portfolio_cli.py to actually read/write trades). Desktop only."""
+    exe = _claude_cli_path()
+    if not exe:
+        return "Claude לא זמin במחשב (זמין רק כשהאפליקציה רצה על המחשב עם Claude Code מותקן)."
+    convo = ""
+    for h in (history or [])[-6:]:
+        convo += ("\nUser: " if h.get("role") == "user" else "\nAssistant: ") + str(h.get("text", ""))[:600]
+    imgs = ""
+    for p in (image_paths or []):
+        imgs += "\nתמונה מצורפת (קרא אותה עם Read): " + p
+    prompt = user_text + imgs
+    system = (
+        "You are Ouriel's portfolio agent inside his app. Reply in HEBREW, concise. "
+        "You manage the portfolio via the CLI (writes to the shared Google Sheet → all apps sync):\n"
+        "  python portfolio_cli.py snapshot|add --json \"{...}\"|edit --json \"{...}\"|delete --id ID\n"
+        "Use the live data below. Before any add/edit/delete confirm the parsed values in one line, then run the CLI and report what changed. Never invent numbers.\n\n"
+        "Recent conversation:" + (convo or " (none)") + "\n\n" + data_context
+    )
+    cmd = [exe, "-p", "--model", "sonnet", "--output-format", "text",
+           "--allowedTools", "Bash(python portfolio_cli.py:*),PowerShell(python portfolio_cli.py:*),Read,Glob,Grep",
+           "--append-system-prompt", system]
+    env = dict(os.environ); env["PYTHONUTF8"] = "1"; env["PYTHONIOENCODING"] = "utf-8"; env.pop("ANTHROPIC_API_KEY", None)
+    try:
+        proc = subprocess.run(cmd, input=prompt, cwd=str(_DATA_DIR), env=env, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "Claude לקח יותר מדי זמן. נסה שאלה קצרה יותר או השתמש ב-Gemini."
+    except Exception as exc:
+        return "שגיאת הרצת Claude: " + str(exc)[:200]
+    out = (proc.stdout or "").strip()
+    return out[:3800] if out else ("לא התקבלה תשובה. " + (proc.stderr or "")[:300])
+
+
+def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile) -> None:
+    st.markdown("### 🤖 " + tr("AI Chat — your portfolio agent", "צ'אט AI — סוכן התיק שלך"))
+
+    has_gemini = bool(_gemini_api_key())
+    claude_ok = (not getattr(sys, "frozen", False)) and (_claude_cli_path() is not None)
+    providers, pmap = [], {}
+    if has_gemini:
+        providers.append("Gemini ☁️"); pmap["Gemini ☁️"] = "gemini"
+    if claude_ok:
+        providers.append("Claude 🧠"); pmap["Claude 🧠"] = "claude"
+    if not providers:
+        st.warning(tr("No AI engine configured. Add a free Gemini API key (gemini_api_key) in settings/secrets.",
+                      "לא הוגדר מנוע AI. הוסף מפתח Gemini חינמי (gemini_api_key) בהגדרות/secrets."))
+        return
+
+    c1, c2 = st.columns([3, 1])
+    with c2:
+        prov_label = st.radio(tr("Engine", "מנוע"), providers, horizontal=False, key="ai_chat_provider")
+        if st.button(tr("🗑 Clear chat", "🗑 נקה שיחה"), use_container_width=True):
+            st.session_state["ai_chat_history"] = []
+            st.rerun()
+    provider = pmap.get(prov_label, "gemini")
+
+    hist = st.session_state.setdefault("ai_chat_history", [])
+    for m in hist:
+        with st.chat_message("user" if m["role"] == "user" else "assistant"):
+            st.markdown(m["text"])
+
+    placeholder = tr("Ask anything, edit trades, or attach a buy/sell screenshot…",
+                     "שאל כל דבר, ערוך עסקאות, או צרף צילום מסך של קנייה/מכירה…")
+    inp = st.chat_input(placeholder, accept_file=True, file_type=["png", "jpg", "jpeg"])
+    if not inp:
+        return
+    # st.chat_input with accept_file returns an object with .text and .files
+    user_text = getattr(inp, "text", None)
+    files = getattr(inp, "files", None) or []
+    if user_text is None and isinstance(inp, str):
+        user_text = inp
+    user_text = (user_text or "").strip()
+
+    images = []
+    img_paths = []
+    for f in files:
+        try:
+            data = f.getvalue()
+            images.append((getattr(f, "type", "image/png") or "image/png", data))
+            if provider == "claude":
+                tmp = _DATA_DIR / ("_chat_img_" + str(abs(hash(data)) % 100000) + ".png")
+                tmp.write_bytes(data); img_paths.append(str(tmp))
+        except Exception:
+            pass
+
+    with st.chat_message("user"):
+        st.markdown(user_text or "📎 " + tr("(image)", "(תמונה)"))
+        for (mime, data) in images:
+            st.image(data, width=220)
+
+    ctx = _chat_data_context(df)
+    system = (
+        "You are Ouriel's personal portfolio assistant inside his app. Answer in HEBREW, "
+        "clear and concise, and analyze the data freely (returns, risk, allocation, what-ifs, advice). "
+        "You can read attached images (e.g. a broker buy/sell screenshot) and extract the trade details. "
+        "Currency is ₪ (ILS). Use ONLY the data below; never invent numbers. "
+        "If asked to add/edit/delete a trade, extract the fields and present them clearly for confirmation "
+        "(full trade write-back is being wired in).\n\n" + ctx)
+
+    with st.chat_message("assistant"):
+        with st.spinner(tr("Thinking…", "חושב…")):
+            if provider == "claude":
+                answer = _claude_chat(user_text, hist, ctx, img_paths)
+            else:
+                gh = [{"role": ("model" if h["role"] == "assistant" else "user"), "text": h["text"]} for h in hist[-8:]]
+                resp = _gemini_chat(system, gh, user_text or "(ניתחתי את התמונה המצורפת)", images)
+                answer = _gemini_text(resp)
+                if not answer:
+                    answer = "⚠️ " + tr("No response", "אין תגובה") + ": " + str(resp.get("detail") or resp.get("error") or "?")[:300]
+        st.markdown(answer)
+
+    hist.append({"role": "user", "text": user_text or "📎 (תמונה)"})
+    hist.append({"role": "assistant", "text": answer})
+    st.session_state["ai_chat_history"] = hist[-40:]
+
+
 def _run_data_migrations() -> None:
     """Data migrations embedded in app.py — run on every device that pulls from Git.
 
@@ -9871,14 +10115,16 @@ def main() -> None:
     page_risk = tr("Risk & FIFO", "סיכונים ופיפו") if not _is_mobile_client() else tr("Risk", "סיכון")
     page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
+    page_chat = tr("AI Chat", "צ'אט AI")
     page_id_to_label = {
         "dashboard": page_dashboard,
         "manage": page_manage,
         "risk": page_risk,
         "simulator": page_simulator,
         "quality": page_quality,
+        "chat": page_chat,
     }
-    page_order = ["dashboard", "manage", "risk", "simulator", "quality"]
+    page_order = ["dashboard", "manage", "risk", "simulator", "quality", "chat"]
     active_page_id = _clean(st.session_state.get("active_page_id", "dashboard")) or "dashboard"
     if active_page_id not in page_id_to_label:
         active_page_id = "dashboard"
@@ -9896,6 +10142,7 @@ def main() -> None:
             tr("💼 Trades", "💼 עסקאות"): "manage",
             tr("🛡 Risk", "🛡 סיכון"): "risk",
             tr("🧮 Sim", "🧮 סימולטור"): "simulator",
+            tr("🤖 Chat", "🤖 צ'אט"): "chat",
         }
         mobile_options = list(mobile_label_to_id.keys())
 
@@ -9971,7 +10218,7 @@ def main() -> None:
                 page = option_menu(
                     menu_title=None,
                     options=page_options,
-                    icons=["house", "wallet", "shield-check", "calculator", "database-check"],
+                    icons=["house", "wallet", "shield-check", "calculator", "database-check", "robot"],
                     default_index=active_page_index,
                     key="main_nav_option_menu",
                     orientation="vertical",
@@ -12750,6 +12997,15 @@ def main() -> None:
                 f"Simulator unavailable: {_sim_exc}",
                 f"הסימולטור אינו זמין: {_sim_exc}",
             ))
+
+    elif page == page_chat:
+        try:
+            render_ai_chat_page(
+                tr=tr, df=df, web_app_url=web_url_clean, token=api_token,
+                language=language, is_dark=is_dark, is_mobile=is_mobile,
+            )
+        except Exception as _chat_exc:
+            st.error(tr(f"AI Chat unavailable: {_chat_exc}", f"צ'אט AI אינו זמין: {_chat_exc}"))
 
     else:
         st.markdown(f"### {tr('Data Quality', 'בקרת נתונים ואיכות')}")
