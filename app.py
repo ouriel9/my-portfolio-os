@@ -4702,6 +4702,26 @@ def _normalize_manual_deposit_rows(rows: List[Dict[str, object]], default_platfo
 
 def load_local_settings() -> Dict[str, str]:
     if not LOCAL_SETTINGS_FILE.exists():
+        # Streamlit Community Cloud has no local config file (it holds the API
+        # token and is gitignored). Fall back to st.secrets, configured in the
+        # app's dashboard → Settings → Secrets.
+        try:
+            import streamlit as _st
+            sec = _st.secrets
+            if ("api_token" in sec) or ("web_app_url" in sec):
+                return {
+                    "web_app_url": _clean(sec.get("web_app_url", DEFAULT_WEB_APP_URL)) or DEFAULT_WEB_APP_URL,
+                    "api_token": _clean(sec.get("api_token", "")),
+                    "spreadsheet_ref": _clean(sec.get("spreadsheet_ref", "")),
+                    "worksheet_name": _clean(sec.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
+                    "service_account_file": "",
+                    "language": _clean(sec.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
+                    "theme_mode": _normalize_theme_mode(sec.get("theme_mode", THEME_SYSTEM)),
+                    "demo_mode": str(sec.get("demo_mode", "false")).lower() == "true",
+                    "followed_symbols": _clean(sec.get("followed_symbols", "")),
+                }
+        except Exception:
+            pass
         return {}
     try:
         raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
