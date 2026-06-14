@@ -10731,20 +10731,11 @@ def main() -> None:
     _accent = _page_accents.get(active_page_id, "#6366f1")
     _accent_dark = _page_accents_dark.get(active_page_id, "#1e40af")
 
-    # #12 — soften the HERO only. The page accents stay vivid for borders,
-    # pills and KPI bars (where saturation reads as "active"), but the large
-    # hero banner felt over-saturated. Desaturate ~25% (HSV) for a more
-    # premium, less "candy" gradient. Applied ONLY to the hero surface.
-    def _desat_hex(_h, _sat=0.74, _val=0.84):
-        import colorsys
-        _h = _h.lstrip("#")
-        _r, _g, _b = (int(_h[0:2], 16) / 255, int(_h[2:4], 16) / 255, int(_h[4:6], 16) / 255)
-        _hh, _s, _v = colorsys.rgb_to_hsv(_r, _g, _b)
-        _r, _g, _b = colorsys.hsv_to_rgb(_hh, _s * _sat, min(1.0, _v * _val))
-        return "#%02x%02x%02x" % (round(_r * 255), round(_g * 255), round(_b * 255))
-
-    _hero_accent = _desat_hex(_accent)
-    _hero_accent_dark = _desat_hex(_accent_dark)
+    # Per user preference: the HERO uses the VIVID page accents (brighter is
+    # the look they want) — no desaturation. A light scrim below keeps the
+    # white title legible on the lighter accents without dulling the colour.
+    _hero_accent = _accent
+    _hero_accent_dark = _accent_dark
     st.markdown(
         f"""
         <style id="pp-page-accent">
@@ -10754,8 +10745,8 @@ def main() -> None:
                                       100% {{ transform: translateX(220%) rotate(12deg); opacity:0; }} }}
             .app-header-wrap {{
                 background:
-                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.16) 0%, rgba(255,255,255,0) 42%),
-                    linear-gradient(180deg, rgba(15,23,42,.16) 0%, rgba(15,23,42,.34) 100%),
+                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.24) 0%, rgba(255,255,255,0) 42%),
+                    linear-gradient(180deg, rgba(15,23,42,.05) 0%, rgba(15,23,42,.14) 100%),
                     linear-gradient(118deg, {_hero_accent_dark} 0%, {_hero_accent} 60%, {_hero_accent}e6 100%) !important;
                 border: none !important;
                 border-top: none !important;
@@ -10996,10 +10987,22 @@ def main() -> None:
     # with no clip, tabs never shrink.
     _crit_css += (
         "html body [data-baseweb='tab-list']{overflow-x:auto !important;overflow-y:hidden !important;"
-        "scrollbar-width:none !important;-webkit-overflow-scrolling:touch !important;flex-wrap:nowrap !important;}"
+        "scrollbar-width:none !important;-webkit-overflow-scrolling:touch !important;flex-wrap:nowrap !important;gap:6px !important;}"
         "html body [data-baseweb='tab-list']::-webkit-scrollbar{display:none !important;}"
-        "html body [data-baseweb='tab-list'] [data-baseweb='tab']{flex:0 0 auto !important;white-space:nowrap !important;}"
+        # Breathing room between tabs (they were touching on desktop).
+        "html body [data-baseweb='tab-list'] [data-baseweb='tab']{flex:0 0 auto !important;white-space:nowrap !important;margin-right:2px !important;padding-left:14px !important;padding-right:14px !important;}"
         "html body [data-baseweb='tab-list'] [data-baseweb='tab'] p{white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}"
+        # Dead-space fix: style-only st.markdown injections (pp-crit-fixes,
+        # pp-page-accent, etc.) and zero-height component iframes render as
+        # height-0 element containers that STILL consume the vertical-block gap.
+        # After visiting the chat page ~17 of them stack above the hero → a tall
+        # dead gap. Collapse them (a <style> keeps applying even under
+        # display:none; the component JS keeps running). This zeroes the gap.
+        "html body [data-testid='stMain'] [data-testid='stElementContainer']:has(> [data-testid='stMarkdownContainer'] style),"
+        "html body [data-testid='stMain'] [data-testid='stElementContainer']:has(> [data-testid='stMarkdownContainer'] > style),"
+        "html body [data-testid='stMain'] [data-testid='stElementContainer']:has(style),"
+        "html body [data-testid='stMain'] [data-testid='stElementContainer']:has(> [data-testid='stIFrame'] iframe[height='0']),"
+        "html body [data-testid='stMain'] [data-testid='stElementContainer']:has(> iframe[height='0']){display:none !important;}"
     )
     # #8 — commit to one rule: indigo is the GLOBAL selection primary; section
     # colours stay decorative (hero only). So every selected radio gets an
