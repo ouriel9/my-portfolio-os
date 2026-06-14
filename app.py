@@ -10780,10 +10780,18 @@ def main() -> None:
         "box-shadow:0 1px 3px rgba(15,23,42,.10) !important;}"
         "html body [data-testid='stMetricLabel'],html body [data-testid='stMetricLabel'] *{color:" + _mc_lbl + " !important;}"
     )
+    # Accent on the START side. The metric container is dir:ltr even in Hebrew,
+    # so border-inline-start would wrongly sit left in HE — use explicit physical
+    # sides per language (verified). border:1px above keeps the other sides thin.
     if language == LANG_HE:
-        _crit_css += "html body [data-testid='stMetric']{border-right:4px solid #4f46e5 !important;}"
+        _crit_css += "html body [data-testid='stMetric']{border-right:4px solid #4f46e5 !important;border-left-width:1px !important;}"
     else:
-        _crit_css += "html body [data-testid='stMetric']{border-left:4px solid #4f46e5 !important;}"
+        _crit_css += "html body [data-testid='stMetric']{border-left:4px solid #4f46e5 !important;border-right-width:1px !important;}"
+    # #5 badge: positive delta pill at WCAG AA (was green-on-lavender 3.78:1)
+    _bdg_bg = "rgba(34,197,94,.20)" if is_dark else "#dcfce7"
+    _bdg_tx = "#86efac" if is_dark else "#15803d"
+    _crit_css += ("html body [data-testid='stMetricDelta']{background:" + _bdg_bg + " !important;border-radius:8px !important;padding:1px 7px !important;}"
+                  "html body [data-testid='stMetricDelta'] *{color:" + _bdg_tx + " !important;}")
     if is_mobile:
         # #1: styling for the per-row mobile cards (_render_df_mobile_cards)
         _cbg = "#1f2937" if is_dark else "#ffffff"
