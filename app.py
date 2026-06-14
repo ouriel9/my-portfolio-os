@@ -4374,6 +4374,23 @@ def _usd_ils_rate(default: float = 3.3) -> float:
     return default
 
 
+def _smart_qty(v) -> str:
+    """Format a quantity sensibly: whole counts show no decimals; fractional
+    (crypto) shows up to 6 decimals with trailing zeros trimmed. Replaces the
+    "6.00000000" / "0.43825404" padding that read like a bug in finance tables."""
+    try:
+        f = float(v)
+    except Exception:
+        return ""
+    if f != f or f in (float("inf"), float("-inf")):  # NaN / inf — int(NaN) raises ValueError
+        return ""
+    if f == 0:
+        return "0"
+    if f == int(f) or abs(f) >= 100:
+        return f"{f:,.0f}"
+    return f"{f:,.6f}".rstrip("0").rstrip(".")
+
+
 def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None, help_text: Optional[str] = None) -> str:
     cleaned = sorted({_clean(v) for v in options if _clean(v)})
     tr_local = tr_fn or (lambda en, he: he)
@@ -9897,7 +9914,7 @@ def main() -> None:
         _early_lang = _early_cfg.get("language", LANG_HE)
     except Exception:
         pass
-    _page_title = "Portfolio Manager" if _early_lang == LANG_EN else "מערכת ניהול תיק"
+    _page_title = "Portfolio OS"
     st.set_page_config(page_title=_page_title, page_icon="📈", layout="wide", initial_sidebar_state="auto")
 
     # ══════════════════════════════════════════════════════════════════════
@@ -10680,11 +10697,40 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Design-critique corrective CSS (addresses critique #4/#5/#9/#11) ──
+    _crit_css = (
+        "<style id='pp-crit-fixes'>"
+        # #9 hero: trim vertical waste (smaller padding + title, less top gap)
+        "html body .app-header-wrap{padding:.62rem 1.1rem .56rem 1.1rem !important;border-radius:0 0 18px 18px !important;}"
+        "html body .app-main-title{font-size:1.5rem !important;}"
+        "html body .app-header-wrap .app-logo-icon svg{width:40px !important;height:40px !important;}"
+        # #11 content not hidden behind the sticky nav
+        ".main .block-container{scroll-margin-top:84px !important;}"
+        # #5 sidebar fully opaque so dashboard text doesn't bleed through the drawer
+        "[data-testid='stSidebar']{background:%s !important;backdrop-filter:none !important;}" % ("#0f172a" if is_dark else "#ffffff")
+    )
+    if is_mobile:
+        # dim the page behind the open mobile drawer
+        _crit_css += "[data-testid='stSidebar']{box-shadow:0 0 0 100vmax rgba(0,0,0,.5) !important;}"
+    if is_dark:
+        # #4 dark-mode body/caption contrast (push muted text toward WCAG AA)
+        _crit_css += (
+            "[data-testid='stCaptionContainer'],[data-testid='stCaptionContainer'] *,"
+            "[data-testid='stMarkdownContainer'] p,.stMarkdown p{color:#cbd5e1 !important;}"
+            "[data-testid='stMetricLabel'],[data-testid='stMetricLabel'] *{color:#e2e8f0 !important;}"
+        )
+    if language == LANG_HE:
+        # #7 RTL: KPI accent bar belongs on the RIGHT (start side) in Hebrew
+        _crit_css += ("[data-testid='stMetric']{border-left:none !important;"
+                      "border-right:4px solid #4f46e5 !important;}")
+    _crit_css += "</style>"
+    st.markdown(_crit_css, unsafe_allow_html=True)
+
     st.markdown(
         f"""<div class='app-header-wrap'>
   <div class='app-logo-row'>
     <div class='app-logo-text'>
-      <h1 class='app-main-title'>{tr('Portfolio OS', 'מערכת ניהול תיק')}</h1>
+      <h1 class='app-main-title'>Portfolio OS</h1>
       <div class='app-logo-badge'>{tr('Smart Portfolio Management', 'ניהול השקעות חכם')}</div>
     </div>
     <div class='app-logo-icon'>
@@ -11168,7 +11214,7 @@ def main() -> None:
 
                 if is_mobile:
                     kpi_r1 = st.columns(2)
-                    kpi_r1[0].metric(tr("Total Value", "שווי כולל"), _tv_txt, f"{_tp:,.0f} ₪")
+                    kpi_r1[0].metric(tr("Total Value", "שווי כולל"), _tv_txt)
                     kpi_r1[1].metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     kpi_r2 = st.columns(2)
                     kpi_r2[0].metric(tr("Return", "תשואה כוללת"), _tr_txt)
@@ -11179,7 +11225,7 @@ def main() -> None:
                     )
                 else:
                     kpi_cols = st.columns(4)
-                    kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), _tv_txt, f"{_tp:,.0f} ₪")
+                    kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), _tv_txt)
                     kpi_cols[1].metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), _tr_txt)
                     kpi_cols[3].metric(
@@ -11284,12 +11330,13 @@ def main() -> None:
                     color_discrete_map={"Profit": "#16a34a", "Loss": "#dc2626"},
                     title=tr("Net P/L by Asset", "רווח/הפסד לפי נכס"),
                     template=template,
-                    labels={"Net_PnL_ILS": tr("Net P/L (ILS)", "רווח/הפסד (₪)"), "_color": ""},
+                    labels={"Net_PnL_ILS": tr("Net P/L (ILS)", "רווח/הפסד (₪)"), "Ticker": tr("Ticker", "טיקר"), "_color": ""},
                 )
                 fig_bar.update_layout(
                     showlegend=False,
                     yaxis_tickformat=",.0f",
                     hovermode="x unified",
+                    xaxis_title=tr("Ticker", "טיקר"),
                 )
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
@@ -11870,7 +11917,7 @@ def main() -> None:
                         if any(t in col_s for t in ["Yield", "Return", "תשואה"]):
                             fmt_map[col] = "{:.2%}"
                         elif "Qty" in col_s or "כמות" in col_s:
-                            fmt_map[col] = "{:.8f}"
+                            fmt_map[col] = _smart_qty
                         elif any(token in col_s for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
                             fmt_map[col] = "{:,.0f}"
                     report_styled = localized_df.style
@@ -12131,6 +12178,7 @@ def main() -> None:
                         ticker_options,
                         default=[],
                         key="dashboard_transactions_ticker_filter",
+                        placeholder=tr("Choose tickers…", "בחר טיקרים…"),
                     )
                     if chosen_tickers:
                         selected_set = {t.upper() for t in chosen_tickers}
@@ -12489,9 +12537,19 @@ def main() -> None:
             )
             fifo_view = fifo_view.drop(columns=[avg_price_currency_col], errors="ignore")
             realized_col = tr("Realized P/L (ILS)", "רווח ממומש (₪)")
+            # #1 mobile: the full 5-col FIFO table overflows 390px and silently
+            # clips columns. Keep only the essentials on phones so nothing is cut.
+            if is_mobile:
+                _fifo_keep = [tr("Ticker", "טיקר"),
+                              tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"),
+                              tr("Open Cost (ILS)", "עלות פתוחה (₪)"),
+                              realized_col]
+                _fifo_keep = [c for c in _fifo_keep if c in fifo_view.columns]
+                if _fifo_keep:
+                    fifo_view = fifo_view[_fifo_keep]
             fifo_styled = fifo_view.style.format(
                 {
-                    tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): "{:.8f}",
+                    tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): _smart_qty,
                     tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
                     realized_col: "₪{:,.0f}",
                 }
@@ -12692,7 +12750,7 @@ def main() -> None:
             lambda r: _format_currency_value(float(r["Current_Asset_Value_Display"]), r.get("Origin_Currency", "")),
             axis=1,
         )
-        status_filter = st.multiselect(tr("Status filter", "סינון סטטוס"), sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[])
+        status_filter = st.multiselect(tr("Status filter", "סינון סטטוס"), sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[], placeholder=tr("Choose statuses…", "בחר סטטוסים…"))
         if status_filter:
             trade_view = trade_view[trade_view["Status"].isin(status_filter)]
         preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Current_Location", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_Display", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
