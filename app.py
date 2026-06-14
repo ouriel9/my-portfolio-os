@@ -3430,7 +3430,8 @@ def inject_client_fixes() -> None:
             rootWin._pmTimerBranding = rootWin.setInterval(removeBranding, 1200);
             rootWin._pmTimerSidebar = rootWin.setInterval(fixSidebarLeft, 800);
             rootWin._pmTimerToolbar = rootWin.setInterval(forceToolbarVisible, 1500);
-            rootWin._pmTimerUndef = rootWin.setInterval(removeUndefinedText, 600);
+            rootWin._pmTimerUndef = rootWin.setInterval(removeUndefinedText, 200);
+            rootWin.addEventListener('scroll', removeUndefinedText, {passive:true, capture:true});
             rootWin._pmTimerHide = window.setInterval(function () {
               injectHideStyle(document);
               if (rootDoc !== document) injectHideStyle(rootDoc);
@@ -10765,12 +10766,24 @@ def main() -> None:
         _crit_css += (
             "[data-testid='stCaptionContainer'],[data-testid='stCaptionContainer'] *,"
             "[data-testid='stMarkdownContainer'] p,.stMarkdown p{color:#cbd5e1 !important;}"
-            "[data-testid='stMetricLabel'],[data-testid='stMetricLabel'] *{color:#e2e8f0 !important;}"
         )
+    # ── Metric (KPI) cards: real card↔background contrast (#3), 4px accent (#6)
+    #    on the correct side (#7 RTL), darker label (#9). Uses html-body-prefixed
+    #    selectors so it OVERRIDES style_metric_cards (which my earlier 1-attr
+    #    selector lost to — the 8px left stripe never moved).
+    _mc_bg = "#232e47" if is_dark else "#ffffff"
+    _mc_bd = "#2e3a55" if is_dark else "#e5e7ef"
+    _mc_lbl = "#e2e8f0" if is_dark else "#5b5c63"
+    _crit_css += (
+        "html body [data-testid='stMetric']{background:" + _mc_bg + " !important;"
+        "border:1px solid " + _mc_bd + " !important;border-radius:14px !important;"
+        "box-shadow:0 1px 3px rgba(15,23,42,.10) !important;}"
+        "html body [data-testid='stMetricLabel'],html body [data-testid='stMetricLabel'] *{color:" + _mc_lbl + " !important;}"
+    )
     if language == LANG_HE:
-        # #7 RTL: KPI accent bar belongs on the RIGHT (start side) in Hebrew
-        _crit_css += ("[data-testid='stMetric']{border-left:none !important;"
-                      "border-right:4px solid #4f46e5 !important;}")
+        _crit_css += "html body [data-testid='stMetric']{border-right:4px solid #4f46e5 !important;}"
+    else:
+        _crit_css += "html body [data-testid='stMetric']{border-left:4px solid #4f46e5 !important;}"
     if is_mobile:
         # #1: styling for the per-row mobile cards (_render_df_mobile_cards)
         _cbg = "#1f2937" if is_dark else "#ffffff"
