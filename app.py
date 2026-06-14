@@ -4391,6 +4391,52 @@ def _smart_qty(v) -> str:
     return f"{f:,.6f}".rstrip("0").rstrip(".")
 
 
+def _fmt_cell(v, f) -> str:
+    """Apply a Styler-style format spec (callable or '{:...}' string) to one value."""
+    if v is None or (isinstance(v, float) and v != v):
+        return ""
+    try:
+        if callable(f):
+            return f(v)
+        if isinstance(f, str):
+            return f.format(v)
+    except Exception:
+        pass
+    return str(v)
+
+
+def _esc(s: str) -> str:
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _render_df_mobile_cards(df, fmt_map=None, signed_cols=()) -> None:
+    """Render a wide DataFrame as one compact 'key: value' card per row — so on a
+    phone NOTHING gets clipped off the edge (the critic's #1 fix). Used instead of
+    a horizontally-overflowing st.dataframe on mobile."""
+    fmt_map = fmt_map or {}
+    cols = [c for c in df.columns]
+    if not cols:
+        return
+    title_col = cols[0]
+    signed = set(signed_cols)
+    parts = ['<div class="pp-mcards">']
+    for _, r in df.iterrows():
+        parts.append('<div class="pp-mcard"><div class="pp-mcard-t">%s</div>' % _esc(_fmt_cell(r[title_col], fmt_map.get(title_col)) or r[title_col]))
+        for c in cols[1:]:
+            v = r[c]
+            vs = _fmt_cell(v, fmt_map.get(c))
+            cls = ""
+            if c in signed:
+                try:
+                    cls = " pos" if float(v) >= 0 else " neg"
+                except Exception:
+                    cls = ""
+            parts.append('<div class="pp-mrow"><span class="k">%s</span><span class="v%s">%s</span></div>' % (_esc(c), cls, _esc(vs)))
+        parts.append('</div>')
+    parts.append('</div>')
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
 def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None, help_text: Optional[str] = None) -> str:
     cleaned = sorted({_clean(v) for v in options if _clean(v)})
     tr_local = tr_fn or (lambda en, he: he)
@@ -10701,9 +10747,11 @@ def main() -> None:
     _crit_css = (
         "<style id='pp-crit-fixes'>"
         # #9 hero: trim vertical waste (smaller padding + title, less top gap)
-        "html body .app-header-wrap{padding:.62rem 1.1rem .56rem 1.1rem !important;border-radius:0 0 18px 18px !important;}"
+        "html body .app-header-wrap{padding:.62rem 1.1rem .56rem 1.1rem !important;border-radius:0 0 18px 18px !important;margin-top:0 !important;}"
         "html body .app-main-title{font-size:1.5rem !important;}"
         "html body .app-header-wrap .app-logo-icon svg{width:40px !important;height:40px !important;}"
+        # #9 kill the empty band above the hero (esp. dark/English)
+        ".main .block-container,[data-testid='stMainBlockContainer']{padding-top:.7rem !important;}"
         # #11 content not hidden behind the sticky nav
         ".main .block-container{scroll-margin-top:84px !important;}"
         # #5 sidebar fully opaque so dashboard text doesn't bleed through the drawer
@@ -10723,6 +10771,23 @@ def main() -> None:
         # #7 RTL: KPI accent bar belongs on the RIGHT (start side) in Hebrew
         _crit_css += ("[data-testid='stMetric']{border-left:none !important;"
                       "border-right:4px solid #4f46e5 !important;}")
+    if is_mobile:
+        # #1: styling for the per-row mobile cards (_render_df_mobile_cards)
+        _cbg = "#1f2937" if is_dark else "#ffffff"
+        _cbd = "rgba(255,255,255,.09)" if is_dark else "#e6e9f0"
+        _ctt = "#f1f5f9" if is_dark else "#0f172a"
+        _crb = "rgba(255,255,255,.07)" if is_dark else "#f1f5f9"
+        _pos = "#4ade80" if is_dark else "#16a34a"
+        _neg = "#f87171" if is_dark else "#dc2626"
+        _crit_css += (
+            ".pp-mcards{display:flex;flex-direction:column;gap:10px;margin:6px 0;}"
+            ".pp-mcard{border:1px solid " + _cbd + ";border-radius:14px;padding:11px 14px;background:" + _cbg + ";}"
+            ".pp-mcard-t{font-weight:800;font-size:1.02rem;margin-bottom:6px;color:" + _ctt + ";unicode-bidi:plaintext;}"
+            ".pp-mrow{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:.9rem;border-top:1px solid " + _crb + ";}"
+            ".pp-mrow:first-of-type{border-top:none;}.pp-mrow .k{opacity:.72;}"
+            ".pp-mrow .v{font-weight:700;unicode-bidi:plaintext;text-align:start;}"
+            ".pp-mrow .v.pos{color:" + _pos + ";}.pp-mrow .v.neg{color:" + _neg + ";}"
+        )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
 
@@ -11920,13 +11985,27 @@ def main() -> None:
                             fmt_map[col] = _smart_qty
                         elif any(token in col_s for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
                             fmt_map[col] = "{:,.0f}"
+                        else:
+                            # Any other numeric column (e.g. ETF units, estimated
+                            # BTC/ETH/SOL qty in Crypto Concentration) → trim trailing
+                            # zeros so "322.000000" shows as "322". Fixes #2 reaching
+                            # the report tables that slipped the keyword match.
+                            try:
+                                if pd.api.types.is_numeric_dtype(localized_df[col]):
+                                    fmt_map[col] = _smart_qty
+                            except Exception:
+                                pass
                     report_styled = localized_df.style
                     if fmt_map:
                         report_styled = report_styled.format(fmt_map)
                     signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "תשואה", "רווח"])]
-                    if signed_cols:
-                        report_styled = _apply_signed_color(report_styled, signed_cols)
-                    _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
+                    if is_mobile:
+                        # #1: render as cards so wide report tables never clip on a phone
+                        _render_df_mobile_cards(localized_df, fmt_map, signed_cols)
+                    else:
+                        if signed_cols:
+                            report_styled = _apply_signed_color(report_styled, signed_cols)
+                        _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
