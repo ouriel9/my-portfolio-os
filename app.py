@@ -1054,17 +1054,37 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         transition: transform 0.42s cubic-bezier(0.16, 1, 0.3, 1),
                     opacity  0.30s ease-out !important;
     }}
-    /* Collapsed: spring off-screen LEFT */
-    section[data-testid="stSidebar"][aria-expanded="false"] {{
+    /* Collapsed: spring off-screen LEFT. The full hide (width/shadow/sliver)
+       is enforced by the [data-pp-collapsed="true"] rule below, which our JS
+       stamps reliably (aria-expanded is stripped for a11y). */
+    section[data-testid="stSidebar"][aria-expanded="false"],
+    section[data-testid="stSidebar"][data-pp-collapsed="true"] {{
         transform: translateX(-100%) !important;
         opacity: 0 !important;
         pointer-events: none !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        max-width: 0 !important;
+        margin: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        overflow: hidden !important;
+        visibility: hidden !important;
+    }}
+    section[data-testid="stSidebar"][data-pp-collapsed="true"] > div:first-child,
+    section[data-testid="stSidebar"][data-pp-collapsed="true"] [data-testid="stSidebarContent"],
+    section[data-testid="stSidebar"][data-pp-collapsed="true"] > div {{
+        box-shadow: none !important;
+        border: 0 !important;
+        display: none !important;
     }}
     /* Expanded: spring into view */
-    section[data-testid="stSidebar"][aria-expanded="true"] {{
+    section[data-testid="stSidebar"][aria-expanded="true"],
+    section[data-testid="stSidebar"][data-pp-collapsed="false"] {{
         transform: translateX(0) !important;
         opacity: 1 !important;
         pointer-events: auto !important;
+        visibility: visible !important;
     }}
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
@@ -1460,7 +1480,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             left: 0 !important;
             right: auto !important;
         }}
-        [data-testid="stSidebar"][aria-expanded="false"] {{
+        [data-testid="stSidebar"][aria-expanded="false"],
+        [data-testid="stSidebar"][data-pp-collapsed="true"] {{
             width: 0 !important;
             min-width: 0 !important;
             max-width: 0 !important;
@@ -1470,8 +1491,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             box-shadow: none !important;
             overflow: hidden !important;
             opacity: 0 !important;
+            transform: translateX(-100%) !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
         }}
-        [data-testid="stSidebar"][aria-expanded="true"] {{
+        [data-testid="stSidebar"][aria-expanded="true"],
+        [data-testid="stSidebar"][data-pp-collapsed="false"] {{
             width: 280px !important;
             min-width: 280px !important;
             max-width: 82vw !important;
@@ -1494,11 +1519,15 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             animation: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"] {{
+        [data-testid="stSidebar"][data-pp-collapsed="false"] > div:first-child,
+        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"],
+        [data-testid="stSidebar"][data-pp-collapsed="false"] [data-testid="stSidebarContent"] {{
             border-left: 1px solid #eef2f7 !important;
         }}
         [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
+        [data-testid="stSidebar"][data-pp-collapsed="true"] > div:first-child,
+        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"],
+        [data-testid="stSidebar"][data-pp-collapsed="true"] [data-testid="stSidebarContent"] {{
             border: 0 !important;
             background: transparent !important;
             background-color: transparent !important;
@@ -3278,14 +3307,23 @@ def inject_client_fixes() -> None:
                 '              opacity 0.30s ease-out !important;',
                 '}',
                 'section[data-testid="stSidebar"][aria-expanded="false"],',
-                '[data-testid="stSidebar"][aria-expanded="false"] {',
+                'section[data-testid="stSidebar"][data-pp-collapsed="true"],',
+                '[data-testid="stSidebar"][aria-expanded="false"],',
+                '[data-testid="stSidebar"][data-pp-collapsed="true"] {',
                 '  transform: translateX(-100%) !important;',
                 '  opacity: 0 !important;',
+                '  width: 0 !important; min-width: 0 !important; max-width: 0 !important;',
+                '  border: 0 !important; box-shadow: none !important;',
+                '  overflow: hidden !important; visibility: hidden !important;',
+                '  pointer-events: none !important;',
                 '}',
                 'section[data-testid="stSidebar"][aria-expanded="true"],',
-                '[data-testid="stSidebar"][aria-expanded="true"] {',
+                'section[data-testid="stSidebar"][data-pp-collapsed="false"],',
+                '[data-testid="stSidebar"][aria-expanded="true"],',
+                '[data-testid="stSidebar"][data-pp-collapsed="false"] {',
                 '  transform: translateX(0) !important;',
                 '  opacity: 1 !important;',
+                '  visibility: visible !important;',
                 '}',
               ].join('\\n');
               if (pmStyle.textContent !== css) pmStyle.textContent = css;
@@ -3422,11 +3460,43 @@ def inject_client_fixes() -> None:
           //    them focusable + labelled (scrollable-region-focusable, serious).
           //  • Main content lacks a landmark → tag role="main" (region).
           // ═══════════════════════════════════════════════════════════
-          function fixA11y() {
+          // Stamp a STABLE data-pp-collapsed attribute from Streamlit's
+          // aria-expanded, then strip aria-expanded (it's invalid on the
+          // <section> role → aria-allowed-attr). This keeps axe at 0 AND
+          // gives the CSS a reliable hook to fully hide the collapsed
+          // sidebar (no leftover sliver/shadow). A dedicated observer below
+          // re-syncs on every toggle.
+          function syncSidebarCollapsed() {
             try {
               rootDoc.querySelectorAll('section[data-testid="stSidebar"]').forEach(function(e){
-                if (e.hasAttribute('aria-expanded')) e.removeAttribute('aria-expanded');
+                var ae = e.getAttribute('aria-expanded');
+                if (ae !== null) {
+                  e.setAttribute('data-pp-collapsed', ae === 'false' ? 'true' : 'false');
+                  e.removeAttribute('aria-expanded');
+                }
               });
+            } catch(e){}
+          }
+          function watchSidebarToggle() {
+            if (rootDoc.__ppSbWatch) return;
+            var sb = rootDoc.querySelector('section[data-testid="stSidebar"]');
+            if (!sb) return;
+            rootDoc.__ppSbWatch = true;
+            try {
+              var mo = new MutationObserver(syncSidebarCollapsed);
+              // Watch the sidebar AND its parent (Streamlit sometimes carries
+              // the expanded flag on the container) for aria-expanded only —
+              // narrow filter, no loop (removing aria-expanded re-fires but
+              // reads null and no-ops).
+              mo.observe(sb, { attributes: true, attributeFilter: ['aria-expanded'] });
+              if (sb.parentElement) mo.observe(sb.parentElement, { attributes: true, attributeFilter: ['aria-expanded'], subtree: true });
+            } catch(e){}
+          }
+
+          function fixA11y() {
+            try {
+              syncSidebarCollapsed();
+              watchSidebarToggle();
               rootDoc.querySelectorAll('[data-testid="stTable"] > div,[data-testid="stDataFrame"] div,[data-testid="stDataFrameResizable"]').forEach(function(e){
                 if (e.scrollWidth > e.clientWidth + 3 && !e.getAttribute('tabindex')) {
                   e.setAttribute('tabindex','0'); e.setAttribute('role','region');
