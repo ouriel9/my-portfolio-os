@@ -11301,9 +11301,11 @@ def main() -> None:
                 if is_mobile:
                     kpi_r1 = st.columns(2)
                     kpi_r1[0].metric(tr("Total Value", "שווי כולל"), _tv_txt)
-                    kpi_r1[1].metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), _tp_txt)
+                    with kpi_r1[1].container(key="kpi_pnl"):
+                        st.metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     kpi_r2 = st.columns(2)
-                    kpi_r2[0].metric(tr("Return", "תשואה כוללת"), _tr_txt)
+                    with kpi_r2[0].container(key="kpi_ret"):
+                        st.metric(tr("Return", "תשואה כוללת"), _tr_txt)
                     kpi_r2[1].metric(
                         tr("Closed Positions", "פוזיציות סגורות"),
                         str(len(closed_trades)),
@@ -11312,15 +11314,25 @@ def main() -> None:
                 else:
                     kpi_cols = st.columns(4)
                     kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), _tv_txt)
-                    kpi_cols[1].metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), _tp_txt)
-                    kpi_cols[2].metric(tr("Total Return", "תשואה כוללת"), _tr_txt)
+                    with kpi_cols[1].container(key="kpi_pnl"):
+                        st.metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), _tp_txt)
+                    with kpi_cols[2].container(key="kpi_ret"):
+                        st.metric(tr("Total Return", "תשואה כוללת"), _tr_txt)
                     kpi_cols[3].metric(
                         tr("Closed Positions", "פוזיציות סגורות"),
                         str(len(closed_trades)),
                         f"{len(open_trades)} {tr('open', 'פתוחות')}",
                     )
                 style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
-                pass  # live prices via fragment (no timestamp caption)
+                # #4 finance convention: P&L / Return value reads RED when negative,
+                # GREEN when positive (pre-attentive — not via reading the minus sign).
+                _pnl_c = "#dc2626" if _tp < 0 else "#16a34a"
+                _ret_c = "#dc2626" if _tr_val < 0 else "#16a34a"
+                st.markdown(
+                    "<style>.st-key-kpi_pnl [data-testid='stMetricValue'],.st-key-kpi_pnl [data-testid='stMetricValue'] *{color:" + _pnl_c + " !important;}"
+                    ".st-key-kpi_ret [data-testid='stMetricValue'],.st-key-kpi_ret [data-testid='stMetricValue'] *{color:" + _ret_c + " !important;}</style>",
+                    unsafe_allow_html=True,
+                )
 
             _kpi_live_fragment()
 
