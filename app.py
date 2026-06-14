@@ -11003,47 +11003,14 @@ def main() -> None:
                 st.rerun()
         _portfolio_sync_watcher()
 
-    # ── Live price refresh (non-blocking) ───────────────────────────────
-    # Prices are refreshed every 30s by the dashboard fragment.
-    # The main render uses stored values so the page loads instantly.
-    # If a fresh fetch is already cached (TTL=120s still valid), use it.
-    _price_status_placeholder = st.empty()
-    if source_mode != "demo":
-        try:
-            tickers_tuple = tuple(sorted(
-                t for t in df["Ticker"].dropna().unique() if _clean(t)
-            )) if "Ticker" in df.columns else ()
-            if tickers_tuple:
-                with _price_status_placeholder:
-                    with st.spinner(tr("🔄 Fetching live prices…", "🔄 טוען שערים חיים…")):
-                        cached_prices = fetch_prices(tickers_tuple)
-                if cached_prices:
-                    usd_ils_val = _usd_ils_rate()
-                    has_status = "Status" in df.columns
-                    if has_status:
-                        status_norm = df["Status"].map(_clean).str.lower()
-                        closed_values = CLOSED_STATUS_VALUES
-                        open_mask = ~status_norm.isin(closed_values)
-                    else:
-                        open_mask = pd.Series([True] * len(df), index=df.index)
-                    for idx in df.index[open_mask]:
-                        row = df.loc[idx]
-                        ticker = _clean(str(row.get("Ticker", "")))
-                        price = cached_prices.get(ticker, 0.0) if ticker else 0.0
-                        if price > 0:
-                            qty = float(_num(row.get("Quantity", 0)))
-                            if abs(qty) > 1e-12:
-                                # Use yfinance quote currency — NOT Origin_Currency.
-                                # BTC on Bit2C has Origin_Currency=ILS but the yfinance
-                                # BTC-USD price is always in USD → must apply fx rate.
-                                yf_cur = _yf_price_currency(ticker.upper())
-                                fx = usd_ils_val if yf_cur == "USD" else 1.0
-                                df.at[idx, "Current_Value_ILS"] = qty * price * fx
-        except Exception:
-            pass  # Fall back to stored values silently
-        finally:
-            _price_status_placeholder.empty()  # Remove spinner when done
-
+    # ── INSTANT PAINT ───────────────────────────────────────────────────
+    # Every page now renders immediately from the STORED values already in df
+    # (synced from the sheet, refreshed in the background every few minutes).
+    # The old code did a SYNCHRONOUS yfinance fetch_prices() here — wrapped in
+    # a "🔄 Fetching live prices…" spinner — on EVERY page load/switch, which
+    # blocked the paint on every cache miss. It's removed: live values are kept
+    # current by the dashboard's KPI fragment (run_every≈20s, fetch_live_prices)
+    # and by the background sheet sync, neither of which blocks rendering.
     core = prepare_core_views(df)
     trades = core["trades"]
     open_trades = core["open_trades"].copy()
