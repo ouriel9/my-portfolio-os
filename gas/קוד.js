@@ -2373,8 +2373,25 @@ function pollTelegram_() {
   return resp.result.length;
 }
 
+// Keep the Streamlit Community Cloud app WARM so the phone opens instantly
+// instead of waiting ~18s for a cold-start. Pings the app subdomain every
+// ~9 min (rides the 1-min poll trigger). Hitting the subdomain keeps the
+// app container running even if the request is auth-redirected.
+function keepStreamlitAwake_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var url = props.getProperty("STREAMLIT_URL") || "https://djt7ecnaumycu5zame4xnc.streamlit.app/";
+    var last = parseInt(props.getProperty("_KEEPALIVE_TS") || "0", 10) || 0;
+    var now = Date.now();
+    if (now - last < 9 * 60 * 1000) return; // throttle to ~every 9 minutes
+    props.setProperty("_KEEPALIVE_TS", String(now));
+    UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: false });
+    UrlFetchApp.fetch(url.replace(/\/+$/, "") + "/_stcore/health", { muteHttpExceptions: true, followRedirects: false });
+  } catch (e) {}
+}
+
 // Trigger target (non-underscore so it can be selected/run from the editor).
-function pollTelegramTick() { pollTelegram_(); }
+function pollTelegramTick() { pollTelegram_(); try { keepStreamlitAwake_(); } catch (e) {} }
 
 // One-time setup — RUN ONCE FROM THE APPS SCRIPT EDITOR to authorize the bot
 // (UrlFetchApp + triggers). Sets up cloud polling + daily value log. Safe to re-run.
