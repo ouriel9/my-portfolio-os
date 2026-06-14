@@ -1751,20 +1751,25 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-baseweb="radio"] p {{
             white-space: nowrap !important;
             font-size: 11.5px !important;
-            font-weight: 500 !important;
+            font-weight: 600 !important;
             color: {nav_inactive} !important;
             line-height: 1.2 !important;
             text-align: center !important;
             margin: 0 !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            max-width: 100% !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked) {{
             background: #4f46e5 !important;
         }}
+        /* Active pill keeps the SAME weight as inactive (#1) so it doesn't grow
+           and clip into the neighbour pill — only colour changes. */
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"]:has(input:checked) p {{
             color: #ffffff !important;
-            font-weight: 700 !important;
+            font-weight: 600 !important;
         }}
         /* ── KPI metrics: force 2 columns side-by-side, prevent stacking ── */
         [data-testid="stHorizontalBlock"]:has([data-testid="stMetric"]) {{
@@ -9687,6 +9692,18 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         "background:linear-gradient(135deg,#f59e0b,#d97706)!important;color:#fff!important;border:none!important;}"
         "[data-testid='stChatMessageAvatarUser'],[data-testid='stChatMessageAvatarAssistant']{box-shadow:0 2px 6px rgba(79,70,229,.25)!important;}"
         "[data-testid='stChatInput']{border-radius:18px!important;}[data-testid='stChatInput'] textarea{font-size:15px!important;}"
+        # #3 — theme the bottom chat-input panel in dark mode (Streamlit leaves
+        #      stBottom/stChatInput light by default → a white bar on navy).
+        + (
+            "[data-testid='stBottom'],[data-testid='stBottomBlockContainer'],"
+            "[data-testid='stBottom'] > div{background:#0f172a!important;}"
+            "[data-testid='stChatInput']{background:#1f2937!important;"
+            "border:1px solid rgba(255,255,255,0.10)!important;}"
+            "[data-testid='stChatInput'] textarea{background:transparent!important;color:#e5e7eb!important;}"
+            "[data-testid='stChatInput'] textarea::placeholder{color:#94a3b8!important;}"
+            "[data-testid='stChatInput'] button{color:#e5e7eb!important;}"
+            if is_dark else ""
+        ) +
         ".agent-hero{background:linear-gradient(120deg,#f59e0b,#fbbf24 55%,#fde047);border-radius:16px;padding:14px 18px;"
         "color:#3f2d00;margin-bottom:10px;box-shadow:0 10px 28px -12px rgba(234,179,8,.55);}"
         ".agent-hero h3{margin:0;color:#3f2d00;font-size:1.18rem;font-weight:700;}"
@@ -9702,14 +9719,16 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
     _relay_claude = bool(web_app_url and token)           # phone: relay to the PC (when on)
     claude_ok = _local_claude or _relay_claude
     providers, pmap = [], {}
+    # #10 — clean brand names, no inconsistent emoji (was Gemini ☁️ / Claude 🧠,
+    # which read as swapped/semantically-off against the avatars).
     if has_gemini:
-        providers.append("Gemini ☁️"); pmap["Gemini ☁️"] = "gemini"
+        providers.append("Gemini"); pmap["Gemini"] = "gemini"
     if claude_ok:
-        providers.append("Claude 🧠"); pmap["Claude 🧠"] = "claude"
+        providers.append("Claude"); pmap["Claude"] = "claude"
 
     _eng = " · ".join(providers) if providers else tr("no engine", "אין מנוע")
     st.markdown(
-        f"<div class='agent-hero'><h3>🤖 {tr('AGENT AI', 'AI סוכן')}</h3>"
+        f"<div class='agent-hero'><h3><span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.18rem;vertical-align:-3px;font-feature-settings:'liga' 1;\">smart_toy</span> {tr('AGENT AI', 'AI סוכן')}</h3>"
         f"<p>{tr('Your portfolio agent — full data access, image understanding, analysis & advice', 'סוכן התיק שלך — גישה לכל הנתונים, הבנת תמונות, ניתוח וייעוץ')}"
         f" · {_eng}</p></div>",
         unsafe_allow_html=True,
@@ -10565,22 +10584,12 @@ def main() -> None:
         if active_page_id in ("quality", "chat"):
             _bc_icon, _bc_label = (("database", tr("Data", "נתונים")) if active_page_id == "quality"
                                    else ("smart_toy", tr("AGENT AI", "AI סוכן")))
-            brc1, brc2 = st.columns([4, 1])
-            with brc1:
-                st.markdown(
-                    f"<div style='display:flex;align-items:center;gap:8px;"
-                    f"padding:8px 12px;border-radius:10px;"
-                    f"background:rgba(99,102,241,0.08);"
-                    f"border:1px solid rgba(99,102,241,0.25);"
-                    f"font-weight:600;unicode-bidi:plaintext'>"
-                    f"<span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.15rem;line-height:1;font-feature-settings:'liga' 1;\">{_bc_icon}</span> "
-                    f"{_bc_label}</div>",
-                    unsafe_allow_html=True,
-                )
-            with brc2:
+            # #4/#13 — a single compact back button (the page name already shows
+            # in the hero below, so the old chip was redundant AND its full-width
+            # columns created a ~100px empty gap before the hero).
+            with st.container(key="pp_breadcrumb"):
                 if st.button(
-                    tr("⬅ Back", "⬅ חזור"),
-                    use_container_width=True,
+                    tr("⬅  Back to overview", "⬅  חזרה לסקירה"),
                     key="mobile_page_back",
                 ):
                     st.session_state["active_page_id"] = "dashboard"
@@ -10893,19 +10902,30 @@ def main() -> None:
     if is_mobile:
         # dim the page behind the open mobile drawer
         _crit_css += "[data-testid='stSidebar']{box-shadow:0 0 0 100vmax rgba(0,0,0,.5) !important;}"
+        # #4 — kill the big empty gap between the back-breadcrumb and the hero on
+        # the Data / Agent pages (the breadcrumb container carried excess block
+        # gap + bottom margin, pushing the hero ~115px down).
+        _crit_css += (
+            ".st-key-pp_breadcrumb{margin:0 0 -0.4rem 0 !important;padding:0 !important;gap:0 !important;}"
+            ".st-key-pp_breadcrumb [data-testid='stHorizontalBlock']{margin-bottom:0 !important;}"
+            ".st-key-pp_breadcrumb + div,.st-key-pp_breadcrumb ~ [data-testid='stElementContainer']:first-of-type{margin-top:0 !important;}"
+        )
         # #10 — consistent Material Symbols icon before each nav pill label
         #       (positional ::before; labels themselves are icon-free text).
+        # Scope STRICTLY to the 4-pill nav (a radiogroup with exactly 4 options)
+        # so the icons do NOT leak into other radios (Edit/Delete, Gemini/Claude).
+        _NAV4 = "[data-testid='stRadio']:has([role='radiogroup'] > [data-baseweb='radio']:nth-child(4):last-child)"
         _crit_css += (
-            "[data-testid='stRadio'] [role='radiogroup'] label [data-testid='stMarkdownContainer'] p::before{"
+            _NAV4 + " [role='radiogroup'] label [data-testid='stMarkdownContainer'] p::before{"
             "font-family:'Material Symbols Rounded','Material Symbols Outlined','Material Symbols Sharp' !important;"
             "font-weight:normal !important;font-style:normal !important;"
             "font-feature-settings:'liga' 1 !important;-webkit-font-feature-settings:'liga' 1 !important;"
-            "-webkit-font-smoothing:antialiased;font-size:1.12rem;line-height:1;"
-            "vertical-align:-3px;margin-inline-end:6px;display:inline-block;}"
-            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(1) [data-testid='stMarkdownContainer'] p::before{content:'insights';}"
-            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(2) [data-testid='stMarkdownContainer'] p::before{content:'account_balance_wallet';}"
-            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(3) [data-testid='stMarkdownContainer'] p::before{content:'shield';}"
-            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(4) [data-testid='stMarkdownContainer'] p::before{content:'calculate';}"
+            "-webkit-font-smoothing:antialiased;font-size:1rem;line-height:1;"
+            "vertical-align:-3px;margin-inline-end:4px;display:inline-block;flex:0 0 auto;}"
+            + _NAV4 + " [role='radiogroup'] > label:nth-child(1) [data-testid='stMarkdownContainer'] p::before{content:'insights';}"
+            + _NAV4 + " [role='radiogroup'] > label:nth-child(2) [data-testid='stMarkdownContainer'] p::before{content:'account_balance_wallet';}"
+            + _NAV4 + " [role='radiogroup'] > label:nth-child(3) [data-testid='stMarkdownContainer'] p::before{content:'shield';}"
+            + _NAV4 + " [role='radiogroup'] > label:nth-child(4) [data-testid='stMarkdownContainer'] p::before{content:'calculate';}"
         )
     if is_dark:
         # #4 dark-mode body/caption contrast (push muted text toward WCAG AA)
@@ -10929,6 +10949,9 @@ def main() -> None:
         # accent, that ::before is a second stripe — kill it.
         "html body [data-testid='stMetric']::before{display:none !important;}"
         "html body [data-testid='stMetricLabel'],html body [data-testid='stMetricLabel'] *{color:" + _mc_lbl + " !important;}"
+        # #7 — lock the KPI value to LTR so "-₪87,370" never reorders in RTL.
+        "html body [data-testid='stMetricValue']{direction:ltr !important;unicode-bidi:isolate !important;}"
+        + ("html body [data-testid='stMetricValue']{text-align:right !important;}" if language == LANG_HE else "")
     )
     # Accent on the START side. The metric container is dir:ltr even in Hebrew,
     # so border-inline-start would wrongly sit left in HE — use explicit physical
@@ -10942,6 +10965,15 @@ def main() -> None:
     _bdg_tx = "#86efac" if is_dark else "#15803d"
     _crit_css += ("html body [data-testid='stMetricDelta']{background:" + _bdg_bg + " !important;border-radius:8px !important;padding:1px 7px !important;}"
                   "html body [data-testid='stMetricDelta'] *{color:" + _bdg_tx + " !important;}")
+    # #14 — the Closed-Positions "N open" delta is a NEUTRAL count, not a gain:
+    # override the green pill with a muted grey chip and hide the up-arrow.
+    _ncol = "#94a3b8" if is_dark else "#64748b"
+    _nbg = "rgba(148,163,184,.16)" if is_dark else "#f1f5f9"
+    _crit_css += (
+        "html body .st-key-kpi_closed [data-testid='stMetricDelta']{background:" + _nbg + " !important;}"
+        "html body .st-key-kpi_closed [data-testid='stMetricDelta'] *{color:" + _ncol + " !important;fill:" + _ncol + " !important;}"
+        "html body .st-key-kpi_closed [data-testid='stMetricDelta'] svg{display:none !important;}"
+    )
     if is_mobile:
         # #1: styling for the per-row mobile cards (_render_df_mobile_cards)
         _cbg = "#1f2937" if is_dark else "#ffffff"
@@ -11438,8 +11470,12 @@ def main() -> None:
                     except Exception:
                         pass
 
+                # #6/#7 — currency stated ONCE, in the LABEL (where the ₪ glyph
+                # renders reliably; the metric-value font lacks it and showed a
+                # tofu box). Values are pure numbers, forced LTR via CSS so the
+                # minus stays on the left in RTL ("-81,369", not "81,369-").
                 _tv_txt = f"{_tv:,.0f}"
-                _tp_txt = f"{_tp:+,.0f} ₪"
+                _tp_txt = f"{_tp:,.0f}"
                 _tr_val = (_tp / _tc_val) if _tc_val > 0 else 0.0
                 _tr_txt = f"{_tr_val:.2%}"
                 _top_val_txt, _top_delta_txt = "--", tr("No open assets", "אין נכסים פתוחים")
@@ -11452,29 +11488,33 @@ def main() -> None:
 
                 if is_mobile:
                     kpi_r1 = st.columns(2)
-                    kpi_r1[0].metric(tr("Total Value", "שווי כולל"), _tv_txt)
+                    kpi_r1[0].metric(tr("Total Value (₪)", "שווי כולל (₪)"), _tv_txt)
                     with kpi_r1[1].container(key="kpi_pnl"):
-                        st.metric(tr("Open P&L", "רווח/הפסד פתוח (₪)"), _tp_txt)
+                        st.metric(tr("Open P&L (₪)", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     kpi_r2 = st.columns(2)
                     with kpi_r2[0].container(key="kpi_ret"):
                         st.metric(tr("Return", "תשואה כוללת"), _tr_txt)
-                    kpi_r2[1].metric(
-                        tr("Closed Positions", "פוזיציות סגורות"),
-                        str(len(closed_trades)),
-                        f"{len(open_trades)} {tr('open', 'פתוחות')}",
-                    )
+                    with kpi_r2[1].container(key="kpi_closed"):
+                        st.metric(
+                            tr("Closed Positions", "פוזיציות סגורות"),
+                            str(len(closed_trades)),
+                            f"{len(open_trades)} {tr('open', 'פתוחות')}",
+                            delta_color="off",  # #14 neutral count, not a gain → no green ↑
+                        )
                 else:
                     kpi_cols = st.columns(4)
-                    kpi_cols[0].metric(tr("Total Value (ILS)", "שווי כולל (₪)"), _tv_txt)
+                    kpi_cols[0].metric(tr("Total Value (₪)", "שווי כולל (₪)"), _tv_txt)
                     with kpi_cols[1].container(key="kpi_pnl"):
-                        st.metric(tr("Open P&L (ILS)", "רווח/הפסד פתוח (₪)"), _tp_txt)
+                        st.metric(tr("Open P&L (₪)", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     with kpi_cols[2].container(key="kpi_ret"):
                         st.metric(tr("Total Return", "תשואה כוללת"), _tr_txt)
-                    kpi_cols[3].metric(
-                        tr("Closed Positions", "פוזיציות סגורות"),
-                        str(len(closed_trades)),
-                        f"{len(open_trades)} {tr('open', 'פתוחות')}",
-                    )
+                    with kpi_cols[3].container(key="kpi_closed"):
+                        st.metric(
+                            tr("Closed Positions", "פוזיציות סגורות"),
+                            str(len(closed_trades)),
+                            f"{len(open_trades)} {tr('open', 'פתוחות')}",
+                            delta_color="off",  # #14 neutral count, not a gain → no green ↑
+                        )
                 style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
                 # #4 finance convention: P&L / Return value reads RED when negative,
                 # GREEN when positive (pre-attentive — not via reading the minus sign).
@@ -13614,7 +13654,12 @@ def main() -> None:
                 )
                 fig_cc.update_traces(
                     hovertemplate="<b>%{y}</b><br>" + tr("Completeness", "שלמות") + ": %{x:.1%}<extra></extra>",
-                    texttemplate="%{x:.0%}", textposition="outside",
+                    # #5 — label INSIDE the bar, white, larger: was green-on-green
+                    # (outside text collided with the full 100% bars, unreadable).
+                    texttemplate="%{x:.0%}", textposition="inside",
+                    insidetextanchor="end",
+                    textfont=dict(color="#ffffff", size=13),
+                    cliponaxis=False,
                 )
                 fig_cc.update_layout(
                     xaxis_tickformat=".0%",
