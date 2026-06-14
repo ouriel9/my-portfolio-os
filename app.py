@@ -9714,8 +9714,10 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         ) +
         ".agent-hero{background:linear-gradient(120deg,#f59e0b,#fbbf24 55%,#fde047);border-radius:16px;padding:14px 18px;"
         "color:#3f2d00;margin-bottom:10px;box-shadow:0 10px 28px -12px rgba(234,179,8,.55);}"
-        ".agent-hero h3{margin:0;color:#3f2d00;font-size:1.18rem;font-weight:700;}"
-        ".agent-hero p{margin:3px 0 0;opacity:.95;font-size:.85rem;color:#5b4708;}"
+        # Text is ALWAYS on the gold gradient → force dark, !important, so the
+        # dark-mode markdown colour rule can't flip it to white (1.6:1 fail).
+        ".agent-hero h3,.agent-hero h3 *{margin:0;color:#3f2d00 !important;font-size:1.18rem;font-weight:700;}"
+        ".agent-hero p,.agent-hero p *{margin:3px 0 0;opacity:.95;font-size:.85rem;color:#4a3a06 !important;}"
         f".agent-chip{{display:inline-block;padding:8px 13px;margin:4px 6px 4px 0;border-radius:13px;"
         f"background:{_chip_bg};border:1px solid {_abd};color:{_atx};font-size:.85rem;}}"
         "</style>",
@@ -13699,8 +13701,11 @@ def main() -> None:
                     margin=dict(l=150, r=20, t=50, b=20),
                     coloraxis_showscale=False,
                     height=max(320, 22 * len(col_df) + 80),
+                    # Title must read light on navy in dark mode — theme="streamlit"
+                    # otherwise forces Streamlit's native (light) theme onto it.
+                    title_font=dict(color="#f1f5f9" if is_dark else "#0f172a"),
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True), theme="streamlit", use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True), theme=None, use_container_width=True)
             except Exception:
                 pass
 
