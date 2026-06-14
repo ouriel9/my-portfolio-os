@@ -10778,6 +10778,10 @@ def main() -> None:
         "html body [data-testid='stMetric']{background:" + _mc_bg + " !important;"
         "border:1px solid " + _mc_bd + " !important;border-radius:14px !important;"
         "box-shadow:0 1px 3px rgba(15,23,42,.10) !important;}"
+        # DOUBLE-STRIPE fix (#7): the design overlay draws a 3px indigo→cyan
+        # gradient bar via ::before on the LEFT. With our own single border
+        # accent, that ::before is a second stripe — kill it.
+        "html body [data-testid='stMetric']::before{display:none !important;}"
         "html body [data-testid='stMetricLabel'],html body [data-testid='stMetricLabel'] *{color:" + _mc_lbl + " !important;}"
     )
     # Accent on the START side. The metric container is dir:ltr even in Hebrew,
