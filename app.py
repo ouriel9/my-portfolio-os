@@ -3414,6 +3414,46 @@ def inject_client_fixes() -> None:
             } catch(e) {}
           }
 
+          // ═══════════════════════════════════════════════════════════
+          // ACCESSIBILITY FIXES (axe-core findings)
+          //  • Streamlit puts aria-expanded on the sidebar <section>, whose
+          //    role doesn't allow it → remove it (aria-allowed-attr, critical).
+          //  • Horizontally-scrollable tables aren't keyboard-reachable → make
+          //    them focusable + labelled (scrollable-region-focusable, serious).
+          //  • Main content lacks a landmark → tag role="main" (region).
+          // ═══════════════════════════════════════════════════════════
+          function fixA11y() {
+            try {
+              rootDoc.querySelectorAll('section[data-testid="stSidebar"]').forEach(function(e){
+                if (e.hasAttribute('aria-expanded')) e.removeAttribute('aria-expanded');
+              });
+              rootDoc.querySelectorAll('[data-testid="stTable"] > div,[data-testid="stDataFrame"] div,[data-testid="stDataFrameResizable"]').forEach(function(e){
+                if (e.scrollWidth > e.clientWidth + 3 && !e.getAttribute('tabindex')) {
+                  e.setAttribute('tabindex','0'); e.setAttribute('role','region');
+                  e.setAttribute('aria-label', rootDoc.documentElement.lang === 'he' ? 'טבלה הניתנת לגלילה' : 'Scrollable table');
+                }
+              });
+              var mn = rootDoc.querySelector('[data-testid="stMain"]') || rootDoc.querySelector('section.main') || rootDoc.querySelector('.main');
+              if (mn && !mn.getAttribute('role')) mn.setAttribute('role','main');
+              var isHe = rootDoc.documentElement.lang === 'he';
+              var navEl = rootDoc.querySelector('[data-testid="stRadio"]');
+              if (navEl) { var navWrap = navEl.closest('[data-testid="stElementContainer"]') || navEl;
+                if (!navWrap.getAttribute('role')) { navWrap.setAttribute('role','navigation'); navWrap.setAttribute('aria-label', isHe ? 'ניווט עמודים' : 'Page navigation'); } }
+              var sb = rootDoc.querySelector('section[data-testid="stSidebar"]');
+              if (sb && !sb.getAttribute('aria-label')) sb.setAttribute('aria-label', isHe ? 'הגדרות וניווט' : 'Settings and navigation');
+              // heading-order: assign aria-level so no level is skipped (the hero
+              // is h1 and section titles are h4). aria-level fixes the semantic
+              // order for screen readers without changing the visual sizes.
+              var prev = 0;
+              rootDoc.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function(h){
+                var lvl = parseInt(h.tagName.charAt(1), 10);
+                var cur = prev === 0 ? lvl : Math.min(lvl, prev + 1);
+                h.setAttribute('aria-level', String(cur));
+                prev = cur;
+              });
+            } catch(e){}
+          }
+
           function run() {
             removeBranding();
             setupTabSwipe();
@@ -3421,6 +3461,7 @@ def inject_client_fixes() -> None:
             makeWatchlistExpandUp();
             forceToolbarVisible();
             removeUndefinedText();
+            fixA11y();
           }
 
           run();
