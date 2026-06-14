@@ -7581,7 +7581,7 @@ def _pp_inject_productivity_layer(language: str) -> None:
     cmds = [
         {"id": "nav-dashboard", "label": "דשבורד" if is_he else "Dashboard", "hint": "g d"},
         {"id": "nav-manage",    "label": "ניהול עסקאות" if is_he else "Trade Management", "hint": "g t"},
-        {"id": "nav-risk",      "label": "סיכונים ופיפו" if is_he else "Risk & FIFO", "hint": "g r"},
+        {"id": "nav-risk",      "label": "סיכונים ו-FIFO" if is_he else "Risk & FIFO", "hint": "g r"},
         {"id": "nav-simulator", "label": "סימולטור" if is_he else "Simulator", "hint": "g s"},
         {"id": "nav-quality",   "label": "בקרת נתונים" if is_he else "Data Quality", "hint": "g q"},
         {"id": "toggle-theme",  "label": "החלפת ערכת נושא" if is_he else "Toggle theme", "hint": "t"},
@@ -10550,7 +10550,7 @@ def main() -> None:
 
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
-    page_risk = tr("Risk & FIFO", "סיכונים ופיפו") if not _is_mobile_client() else tr("Risk", "סיכון")
+    page_risk = tr("Risk & FIFO", "סיכונים ו-FIFO") if not _is_mobile_client() else tr("Risk", "סיכון")
     page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_chat = tr("AGENT AI", "AI סוכן")
@@ -10981,6 +10981,14 @@ def main() -> None:
         "html body [data-baseweb='tab-list']::-webkit-scrollbar{display:none !important;}"
         "html body [data-baseweb='tab-list'] [data-baseweb='tab']{flex:0 0 auto !important;white-space:nowrap !important;}"
         "html body [data-baseweb='tab-list'] [data-baseweb='tab'] p{white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}"
+    )
+    # #8 — commit to one rule: indigo is the GLOBAL selection primary; section
+    # colours stay decorative (hero only). So every selected radio gets an
+    # indigo glow (not the section's green/amber), and the active nav pill is
+    # indigo on every page — no more "purple control inside a green section".
+    _crit_css += (
+        "html body [data-testid='stRadio'] [data-baseweb='radio']:has(input:checked){box-shadow:0 4px 12px -3px rgba(79,70,229,.45) !important;}"
+        "html body [data-testid='stRadio']:has([role='radiogroup'] > [data-baseweb='radio']:nth-child(4):last-child) [data-baseweb='radio']:has(input:checked){background:#4f46e5 !important;}"
     )
     # Accent on the START side. The metric container is dir:ltr even in Hebrew,
     # so border-inline-start would wrongly sit left in HE — use explicit physical
@@ -12822,9 +12830,9 @@ def main() -> None:
                 except Exception:
                     pass
                 st.session_state["risk_page_last_refresh_ts"] = now_ts
-        st.markdown(f"### {tr('Reports: Risk, Performance and FIFO', 'דוחות: סיכונים, ביצועים ועלות פיפו')}")
+        st.markdown(f"### {tr('Reports: Risk, Performance and FIFO', 'דוחות: סיכונים, ביצועים ו-FIFO')}")
         fifo_df = fifo_metrics(trades)
-        st.subheader(tr("FIFO Engine", "מנוע פיפו"))
+        st.subheader(tr("FIFO Engine", "מנוע FIFO"))
         # Educational caption explaining the whole FIFO mechanic in plain language.
         with st.expander(tr("ℹ What does FIFO mean here?", "ℹ מה זה FIFO כאן?"), expanded=False):
             st.markdown(tr(
@@ -12881,21 +12889,25 @@ def main() -> None:
                 _fifo_keep = [c for c in _fifo_keep if c in fifo_view.columns]
                 if _fifo_keep:
                     fifo_view = fifo_view[_fifo_keep]
-            fifo_styled = fifo_view.style.format(
-                {
-                    tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): _smart_qty,
-                    tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
-                    realized_col: "₪{:,.0f}",
-                }
-            )
-            fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
-            _render_dataframe_adaptive(
-                fifo_styled,
-                is_mobile,
-                force_same_render_path=True,
-                use_container_width=True,
-                hide_index=True,
-            )
+            _fifo_fmt = {
+                tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): _smart_qty,
+                tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
+                realized_col: "₪{:,.0f}",
+            }
+            if is_mobile:
+                # #2 — wide table headers clipped on phones ("Open Qty (FIF(").
+                # Render as per-row cards (key: value) so nothing is ever cut.
+                _render_df_mobile_cards(fifo_view, _fifo_fmt, signed_cols=(realized_col,))
+            else:
+                fifo_styled = fifo_view.style.format(_fifo_fmt)
+                fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
+                _render_dataframe_adaptive(
+                    fifo_styled,
+                    is_mobile,
+                    force_same_render_path=True,
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
         st.divider()
         st.subheader(tr("📊 Risk Metrics", "📊 מדדי סיכון"))
