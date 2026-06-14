@@ -3673,13 +3673,16 @@ def _infer_display_currency(ticker: str, origin_currency: object) -> str:
 
 
 def _format_currency_value(value: float, currency: str) -> str:
+    # Currency symbol always PREFIXES the number (₪5,197 / $12.34), matching
+    # the "₪{:,.0f}" format used in the tables — one consistent convention, no
+    # "0.00 ₪" suffix outliers.
     cur = _normalize_currency_code(currency)
     if cur == "USD":
         return f"${value:,.2f}"
     if cur == "ILS":
-        return f"{value:,.2f} ₪"
+        return f"₪{value:,.2f}"
     if cur:
-        return f"{value:,.2f} {cur}"
+        return f"{cur} {value:,.2f}"
     return f"{value:,.2f}"
 
 
@@ -9751,10 +9754,10 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
 
     cc1, cc2 = st.columns([3, 1])
     with cc1:
-        prov_label = st.radio("🧠 " + tr("Engine", "מנוע"), providers, horizontal=True,
+        prov_label = st.radio(tr("Engine", "מנוע"), providers, horizontal=True,
                               key="ai_chat_provider")
     with cc2:
-        if st.button(tr("🗑 Clear", "🗑 נקה"), use_container_width=True):
+        if st.button(tr("Clear", "נקה"), icon=":material/delete:", use_container_width=True):
             st.session_state["ai_chat_history"] = []
             st.rerun()
     provider = pmap.get(prov_label, "gemini")
@@ -10550,7 +10553,7 @@ def main() -> None:
 
     page_dashboard = tr("Dashboard", "דשבורד")
     page_manage = tr("Trade Management", "ניהול עסקאות")
-    page_risk = tr("Risk & FIFO", "סיכונים ו-FIFO") if not _is_mobile_client() else tr("Risk", "סיכון")
+    page_risk = tr("Risk & FIFO", "סיכונים ו-" + _mix_he_with_ltr("FIFO")) if not _is_mobile_client() else tr("Risk", "סיכון")
     page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
     page_chat = tr("AGENT AI", "AI סוכן")
@@ -10948,6 +10951,16 @@ def main() -> None:
         _crit_css += (
             "[data-testid='stCaptionContainer'],[data-testid='stCaptionContainer'] *,"
             "[data-testid='stMarkdownContainer'] p,.stMarkdown p{color:#cbd5e1 !important;}"
+        )
+        # Dark-mode checkboxes: the empty box was nearly invisible on the navy
+        # sidebar (read as a bare label). Give it a visible border + fill.
+        _crit_css += (
+            "html body [data-baseweb='checkbox'] [data-testid='stCheckbox'] > label > span:first-child,"
+            "html body [data-testid='stCheckbox'] [data-baseweb='checkbox'] span[data-checked='false'],"
+            "html body [data-testid='stCheckbox'] svg{outline:none;}"
+            "html body [data-testid='stCheckbox'] [data-baseweb='checkbox'] > span:first-child,"
+            "html body [data-testid='stSidebar'] [data-baseweb='checkbox'] > span:first-child{"
+            "background:#1e293b !important;border:1.5px solid #64748b !important;border-radius:5px !important;}"
         )
     # ── Metric (KPI) cards: real card↔background contrast (#3), 4px accent (#6)
     #    on the correct side (#7 RTL), darker label (#9). Uses html-body-prefixed
@@ -12830,9 +12843,9 @@ def main() -> None:
                 except Exception:
                     pass
                 st.session_state["risk_page_last_refresh_ts"] = now_ts
-        st.markdown(f"### {tr('Reports: Risk, Performance and FIFO', 'דוחות: סיכונים, ביצועים ו-FIFO')}")
+        st.markdown(f"### {tr('Reports: Risk, Performance and FIFO', 'דוחות: סיכונים, ביצועים ו-' + _mix_he_with_ltr('FIFO'))}")
         fifo_df = fifo_metrics(trades)
-        st.subheader(tr("FIFO Engine", "מנוע FIFO"))
+        st.subheader(tr("FIFO Engine", "מנוע " + _mix_he_with_ltr("FIFO")))
         # Educational caption explaining the whole FIFO mechanic in plain language.
         with st.expander(tr("ℹ What does FIFO mean here?", "ℹ מה זה FIFO כאן?"), expanded=False):
             st.markdown(tr(
