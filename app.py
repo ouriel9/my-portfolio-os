@@ -10653,6 +10653,11 @@ def main() -> None:
                 # component's selected state persists across reruns. Without a
                 # key each rerun rebuilds the component from default_index and
                 # "swallows" the first click (classic double-click bug).
+                # RTL-aware: in Hebrew the nav must be RTL so (a) the Latin
+                # tokens ("FIFO") render on the correct side (bidi) and (b) the
+                # icon leads on the RIGHT next to the label — not detached left.
+                _nav_dir = "rtl" if language == LANG_HE else "ltr"
+                _nav_align = "right" if language == LANG_HE else "left"
                 page = option_menu(
                     menu_title=None,
                     options=page_options,
@@ -10666,13 +10671,14 @@ def main() -> None:
                             "background-color": nav_container_bg,
                             "border-radius": "10px",
                             "border": nav_container_border,
-                            "direction": "ltr",
+                            "direction": _nav_dir,
                         },
-                        "icon": {"color": nav_icon_color, "font-size": "16px"},
+                        "icon": {"color": nav_icon_color, "font-size": "16px",
+                                 "margin": "0 0 0 8px" if language == LANG_HE else "0 8px 0 0"},
                         "nav-link": {
                             "font-size": "14px",
-                            "text-align": "left",
-                            "direction": "ltr",
+                            "text-align": _nav_align,
+                            "direction": _nav_dir,
                             "margin": "2px 0",
                             "padding": "10px 12px 10px 12px",
                             "border-radius": "8px",
@@ -10683,8 +10689,8 @@ def main() -> None:
                             "background-color": nav_selected_bg,
                             "color": nav_selected_text,
                             "font-weight": "600",
-                            "text-align": "left",
-                            "direction": "ltr",
+                            "text-align": _nav_align,
+                            "direction": _nav_dir,
                         },
                     },
                 )
@@ -11007,9 +11013,16 @@ def main() -> None:
     # so border-inline-start would wrongly sit left in HE — use explicit physical
     # sides per language (verified). border:1px above keeps the other sides thin.
     if language == LANG_HE:
-        _crit_css += "html body [data-testid='stMetric']{border-right:4px solid #4f46e5 !important;border-left-width:1px !important;}"
+        # Force the card RTL so the accent sits on the START side = RIGHT in
+        # Hebrew (the critic measured it stuck on the left). Kill BOTH physical
+        # borders first so style_metric_cards' left bar can't survive.
+        _crit_css += ("html body [data-testid='stMetric']{direction:rtl !important;"
+                      "border-left:1px solid " + _mc_bd + " !important;"
+                      "border-right:4px solid #4f46e5 !important;}")
     else:
-        _crit_css += "html body [data-testid='stMetric']{border-left:4px solid #4f46e5 !important;border-right-width:1px !important;}"
+        _crit_css += ("html body [data-testid='stMetric']{"
+                      "border-right:1px solid " + _mc_bd + " !important;"
+                      "border-left:4px solid #4f46e5 !important;}")
     # #5 badge: positive delta pill at WCAG AA (was green-on-lavender 3.78:1)
     _bdg_bg = "rgba(34,197,94,.20)" if is_dark else "#dcfce7"
     _bdg_tx = "#86efac" if is_dark else "#15803d"
