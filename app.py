@@ -147,6 +147,14 @@ APPS_SCRIPT_COOLDOWN_FILE = Path(__file__).resolve().parent / "apps_script_coold
 # concurrent Streamlit sessions (on the same server) cannot race-corrupt the file.
 _LOCAL_FILE_LOCK = threading.Lock()
 
+# In-memory cache of the parsed local store, keyed by the file's mtime. Lets the
+# app serve portfolio data straight from RAM on every rerun (instant page
+# switches) instead of re-reading + re-parsing portfolio_data.json each time.
+# Invalidated automatically whenever the file changes (local edit or background
+# sheet sync both bump the mtime). Callers always get a COPY so in-place edits
+# (e.g. live price updates on the dashboard) never corrupt the cached frame.
+_LOCAL_PORTFOLIO_MEM: Dict[str, object] = {"mtime": -1.0, "df": None, "meta": {}}
+
 
 def _write_portfolio_atomic(data: dict) -> None:
     """Write portfolio data atomically via temp-file rename + keep 3 rolling backups.
@@ -4854,6 +4862,15 @@ def load_local_portfolio() -> Tuple["pd.DataFrame", Dict[str, object]]:
         (df, meta) — df is a normalised DataFrame (may be empty),
         meta is the _meta dict (empty dict if file missing/corrupt).
     """
+    # Fast path: serve the parsed frame from RAM when the file is unchanged.
+    _mt = get_portfolio_file_mtime()
+    _mem = _LOCAL_PORTFOLIO_MEM
+    if _mem.get("df") is not None and _mem.get("mtime") == _mt:
+        try:
+            return _mem["df"].copy(), dict(_mem.get("meta") or {})
+        except Exception:
+            pass  # fall through to a fresh read on any cache mishap
+
     if not LOCAL_PORTFOLIO_FILE.exists():
         # Also check if any backup exists (main file may have been deleted)
         has_backup = any(
@@ -4875,7 +4892,12 @@ def load_local_portfolio() -> Tuple["pd.DataFrame", Dict[str, object]]:
         ]
         if not clean_rows:
             return pd.DataFrame(), meta
-        return _normalize_snapshot_df(pd.DataFrame(clean_rows)), meta
+        result = _normalize_snapshot_df(pd.DataFrame(clean_rows))
+        # Cache the parsed result; hand callers a copy so they can mutate freely.
+        _LOCAL_PORTFOLIO_MEM["mtime"] = _mt
+        _LOCAL_PORTFOLIO_MEM["df"] = result
+        _LOCAL_PORTFOLIO_MEM["meta"] = dict(meta) if isinstance(meta, dict) else {}
+        return result.copy(), meta
     except Exception:
         return pd.DataFrame(), {}
 
@@ -5560,8 +5582,10 @@ def load_google_snapshot_data_via_gspread(spreadsheet_ref: str, worksheet_name: 
     return pd.DataFrame(rows, columns=headers)
 
 
-@st.cache_data(ttl=300)
-def load_google_snapshot_data(web_app_url: str, token: str) -> pd.DataFrame:
+def _fetch_google_snapshot_raw(web_app_url: str, token: str) -> pd.DataFrame:
+    """Pure network fetch of the snapshot from Apps Script — NO Streamlit calls,
+    NO caching. Safe to run from a background thread (see _background_sheet_sync).
+    """
     parsed = {}
     last_error = ""
     for action_name in ("read_snapshot", "readSnapshot", "read", "snapshot"):
@@ -5586,6 +5610,74 @@ def load_google_snapshot_data(web_app_url: str, token: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows, columns=headers)
     return _normalize_snapshot_df(df)
+
+
+@st.cache_data(ttl=300)
+def load_google_snapshot_data(web_app_url: str, token: str) -> pd.DataFrame:
+    return _fetch_google_snapshot_raw(web_app_url, token)
+
+
+# ── Background (non-blocking) sheet sync ─────────────────────────────────
+# The app renders INSTANTLY from the local store; the live Google Sheet check
+# happens in a daemon thread. When it finishes it writes portfolio_data.json,
+# and the 5-second sync-watcher fragment (_portfolio_sync_watcher) reruns the
+# app so the fresh numbers appear — no spinner, no blocking, WhatsApp-style.
+_BG_SYNC_LOCK = threading.Lock()
+_BG_SYNC_STATE: Dict[str, object] = {
+    "running": False, "last_start": 0.0, "last_finish": 0.0, "last_result": "",
+}
+# How stale the local store must be before we kick a background refresh, and the
+# minimum gap between background syncs (protects Apps Script quota). Non-blocking,
+# so we can refresh far more often than the old 30-min blocking threshold.
+_BG_REFRESH_STALE_SECONDS = 180
+_BG_SYNC_MIN_INTERVAL_SECONDS = 90
+
+
+def _background_sheet_sync(web_app_url: str, token: str) -> None:
+    result = "err:unknown"
+    try:
+        df_remote = _fetch_google_snapshot_raw(web_app_url, token)
+        if df_remote is not None and not df_remote.empty:
+            _save_local_snapshot_cache(df_remote)
+            save_local_portfolio(
+                df_remote, preserve_dirty=False,
+                meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
+            )
+            result = "ok:%d" % len(df_remote)
+        else:
+            result = "empty"
+        _clear_apps_script_cooldown()
+    except Exception as exc:
+        if _is_timeout_error(exc):
+            _mark_apps_script_timeout()
+        result = "err:" + str(exc)[:120]
+    finally:
+        with _BG_SYNC_LOCK:
+            _BG_SYNC_STATE["running"] = False
+            _BG_SYNC_STATE["last_finish"] = time.time()
+            _BG_SYNC_STATE["last_result"] = result
+
+
+def _maybe_start_bg_sync(web_app_url: str, token: str) -> bool:
+    """Start a background sheet sync if one isn't already running and enough time
+    has passed. Returns True if a new sync was started. Never blocks."""
+    now = time.time()
+    with _BG_SYNC_LOCK:
+        if _BG_SYNC_STATE["running"]:
+            return False
+        if now - float(_BG_SYNC_STATE["last_start"] or 0) < _BG_SYNC_MIN_INTERVAL_SECONDS:
+            return False
+        _BG_SYNC_STATE["running"] = True
+        _BG_SYNC_STATE["last_start"] = now
+    try:
+        threading.Thread(
+            target=_background_sheet_sync, args=(web_app_url, token), daemon=True
+        ).start()
+        return True
+    except Exception:
+        with _BG_SYNC_LOCK:
+            _BG_SYNC_STATE["running"] = False
+        return False
 
 
 def _save_local_snapshot_cache(df: pd.DataFrame) -> None:
@@ -6014,26 +6106,20 @@ def load_snapshot_data(
     # ── 1. Local store (primary, but refreshed when stale) ───────────
     local_df, _meta = load_local_portfolio()
     if not local_df.empty:
-        # Auto-pull the live sheet when the local store is stale AND there are
-        # no pending offline edits. This keeps the dashboard accurate (the old
-        # behaviour served a month-stale store and never re-read the sheet)
-        # while still preserving offline-first editing: if there are unsynced
-        # local changes, we keep them and never clobber.
+        # INSTANT render: always serve the local store immediately. When it is
+        # stale (and there are no unsynced local edits), refresh from the live
+        # sheet in a BACKGROUND thread — never block the page. The 5-second
+        # sync-watcher fragment reruns the app once the fresh data lands, so the
+        # numbers update behind the scenes without hurting the experience.
         try:
             clean_url0 = _clean(web_app_url)
             if (clean_url0 and is_apps_script_web_app_url(clean_url0)
                     and not _apps_script_on_cooldown()
-                    and _local_store_age_seconds(_meta) > 1800   # > 30 min stale
+                    and _local_store_age_seconds(_meta) > _BG_REFRESH_STALE_SECONDS
                     and count_dirty_local_trades() == 0):
-                df_remote = load_google_snapshot_data(clean_url0, token)
-                _clear_apps_script_cooldown()
-                _save_local_snapshot_cache(df_remote)
-                save_local_portfolio(df_remote, preserve_dirty=False)
-                return df_remote, "apps_script"
-        except Exception as _exc:
-            if _is_timeout_error(_exc):
-                _mark_apps_script_timeout()
-            # any failure → fall back to the local store below
+                _maybe_start_bg_sync(clean_url0, token)
+        except Exception:
+            pass
         return local_df, "local_store"
 
     # ── 1b. Auto-migrate from snapshot_cache / verified_data ─────────
@@ -9761,10 +9847,12 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
             st.caption(_t("Dividend tracker unavailable.", "מעקב דיבידנדים לא זמין.") + f" ({str(exc)[:60]})")
 
 
-@st.cache_resource(show_spinner=False)
 def _snapshot_ls():
     """Browser localStorage handle for the snapshot cache (phone: instant load /
-    offline fallback). cache_resource so the component is created once."""
+    offline fallback). Instantiated per-run (the proven _sim_ls pattern) — must
+    NOT be wrapped in st.cache_resource/cache_data, because LocalStorage is a
+    Streamlit component and widgets inside cached functions raise
+    CachedWidgetWarning."""
     try:
         from streamlit_local_storage import LocalStorage
         return LocalStorage(key="_pp_snapshot_ls")
