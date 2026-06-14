@@ -10747,12 +10747,12 @@ def main() -> None:
     # ── Design-critique corrective CSS (addresses critique #4/#5/#9/#11) ──
     _crit_css = (
         "<style id='pp-crit-fixes'>"
-        # #9 hero: trim vertical waste (smaller padding + title, less top gap)
-        "html body .app-header-wrap{padding:.62rem 1.1rem .56rem 1.1rem !important;border-radius:0 0 18px 18px !important;margin-top:0 !important;}"
+        # #9 hero: trim vertical waste — smaller padding + title (but DO NOT pull
+        # it up under the nav; user wants the colored title banner fully visible
+        # below the nav pills, so no margin-top:0 / container padding-top change).
+        "html body .app-header-wrap{padding:.62rem 1.1rem .56rem 1.1rem !important;border-radius:0 0 18px 18px !important;}"
         "html body .app-main-title{font-size:1.5rem !important;}"
         "html body .app-header-wrap .app-logo-icon svg{width:40px !important;height:40px !important;}"
-        # #9 kill the empty band above the hero (esp. dark/English)
-        ".main .block-container,[data-testid='stMainBlockContainer']{padding-top:.7rem !important;}"
         # #11 content not hidden behind the sticky nav
         ".main .block-container{scroll-margin-top:84px !important;}"
         # #5 sidebar fully opaque so dashboard text doesn't bleed through the drawer
