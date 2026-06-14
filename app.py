@@ -12139,7 +12139,7 @@ def main() -> None:
                 key=f"manual_deposits_editor_{deposit_mode}",
                 column_config={
                     "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
-                    "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%.2f"),
+                    "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%,.2f"),
                 },
             )
 
