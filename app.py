@@ -3172,7 +3172,7 @@ def inject_client_fixes() -> None:
             const lists = Array.from(rootDoc.querySelectorAll(
               '[data-baseweb="tab-list"], [role="tablist"], [data-testid="stTabs"] > div:first-child'
             ));
-            const he = ['סקירה', 'חלוקה', 'דוחות', 'סך הפקדות', 'עסקאות'];
+            const he = ['סקירה', 'חלוקה', 'דוחות', 'סך הפקדות', 'תנועות'];
             const en = ['overview', 'allocation', 'reports', 'total deposits', 'transactions'];
 
             for (const list of lists) {
@@ -11601,7 +11601,7 @@ def main() -> None:
                 tr("Overview", "סקירה") if is_mobile else tr("Overview", "סקירה כללית"),
                 tr("Allocation", "הרכב") if is_mobile else tr("Portfolio Allocation", "הרכב התיק"),
                 tr("Reports", "דוחות") if is_mobile else tr("Reports & Analytics", "דוחות ואנליזה"),
-                tr("Transactions", "עסקאות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
+                tr("Transactions", "תנועות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
 
