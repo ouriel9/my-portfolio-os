@@ -10546,11 +10546,16 @@ def main() -> None:
         # ── Mobile: top segmented control for page nav ──
         # Per UX review, 5 pills felt crowded — "Data" was moved to a dedicated
         # sidebar button above the Data Connection Settings expander.
+        # #10 — clean text labels; a consistent Material Symbols icon is added
+        # before each via CSS ::before (keyed by position) instead of mixed
+        # emoji 📊💼🛡🧮. st.radio renders :material/x: as literal text, so we
+        # keep the label text icon-free and let the icon font do the glyph.
+        # Degrades gracefully to clean text if the icon font ever fails.
         mobile_label_to_id = {
-            tr("📊 Overview", "📊 סקירה"): "dashboard",
-            tr("💼 Trades", "💼 עסקאות"): "manage",
-            tr("🛡 Risk", "🛡 סיכון"): "risk",
-            tr("🧮 Sim", "🧮 סימולטור"): "simulator",
+            tr("Overview", "סקירה"): "dashboard",
+            tr("Trades", "עסקאות"): "manage",
+            tr("Risk", "סיכון"): "risk",
+            tr("Sim", "סימולטור"): "simulator",
         }
         mobile_options = list(mobile_label_to_id.keys())
 
@@ -10558,8 +10563,8 @@ def main() -> None:
         # a compact breadcrumb + back button rather than the 4-pill radio so
         # the page switcher doesn't force-override the selection.
         if active_page_id in ("quality", "chat"):
-            _bc_icon, _bc_label = (("📋", tr("Data", "נתונים")) if active_page_id == "quality"
-                                   else ("🤖", tr("AGENT AI", "AI סוכן")))
+            _bc_icon, _bc_label = (("database", tr("Data", "נתונים")) if active_page_id == "quality"
+                                   else ("smart_toy", tr("AGENT AI", "AI סוכן")))
             brc1, brc2 = st.columns([4, 1])
             with brc1:
                 st.markdown(
@@ -10567,7 +10572,8 @@ def main() -> None:
                     f"padding:8px 12px;border-radius:10px;"
                     f"background:rgba(99,102,241,0.08);"
                     f"border:1px solid rgba(99,102,241,0.25);"
-                    f"font-weight:600;unicode-bidi:plaintext'>{_bc_icon} "
+                    f"font-weight:600;unicode-bidi:plaintext'>"
+                    f"<span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.15rem;line-height:1;font-feature-settings:'liga' 1;\">{_bc_icon}</span> "
                     f"{_bc_label}</div>",
                     unsafe_allow_html=True,
                 )
@@ -10696,6 +10702,21 @@ def main() -> None:
     }
     _accent = _page_accents.get(active_page_id, "#6366f1")
     _accent_dark = _page_accents_dark.get(active_page_id, "#1e40af")
+
+    # #12 — soften the HERO only. The page accents stay vivid for borders,
+    # pills and KPI bars (where saturation reads as "active"), but the large
+    # hero banner felt over-saturated. Desaturate ~25% (HSV) for a more
+    # premium, less "candy" gradient. Applied ONLY to the hero surface.
+    def _desat_hex(_h, _sat=0.74, _val=0.98):
+        import colorsys
+        _h = _h.lstrip("#")
+        _r, _g, _b = (int(_h[0:2], 16) / 255, int(_h[2:4], 16) / 255, int(_h[4:6], 16) / 255)
+        _hh, _s, _v = colorsys.rgb_to_hsv(_r, _g, _b)
+        _r, _g, _b = colorsys.hsv_to_rgb(_hh, _s * _sat, min(1.0, _v * _val))
+        return "#%02x%02x%02x" % (round(_r * 255), round(_g * 255), round(_b * 255))
+
+    _hero_accent = _desat_hex(_accent)
+    _hero_accent_dark = _desat_hex(_accent_dark)
     st.markdown(
         f"""
         <style id="pp-page-accent">
@@ -10705,13 +10726,13 @@ def main() -> None:
                                       100% {{ transform: translateX(220%) rotate(12deg); opacity:0; }} }}
             .app-header-wrap {{
                 background:
-                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.26) 0%, rgba(255,255,255,0) 42%),
-                    linear-gradient(118deg, {_accent_dark} 0%, {_accent} 60%, {_accent}e6 100%) !important;
+                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 42%),
+                    linear-gradient(118deg, {_hero_accent_dark} 0%, {_hero_accent} 60%, {_hero_accent}e6 100%) !important;
                 border: none !important;
                 border-top: none !important;
                 border-bottom: none !important;
                 border-radius: 0 0 24px 24px !important;
-                box-shadow: 0 18px 42px -18px {_accent}aa,
+                box-shadow: 0 18px 42px -18px {_hero_accent}99,
                             0 1px 0 0 rgba(255,255,255,.22) inset !important;
                 padding: 0.9rem 1.35rem 0.85rem 1.35rem !important;
                 position: sticky !important;
@@ -10872,6 +10893,20 @@ def main() -> None:
     if is_mobile:
         # dim the page behind the open mobile drawer
         _crit_css += "[data-testid='stSidebar']{box-shadow:0 0 0 100vmax rgba(0,0,0,.5) !important;}"
+        # #10 — consistent Material Symbols icon before each nav pill label
+        #       (positional ::before; labels themselves are icon-free text).
+        _crit_css += (
+            "[data-testid='stRadio'] [role='radiogroup'] label [data-testid='stMarkdownContainer'] p::before{"
+            "font-family:'Material Symbols Rounded','Material Symbols Outlined','Material Symbols Sharp' !important;"
+            "font-weight:normal !important;font-style:normal !important;"
+            "font-feature-settings:'liga' 1 !important;-webkit-font-feature-settings:'liga' 1 !important;"
+            "-webkit-font-smoothing:antialiased;font-size:1.12rem;line-height:1;"
+            "vertical-align:-3px;margin-inline-end:6px;display:inline-block;}"
+            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(1) [data-testid='stMarkdownContainer'] p::before{content:'insights';}"
+            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(2) [data-testid='stMarkdownContainer'] p::before{content:'account_balance_wallet';}"
+            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(3) [data-testid='stMarkdownContainer'] p::before{content:'shield';}"
+            "[data-testid='stRadio'] [role='radiogroup'] > label:nth-child(4) [data-testid='stMarkdownContainer'] p::before{content:'calculate';}"
+        )
     if is_dark:
         # #4 dark-mode body/caption contrast (push muted text toward WCAG AA)
         _crit_css += (
@@ -10963,7 +10998,8 @@ def main() -> None:
     if is_mobile:
         _data_btn_primary = (active_page_id == "quality")
         if st.sidebar.button(
-            ("📋 " + tr("Data", "נתונים")) + ("  ✓" if _data_btn_primary else ""),
+            tr("Data", "נתונים") + ("  ✓" if _data_btn_primary else ""),
+            icon=":material/database:",
             use_container_width=True,
             type=("primary" if _data_btn_primary else "secondary"),
             help=tr("Open the Data / Data Quality page.",
@@ -11119,7 +11155,8 @@ def main() -> None:
     if is_mobile:
         _chat_active = (active_page_id == "chat")
         if st.sidebar.button(
-            ("🤖 " + tr("AGENT AI", "AI סוכן")) + ("  ✓" if _chat_active else ""),
+            tr("AGENT AI", "AI סוכן") + ("  ✓" if _chat_active else ""),
+            icon=":material/smart_toy:",
             use_container_width=True,
             type=("primary" if _chat_active else "secondary"),
             help=tr("Chat with your AI portfolio agent.", "שיחה עם סוכן ה-AI של התיק."),
