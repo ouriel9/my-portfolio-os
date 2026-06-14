@@ -12377,12 +12377,19 @@ def main() -> None:
                     yaxis_title=tr("Value (ILS)", "שווי (₪)"),
                     yaxis_tickformat=",.0f",
                     hovermode="x unified",
-                    showlegend=True,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-                                font=dict(color="#e2e8f0" if is_dark else "#334155")),
                 )
-                # theme=None so Streamlit's theme can't strip the legend.
-                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), theme=None, use_container_width=True)
+                # Apply the shared theme, THEN force a visible legend ABOVE the
+                # plot (the theme pushes it to y=-0.18, off-screen). theme=None
+                # so Streamlit can't strip it.
+                _fig_track = _apply_plotly_theme(fig_track, is_dark, is_mobile)
+                _fig_track.update_layout(
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
+                                font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
+                                bgcolor="rgba(0,0,0,0)"),
+                    margin=dict(t=58),
+                )
+                st.plotly_chart(_fig_track, theme=None, use_container_width=True)
 
         with tab_deposits:
             # (Equity curve moved to Overview tab — top section.)
@@ -12911,7 +12918,9 @@ def main() -> None:
                 }
             )
             fifo_view[avg_price_col] = fifo_view.apply(
-                lambda r: _format_currency_value(float(r[avg_price_col]), r.get(avg_price_currency_col, "")),
+                # Zero/empty avg price → "—" (was a misleading "₪0.00" on e.g. SCHD).
+                lambda r: ("—" if not float(r[avg_price_col] or 0)
+                           else _format_currency_value(float(r[avg_price_col]), r.get(avg_price_currency_col, ""))),
                 axis=1,
             )
             fifo_view = fifo_view.drop(columns=[avg_price_currency_col], errors="ignore")
