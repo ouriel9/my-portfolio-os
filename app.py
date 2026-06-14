@@ -11023,6 +11023,14 @@ def main() -> None:
         _crit_css += ("html body [data-testid='stMetric']{"
                       "border-right:1px solid " + _mc_bd + " !important;"
                       "border-left:4px solid #4f46e5 !important;}")
+    # Hero page-label bidi: render per content direction so "סיכונים ו-FIFO"
+    # reads correctly (the FSI/PDI marks need an RTL base to land right).
+    _crit_css += "html body .app-sub-title{unicode-bidi:plaintext !important;}"
+    if language == LANG_HE:
+        # KPI card ORDER must reverse in RTL — Total Value (first) belongs on
+        # the RIGHT, not the left. direction:rtl on the metrics row flips the
+        # flex column order.
+        _crit_css += ("html body [data-testid='stHorizontalBlock']:has([data-testid='stMetric']){direction:rtl !important;}")
     # #5 badge: positive delta pill at WCAG AA (was green-on-lavender 3.78:1)
     _bdg_bg = "rgba(34,197,94,.20)" if is_dark else "#dcfce7"
     _bdg_tx = "#86efac" if is_dark else "#15803d"
@@ -12369,9 +12377,12 @@ def main() -> None:
                     yaxis_title=tr("Value (ILS)", "שווי (₪)"),
                     yaxis_tickformat=",.0f",
                     hovermode="x unified",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                                font=dict(color="#e2e8f0" if is_dark else "#334155")),
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+                # theme=None so Streamlit's theme can't strip the legend.
+                st.plotly_chart(_apply_plotly_theme(fig_track, is_dark, is_mobile), theme=None, use_container_width=True)
 
         with tab_deposits:
             # (Equity curve moved to Overview tab — top section.)
