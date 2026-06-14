@@ -9695,13 +9695,21 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         # #3 — theme the bottom chat-input panel in dark mode (Streamlit leaves
         #      stBottom/stChatInput light by default → a white bar on navy).
         + (
-            "[data-testid='stBottom'],[data-testid='stBottomBlockContainer'],"
-            "[data-testid='stBottom'] > div{background:#0f172a!important;}"
-            "[data-testid='stChatInput']{background:#1f2937!important;"
-            "border:1px solid rgba(255,255,255,0.10)!important;}"
-            "[data-testid='stChatInput'] textarea{background:transparent!important;color:#e5e7eb!important;}"
-            "[data-testid='stChatInput'] textarea::placeholder{color:#94a3b8!important;}"
-            "[data-testid='stChatInput'] button{color:#e5e7eb!important;}"
+            # #3 (full) — Streamlit leaves the chat textarea + its inner wrapper
+            # light even in dark mode. Force the whole surface dark, high
+            # specificity, incl. the inner baseweb input div.
+            "html body [data-testid='stBottom'],html body [data-testid='stBottomBlockContainer'],"
+            "html body [data-testid='stBottom'] > div{background:#0f172a!important;}"
+            "html body [data-testid='stChatInput'],"
+            "html body [data-testid='stChatInput'] > div,"
+            "html body [data-testid='stChatInput'] [data-baseweb='textarea'],"
+            "html body [data-testid='stChatInput'] [data-baseweb='base-input']{"
+            "background:#1e293b!important;border-color:#334155!important;}"
+            "html body [data-testid='stChatInput']{border:1px solid #334155!important;border-radius:18px!important;}"
+            "html body [data-testid='stChatInput'] textarea{background:#1e293b!important;color:#e2e8f0!important;-webkit-text-fill-color:#e2e8f0!important;}"
+            "html body [data-testid='stChatInput'] textarea::placeholder{color:#94a3b8!important;-webkit-text-fill-color:#94a3b8!important;}"
+            "html body [data-testid='stChatInput'] button{color:#e2e8f0!important;background:transparent!important;}"
+            "html body [data-testid='stChatInput'] button svg{fill:#e2e8f0!important;}"
             if is_dark else ""
         ) +
         ".agent-hero{background:linear-gradient(120deg,#f59e0b,#fbbf24 55%,#fde047);border-radius:16px;padding:14px 18px;"
@@ -10716,7 +10724,7 @@ def main() -> None:
     # pills and KPI bars (where saturation reads as "active"), but the large
     # hero banner felt over-saturated. Desaturate ~25% (HSV) for a more
     # premium, less "candy" gradient. Applied ONLY to the hero surface.
-    def _desat_hex(_h, _sat=0.74, _val=0.98):
+    def _desat_hex(_h, _sat=0.74, _val=0.84):
         import colorsys
         _h = _h.lstrip("#")
         _r, _g, _b = (int(_h[0:2], 16) / 255, int(_h[2:4], 16) / 255, int(_h[4:6], 16) / 255)
@@ -10735,7 +10743,8 @@ def main() -> None:
                                       100% {{ transform: translateX(220%) rotate(12deg); opacity:0; }} }}
             .app-header-wrap {{
                 background:
-                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.22) 0%, rgba(255,255,255,0) 42%),
+                    radial-gradient(130% 150% at 90% -25%, rgba(255,255,255,.16) 0%, rgba(255,255,255,0) 42%),
+                    linear-gradient(180deg, rgba(15,23,42,.16) 0%, rgba(15,23,42,.34) 100%),
                     linear-gradient(118deg, {_hero_accent_dark} 0%, {_hero_accent} 60%, {_hero_accent}e6 100%) !important;
                 border: none !important;
                 border-top: none !important;
@@ -10909,6 +10918,11 @@ def main() -> None:
             ".st-key-pp_breadcrumb{margin:0 0 -0.4rem 0 !important;padding:0 !important;gap:0 !important;}"
             ".st-key-pp_breadcrumb [data-testid='stHorizontalBlock']{margin-bottom:0 !important;}"
             ".st-key-pp_breadcrumb + div,.st-key-pp_breadcrumb ~ [data-testid='stElementContainer']:first-of-type{margin-top:0 !important;}"
+            # Regression fix: keep the back button clear of the fixed >> collapse
+            # control (top-left) and never truncate its label.
+            ".st-key-pp_breadcrumb{margin-inline-start:54px !important;}"
+            ".st-key-pp_breadcrumb button{width:auto !important;white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}"
+            ".st-key-pp_breadcrumb button p{overflow:visible !important;text-overflow:clip !important;}"
         )
         # #10 — consistent Material Symbols icon before each nav pill label
         #       (positional ::before; labels themselves are icon-free text).
@@ -10949,9 +10963,22 @@ def main() -> None:
         # accent, that ::before is a second stripe — kill it.
         "html body [data-testid='stMetric']::before{display:none !important;}"
         "html body [data-testid='stMetricLabel'],html body [data-testid='stMetricLabel'] *{color:" + _mc_lbl + " !important;}"
-        # #7 — lock the KPI value to LTR so "-₪87,370" never reorders in RTL.
+        # #7 — lock the KPI value to LTR so "-87,370" never reorders in RTL.
         "html body [data-testid='stMetricValue']{direction:ltr !important;unicode-bidi:isolate !important;}"
         + ("html body [data-testid='stMetricValue']{text-align:right !important;}" if language == LANG_HE else "")
+        # #8 contrast — dashboard stats sub-line was ~4.0:1 (grey on near-white).
+        + ("html body .dashboard-stats-line{color:#475569 !important;}" if not is_dark
+           else "html body .dashboard-stats-line{color:#cbd5e1 !important;}")
+    )
+    # #2 — EN dashboard sub-tabs (Overview/Allocation/Reports/Transactions) were
+    # clipping ("Transaction" lost its s). Let the tab strip scroll horizontally
+    # with no clip, tabs never shrink.
+    _crit_css += (
+        "html body [data-baseweb='tab-list']{overflow-x:auto !important;overflow-y:hidden !important;"
+        "scrollbar-width:none !important;-webkit-overflow-scrolling:touch !important;flex-wrap:nowrap !important;}"
+        "html body [data-baseweb='tab-list']::-webkit-scrollbar{display:none !important;}"
+        "html body [data-baseweb='tab-list'] [data-baseweb='tab']{flex:0 0 auto !important;white-space:nowrap !important;}"
+        "html body [data-baseweb='tab-list'] [data-baseweb='tab'] p{white-space:nowrap !important;overflow:visible !important;text-overflow:clip !important;}"
     )
     # Accent on the START side. The metric container is dir:ltr even in Hebrew,
     # so border-inline-start would wrongly sit left in HE — use explicit physical
@@ -11518,8 +11545,9 @@ def main() -> None:
                 style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
                 # #4 finance convention: P&L / Return value reads RED when negative,
                 # GREEN when positive (pre-attentive — not via reading the minus sign).
-                _pnl_c = "#dc2626" if _tp < 0 else "#16a34a"
-                _ret_c = "#dc2626" if _tr_val < 0 else "#16a34a"
+                # #7 contrast: darker red (#b91c1c ≈ 6:1 on white) for negatives.
+                _pnl_c = "#b91c1c" if _tp < 0 else "#15803d"
+                _ret_c = "#b91c1c" if _tr_val < 0 else "#15803d"
                 st.markdown(
                     "<style>.st-key-kpi_pnl [data-testid='stMetricValue'],.st-key-kpi_pnl [data-testid='stMetricValue'] *{color:" + _pnl_c + " !important;}"
                     ".st-key-kpi_ret [data-testid='stMetricValue'],.st-key-kpi_ret [data-testid='stMetricValue'] *{color:" + _ret_c + " !important;}</style>",
@@ -13652,20 +13680,23 @@ def main() -> None:
                     color_continuous_scale=["#ef4444", "#f59e0b", "#10b981"],
                     range_color=(0.0, 1.0),
                 )
+                # #5/#6 — readable % label OUTSIDE the bar in theme-aware text
+                # (was green-on-green inside; removing it lost the value). The
+                # x-range is padded to 1.18 so the outside label has room on the
+                # full 100% bars.
+                _lbl_col = "#e2e8f0" if is_dark else "#334155"
                 fig_cc.update_traces(
                     hovertemplate="<b>%{y}</b><br>" + tr("Completeness", "שלמות") + ": %{x:.1%}<extra></extra>",
-                    # #5 — label INSIDE the bar, white, larger: was green-on-green
-                    # (outside text collided with the full 100% bars, unreadable).
-                    texttemplate="%{x:.0%}", textposition="inside",
-                    insidetextanchor="end",
-                    textfont=dict(color="#ffffff", size=13),
+                    texttemplate="%{x:.0%}", textposition="outside",
+                    textfont=dict(color=_lbl_col, size=12),
                     cliponaxis=False,
                 )
                 fig_cc.update_layout(
                     xaxis_tickformat=".0%",
+                    xaxis=dict(range=[0, 1.18]),
                     yaxis_title="",
                     yaxis=dict(automargin=True),
-                    margin=dict(l=150, r=10, t=50, b=20),
+                    margin=dict(l=150, r=20, t=50, b=20),
                     coloraxis_showscale=False,
                     height=max(320, 22 * len(col_df) + 80),
                 )
