@@ -13392,6 +13392,14 @@ def main() -> None:
         mode = _action_label_map[_action_label]
         st.session_state["_manage_mode"] = mode
 
+        if mode == "add":
+            st.info(tr(
+                "💡 Tip: you can also add a trade in seconds from the **AI agent** — just type "
+                "“I bought 0.5 ETH at 12000 on Bit2C” or attach a buy screenshot, then approve.",
+                "💡 טיפ: אפשר גם להוסיף עסקה בשניות דרך **סוכן AI** — פשוט כתוב “קניתי 0.5 ETH ב-12000 ב-Bit2C” "
+                "או צרף צילום מסך של הקנייה, ואשר.",
+            ))
+
         st.caption(tr(f"Showing {len(trades):,} snapshot transactions, including closed trades.", f"מציג {len(trades):,} עסקאות תמונת מצב, כולל עסקאות סגורות."))
         trade_view = trades.copy()
         manage_fx = _safe_quote("USDILS=X")
@@ -13753,7 +13761,7 @@ def main() -> None:
                         new_row["Cost_Origin"] = float(_num(new_row.get("Quantity", 0.0)) * _num(new_row.get("Origin_Buy_Price", 0.0)))
 
                 new_row["Trade_ID"] = _to_trade_id(pd.Series(new_row))
-                submitted = st.form_submit_button(tr("Save", "שמור"))
+                submitted = st.form_submit_button(tr("💾 Save trade", "💾 שמור עסקה"), type="primary", use_container_width=True)
 
             if submitted:
                 if not write_enabled:
