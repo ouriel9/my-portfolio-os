@@ -9807,7 +9807,7 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
 
     _eng = " · ".join(providers) if providers else tr("no engine", "אין מנוע")
     st.markdown(
-        f"<div class='agent-hero'><h3><span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.18rem;vertical-align:-3px;font-feature-settings:'liga' 1;\">smart_toy</span> {tr('AGENT AI', 'AI סוכן')}</h3>"
+        f"<div class='agent-hero'><h3><span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.18rem;vertical-align:-3px;font-feature-settings:'liga' 1;\">smart_toy</span> {tr('AGENT AI', 'סוכן AI')}</h3>"
         f"<p>{tr('Your portfolio agent — full data access, image understanding, analysis & advice', 'סוכן התיק שלך — גישה לכל הנתונים, הבנת תמונות, ניתוח וייעוץ')}"
         f" · {_eng}</p></div>",
         unsafe_allow_html=True,
@@ -10628,7 +10628,7 @@ def main() -> None:
     page_risk = tr("Risk & FIFO", "סיכונים ו-" + _mix_he_with_ltr("FIFO")) if not _is_mobile_client() else tr("Risk", "סיכון")
     page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
-    page_chat = tr("AGENT AI", "AI סוכן")
+    page_chat = tr("AGENT AI", "סוכן AI")
     page_id_to_label = {
         "dashboard": page_dashboard,
         "manage": page_manage,
@@ -10668,7 +10668,7 @@ def main() -> None:
         # the page switcher doesn't force-override the selection.
         if active_page_id in ("quality", "chat"):
             _bc_icon, _bc_label = (("database", tr("Data", "נתונים")) if active_page_id == "quality"
-                                   else ("smart_toy", tr("AGENT AI", "AI סוכן")))
+                                   else ("smart_toy", tr("AGENT AI", "סוכן AI")))
             # #4/#13 — a single compact back button (the page name already shows
             # in the hero below, so the old chip was redundant AND its full-width
             # columns created a ~100px empty gap before the hero).
@@ -11338,7 +11338,7 @@ def main() -> None:
     if is_mobile:
         _chat_active = (active_page_id == "chat")
         if st.sidebar.button(
-            tr("AGENT AI", "AI סוכן") + ("  ✓" if _chat_active else ""),
+            tr("AGENT AI", "סוכן AI") + ("  ✓" if _chat_active else ""),
             icon=":material/smart_toy:",
             use_container_width=True,
             type=("primary" if _chat_active else "secondary"),
