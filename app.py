@@ -8805,6 +8805,29 @@ def sim_monte_carlo_band(initial_capital: float, monthly_contribution: float,
     return pd.DataFrame({"year": yrs, "p10": p10, "p50": p50, "p90": p90})
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def sim_goal_success_prob(initial_capital: float, monthly_contribution: float,
+                          annual_return_pct: float, annual_vol_pct: float, years: float,
+                          target: float, fixed_addition: float = 0.0,
+                          lump_sum: float = 0.0, lump_sum_month: int = 0,
+                          n_paths: int = 2000, seed: int = 11):
+    """Probability that (Monte-Carlo regular bucket final + a deterministic addition,
+    e.g. pension+education funds) reaches the target nest egg. Returns None if N/A."""
+    months = int(round(max(0.0, years) * 12))
+    if months <= 0 or target <= 0:
+        return None
+    r_m = (1.0 + annual_return_pct / 100.0) ** (1.0 / 12.0) - 1.0
+    vol_m = (annual_vol_pct / 100.0) / (12.0 ** 0.5)
+    rng = np.random.default_rng(seed)
+    shocks = rng.normal(r_m, max(vol_m, 1e-9), size=(n_paths, months))
+    bal = np.full(n_paths, float(initial_capital) + (float(lump_sum) if lump_sum_month == 0 else 0.0))
+    for m in range(1, months + 1):
+        bal = bal * (1.0 + shocks[:, m - 1]) + float(monthly_contribution)
+        if m == int(lump_sum_month) and lump_sum_month > 0:
+            bal = bal + float(lump_sum)
+    return float(np.mean((bal + float(fixed_addition)) >= float(target)))
+
+
 def sim_safe_withdrawal_monthly(final_balance: float, swr_pct: float) -> float:
     """Trinity-style: monthly pension = final_balance * (swr/100) / 12."""
     try:
@@ -9456,6 +9479,30 @@ def render_simulator_page(
                 f"כדי להיות עצמאי כלכלית עד גיל {fi_age} (בעוד {int(_yrs_fi)} שנים), הפרש "
                 f"כ-₪{req:,.0f} לחודש; קרן הפנסיה וההשתלמות תורמות ₪{fi['funds_cover']:,.0f} "
                 f"מתוך ה-₪{fi['required_egg_nominal']:,.0f} הנדרשים."))
+
+            # Monte-Carlo odds of hitting the goal on the CURRENT plan (current
+            # monthly saving + expected return/vol), counting the deterministic
+            # pension+education funds at that age. Answers "will I actually make it?".
+            try:
+                _pf_fi = sim_project_fund(pension_initial, pension_monthly, pension_return, _yrs_fi, pension_fee_acc, pension_fee_dep)
+                _ef_fi = sim_project_fund(education_initial, education_monthly, education_return, _yrs_fi, education_fee_acc, education_fee_dep)
+                _prob = sim_goal_success_prob(
+                    regular_initial, regular_monthly, regular_return, regular_vol, _yrs_fi,
+                    float(fi["required_egg_nominal"]), fixed_addition=_pf_fi + _ef_fi,
+                    lump_sum=regular_lump, lump_sum_month=regular_lump_month)
+            except Exception:
+                _prob = None
+            if _prob is not None:
+                _pct = _prob * 100.0
+                _emoji = "🟢" if _pct >= 75 else ("🟡" if _pct >= 50 else "🔴")
+                st.progress(min(1.0, max(0.0, _prob)),
+                            text=tr(f"{_emoji} Probability of reaching the goal on your current plan: {_pct:.0f}%",
+                                    f"{_emoji} סיכוי להגיע ליעד בתוכנית הנוכחית: {_pct:.0f}%"))
+                st.caption(tr(
+                    f"Across 2,000 simulated market paths (return {regular_return:.1f}% ± {regular_vol:.0f}% vol), "
+                    f"saving ₪{regular_monthly:,.0f}/mo, including pension + education funds.",
+                    f"מתוך 2,000 מסלולי שוק מדומים (תשואה {regular_return:.1f}% ± {regular_vol:.0f}% תנודתיות), "
+                    f"בהפקדה ₪{regular_monthly:,.0f} לחודש, כולל קרנות פנסיה והשתלמות."))
 
         # Sensitivity: required monthly saving across several target ages.
         _cand = sorted({a for a in [_age_now_i + 5, 50, 55, 60, 65, 67, 70, fi_age] if a > _age_now_i})
