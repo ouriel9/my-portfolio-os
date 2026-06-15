@@ -6582,13 +6582,24 @@ def dataframe_completeness(df: pd.DataFrame) -> Tuple[int, int, float]:
     if df.empty:
         return 0, 0, 0.0
 
-    total_cells = int(df.shape[0] * df.shape[1])
+    # Sale-only fields are LEGITIMATELY empty for open positions; internal "_" cols
+    # are bookkeeping. Counting them (and counting the literal string "NaT"/"עדיין
+    # פתוח" as "filled") made completeness permanently report ~92% on perfectly
+    # clean data, tripping a false "data-quality issue" warning on every load.
+    SALE_ONLY = {"Sell_Date", "Sell_Price_Origin", "Yield_At_Sale", "Buy_Price"}
+    PLACEHOLDERS = {"", "nat", "none", "nan", "null", "—", "-", "עדיין פתוח"}
+
+    cols = [c for c in df.columns if not str(c).startswith("_") and c not in SALE_ONLY]
+    if not cols:
+        return 0, 0, 0.0
+
+    total_cells = int(df.shape[0] * len(cols))
     non_empty = 0
-    for col in df.columns:
+    for col in cols:
         series = df[col]
         if series.dtype == object:
-            cleaned = series.map(_clean)
-            non_empty += int(cleaned.ne("").sum())
+            cleaned = series.map(lambda v: _clean(v).lower())
+            non_empty += int((~cleaned.isin(PLACEHOLDERS)).sum())
         else:
             non_empty += int(series.notna().sum())
 
@@ -9995,7 +10006,13 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 top_w = float(top["Current_Value_ILS"]) / total_val
                 df["_y"] = (df["Current_Value_ILS"] - df["Cost_ILS"]) / df["Cost_ILS"].where(df["Cost_ILS"] > 0, other=pd.NA)
                 tkr_y = df.dropna(subset=["_y"]).groupby("Ticker")["_y"].mean()
-                crypto_mask = df.get("Type", pd.Series(dtype=str)).map(lambda x: _clean(x) == "קריפטו")
+                # Crypto exposure must use the SAME definition as the rest of the
+                # dashboard (build_home_inspired_reports / Crypto-Share KPI): spot
+                # crypto Type PLUS the crypto-proxy ETFs (IBIT/ETHA/BSOL/MSTR).
+                # Counting only Type=="קריפטו" here previously reported ~46% while
+                # other panels showed ~72% for the same portfolio.
+                _ticker_up = df.get("Ticker", pd.Series(dtype=str)).map(lambda x: _clean(x).upper())
+                crypto_mask = df.get("Type", pd.Series(dtype=str)).map(lambda x: _clean(x) == "קריפטו") | _ticker_up.isin(CRYPTO_SHARE_TICKERS)
                 crypto_share = float(df.loc[crypto_mask, "Current_Value_ILS"].sum()) / total_val if total_val else 0.0
                 msgs = []
                 if top_w >= 0.30:
