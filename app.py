@@ -9788,6 +9788,39 @@ _AI_TRADE_TOOLS = [{
             },
         },
         {
+            "name": "sell_trade",
+            "description": ("Record a SALE from an existing OPEN lot, identified by its Trade_ID (from the "
+                            "open-lots list in the data context). Handles full or partial sells; the user "
+                            "confirms before anything is written. Realized P/L is computed automatically."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trade_id": {"type": "string", "description": "Trade_ID of the open lot being sold from"},
+                    "sell_quantity": {"type": "number", "description": "Units to sell; if omitted, sells the whole lot"},
+                    "sell_price": {"type": "number", "description": "Sale price per unit in the lot's origin currency"},
+                    "sell_date": {"type": "string", "description": "Sale date YYYY-MM-DD; today if unknown"},
+                },
+                "required": ["trade_id", "sell_price"],
+            },
+        },
+        {
+            "name": "edit_trade",
+            "description": ("Edit fields of an existing trade identified by its Trade_ID (from the open-lots "
+                            "list). Provide ONLY the fields to change. The user confirms before saving."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "trade_id": {"type": "string", "description": "Trade_ID of the trade to edit"},
+                    "quantity": {"type": "number"},
+                    "buy_price": {"type": "number", "description": "New buy price per unit"},
+                    "platform": {"type": "string"},
+                    "date": {"type": "string", "description": "New purchase date YYYY-MM-DD"},
+                    "commission": {"type": "number"},
+                },
+                "required": ["trade_id"],
+            },
+        },
+        {
             "name": "delete_trade",
             "description": ("Delete an existing trade by its Trade_ID (shown in the open-lots list in the "
                             "data context). The user confirms before it is deleted."),
@@ -9841,34 +9874,136 @@ def _ai_add_args_to_row(args: Mapping[str, object]) -> Dict[str, object]:
     }
 
 
+def _ai_find_trade_row(df, trade_id: str) -> Optional[Dict[str, object]]:
+    """Look up a trade row by Trade_ID (prefix-tolerant — the data context shows
+    14-char Trade_IDs, so the model may echo a truncated id)."""
+    try:
+        if df is None or df.empty or "Trade_ID" not in df.columns:
+            return None
+        tid = _clean(trade_id)
+        if not tid:
+            return None
+        ids = df["Trade_ID"].astype(str).map(_clean)
+        hit = df[ids == tid]
+        if hit.empty:
+            hit = df[ids.str.startswith(tid)]
+        return hit.iloc[0].to_dict() if not hit.empty else None
+    except Exception:
+        return None
+
+
+def _ai_build_sell(df, args: Mapping[str, object]) -> Optional[Dict[str, object]]:
+    """Stage a SELL against an open lot. Full sell → convert that lot to closed
+    (no double-count); partial → add a closed slice + shrink the source lot.
+    Realized P/L follows automatically (proceeds − allocated cost basis)."""
+    src = _ai_find_trade_row(df, _clean(args.get("trade_id", "")))
+    if not src:
+        return None
+    src_qty = float(_num(src.get("Quantity", 0)))
+    sell_price = float(_num(args.get("sell_price", 0)))
+    if src_qty <= 0 or sell_price <= 0:
+        return None
+    sell_qty = float(_num(args.get("sell_quantity", 0))) or src_qty
+    sell_qty = min(sell_qty, src_qty)
+    if sell_qty <= 0:
+        return None
+    cur = _normalize_currency_code(src.get("Origin_Currency", "")) or "ILS"
+    fx = _usd_ils_rate() if cur == "USD" else 1.0
+    sell_date = _clean(args.get("sell_date", "")) or datetime.now().strftime("%Y-%m-%d")
+    src_cost = float(_num(src.get("Cost_Origin", 0)))
+    src_comm = float(_num(src.get("Commission", 0)))
+    ratio = sell_qty / src_qty if src_qty else 0.0
+    alloc_cost, alloc_comm = src_cost * ratio, src_comm * ratio
+    ticker = _clean(src.get("Ticker", "")).upper()
+    sell_row = {
+        "Current_Location": _clean(src.get("Current_Location", "")),
+        "Platform": _clean(src.get("Platform", "")), "Type": _clean(src.get("Type", "")),
+        "Ticker": ticker, "Origin_Currency": cur,
+        "Purchase_Date": _clean(src.get("Purchase_Date", "")),
+        "Quantity": sell_qty, "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0))),
+        "Cost_Origin": alloc_cost, "Commission": alloc_comm,
+        "Status": "סגור", "Action": "SELL", "Event_Type": "TRADE",
+        "Sell_Date": sell_date, "Sell_Price_Origin": sell_price,
+        "Current_Value_ILS": sell_qty * sell_price * fx, "Cost_ILS": 0.0,
+    }
+    realized = sell_qty * sell_price * fx - alloc_cost * (fx if cur == "USD" else 1.0)
+    label = "%s · %g @ %s%.2f" % (ticker, sell_qty, ("$" if cur == "USD" else "₪"), sell_price)
+    if (src_qty - sell_qty) > 1e-9:  # partial
+        source_update = dict(src)
+        source_update.update({"Quantity": src_qty - sell_qty,
+                              "Cost_Origin": max(0.0, src_cost - alloc_cost),
+                              "Commission": max(0.0, src_comm - alloc_comm),
+                              "Status": "פתוח", "Sell_Date": "", "Action": "BUY"})
+        return {"op": "sell_partial", "sell_row": sell_row, "source_update": source_update,
+                "label": label, "realized": realized}
+    sell_row["Trade_ID"] = _clean(src.get("Trade_ID", ""))  # full: convert lot in place
+    return {"op": "sell_full", "row": sell_row, "label": label, "realized": realized}
+
+
+def _ai_build_edit(df, args: Mapping[str, object]) -> Optional[Dict[str, object]]:
+    """Stage an EDIT — merge only the provided fields into the existing trade row."""
+    src = _ai_find_trade_row(df, _clean(args.get("trade_id", "")))
+    if not src:
+        return None
+    row = dict(src)
+    changed = []
+    if args.get("quantity") is not None:
+        row["Quantity"] = float(_num(args.get("quantity"))); changed.append("qty")
+    if args.get("buy_price") is not None:
+        row["Origin_Buy_Price"] = float(_num(args.get("buy_price"))); changed.append("price")
+    if _clean(args.get("platform", "")):
+        row["Platform"] = _clean(args.get("platform")); changed.append("platform")
+    if _clean(args.get("date", "")):
+        row["Purchase_Date"] = _clean(args.get("date")); changed.append("date")
+    if args.get("commission") is not None:
+        row["Commission"] = float(_num(args.get("commission"))); changed.append("commission")
+    if not changed:
+        return None
+    if "qty" in changed or "price" in changed:
+        row["Cost_Origin"] = float(_num(row.get("Quantity", 0))) * float(_num(row.get("Origin_Buy_Price", 0)))
+    return {"op": "edit", "row": row, "label": _clean(row.get("Ticker", "")) + " · " + ", ".join(changed)}
+
+
 def _ai_execute_trade(pending: Mapping[str, object], web_app_url: str, token: str) -> Tuple[bool, str]:
     """Execute a human-approved staged trade. Mirrors the Manage form: push to
     Google first when configured, then persist locally."""
     op = _clean(pending.get("op", ""))
     has_google = is_apps_script_web_app_url(_clean(web_app_url))
+
+    def _do(action: str, row: Dict[str, object]) -> Tuple[bool, str]:
+        # Google-first when configured (atomic), then mirror locally.
+        if has_google:
+            ok, msg = sync_trade_to_sheet(web_app_url, token, action, row)
+            if not ok:
+                return False, msg
+            apply_local_trade(action, row, mark_dirty=False)
+        else:
+            apply_local_trade(action, row, mark_dirty=True)
+        return True, _clean(row.get("Trade_ID", ""))
+
     if op == "add":
         row = dict(pending.get("row", {}))
         row["Trade_ID"] = _to_trade_id(pd.Series(row))
-        if has_google:
-            ok, msg = sync_trade_to_sheet(web_app_url, token, "add", row)
-            if not ok:
-                return False, msg
-            apply_local_trade("add", row, mark_dirty=False)
-        else:
-            apply_local_trade("add", row, mark_dirty=True)
-        return True, row.get("Trade_ID", "")
+        return _do("add", row)
+    if op == "edit" or op == "sell_full":
+        return _do("edit", dict(pending.get("row", {})))
+    if op == "sell_partial":
+        # Add the sold slice, then shrink the source open lot. Add first so a
+        # failure can't leave the source already reduced with no matching sale.
+        sell_row = dict(pending.get("sell_row", {}))
+        sell_row["Trade_ID"] = _to_trade_id(pd.Series(sell_row))
+        ok, msg = _do("add", sell_row)
+        if not ok:
+            return False, msg
+        ok2, msg2 = _do("edit", dict(pending.get("source_update", {})))
+        if not ok2:
+            return False, "sale recorded; source-lot update failed: " + msg2
+        return True, sell_row.get("Trade_ID", "")
     if op == "delete":
         tid = _clean(pending.get("trade_id", ""))
         if not tid:
             return False, "missing trade_id"
-        if has_google:
-            ok, msg = sync_trade_to_sheet(web_app_url, token, "delete", {"Trade_ID": tid})
-            if not ok:
-                return False, msg
-            apply_local_trade("delete", {"Trade_ID": tid}, mark_dirty=False)
-        else:
-            apply_local_trade("delete", {"Trade_ID": tid}, mark_dirty=True)
-        return True, tid
+        return _do("delete", {"Trade_ID": tid})
     return False, "unknown op"
 
 
@@ -9892,6 +10027,34 @@ def _render_ai_pending_trade(tr, web_app_url, token) -> None:
                 f"{tr('Cost','עלות')} {_sym}{row.get('Cost_Origin',0):,.2f}"
                 + (f" · {_clean(row.get('Platform',''))}" if _clean(row.get('Platform','')) else "")
                 + f" · {_clean(row.get('Purchase_Date',''))}"
+            )
+        elif op in ("sell_full", "sell_partial"):
+            row = dict(pending.get("sell_row", pending.get("row", {})))
+            cur = _clean(row.get("Origin_Currency", "ILS"))
+            _sym = "$" if cur == "USD" else "₪"
+            _rl = float(_num(pending.get("realized", 0)))
+            st.markdown("### " + tr("⚠ Confirm SALE", "⚠ אישור מכירה")
+                        + (" — " + tr("partial", "חלקית") if op == "sell_partial" else " — " + tr("full lot", "כל הלוט")))
+            st.markdown(
+                f"**{_clean(row.get('Ticker',''))}** · "
+                f"{tr('Sell qty','כמות למכירה')} {row.get('Quantity',0):g} · "
+                f"{tr('Price','מחיר')} {_sym}{row.get('Sell_Price_Origin',0):,.2f} · "
+                f"{tr('Proceeds','תמורה')} ₪{row.get('Current_Value_ILS',0):,.0f}"
+                + f" · {tr('Realized P/L','רווח/הפסד ממומש')} ₪{_rl:,.0f}"
+                + f" · {_clean(row.get('Sell_Date',''))}"
+            )
+        elif op == "edit":
+            row = dict(pending.get("row", {}))
+            cur = _clean(row.get("Origin_Currency", "ILS"))
+            _sym = "$" if cur == "USD" else "₪"
+            st.markdown("### " + tr("⚠ Confirm edit", "⚠ אישור עריכה"))
+            st.markdown(
+                f"**{_clean(row.get('Ticker',''))}** "
+                f"`{_clean(row.get('Trade_ID',''))[:14]}` → "
+                f"{tr('Qty','כמות')} {row.get('Quantity',0):g} · "
+                f"{tr('Price','מחיר')} {_sym}{row.get('Origin_Buy_Price',0):,.2f}"
+                + (f" · {_clean(row.get('Platform',''))}" if _clean(row.get('Platform','')) else "")
+                + (f" · {_clean(row.get('Purchase_Date',''))}" if _clean(row.get('Purchase_Date','')) else "")
             )
         elif op == "delete":
             st.markdown("### " + tr("⚠ Confirm delete", "⚠ אישור מחיקה"))
@@ -10058,12 +10221,18 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         "clear and concise, and analyze the data freely (returns, risk, allocation, what-ifs, advice). "
         "You can read attached images (e.g. a broker buy/sell screenshot) and extract the trade details. "
         "Currency is ₪ (ILS). Use ONLY the data below; never invent numbers. "
-        "TRADE ACTIONS: when the user clearly wants to RECORD A PURCHASE (e.g. 'קניתי 0.5 ETH ב-12000 ש\"ח ב-Bit2C' "
-        "or an attached buy screenshot), call the add_buy_trade tool with every field you can extract. "
-        "When they clearly want to remove a trade, call delete_trade with the matching Trade_ID from the open-lots "
-        "list below. Do NOT call a tool for a SALE — explain that sells are done on the Manage page so the sale is "
-        "matched to the correct open lot (FIFO). Every tool call is shown to the user for explicit confirmation "
-        "before anything is written, so propose confidently but never assume it is already saved.\n\n" + ctx)
+        "TRADE ACTIONS (each is shown to the user for explicit confirmation before anything is written — "
+        "propose confidently, but never assume it is already saved):\n"
+        "• PURCHASE ('קניתי 0.5 ETH ב-12000 ש\"ח ב-Bit2C' or a buy screenshot) → call add_buy_trade with every field.\n"
+        "• SALE ('מכרתי 0.3 ETH ב-15000' or a sell screenshot) → call sell_trade with the matching open-lot Trade_ID "
+        "(from the list below), the sell_price, and sell_quantity (omit to sell the whole lot). Realized P/L and FIFO "
+        "lot accounting are handled automatically.\n"
+        "• EDIT ('תקן את הכמות של ... ל-...') → call edit_trade with the Trade_ID and only the changed fields.\n"
+        "• REMOVE → call delete_trade with the Trade_ID.\n"
+        "Match Trade_IDs from the open-lots list; if you cannot find a matching lot, ask the user to clarify "
+        "instead of guessing. CRITICAL: pass every price/quantity NUMBER exactly as the user stated it, in the "
+        "asset's own origin currency — NEVER convert between ILS and USD yourself (the app handles FX). If the user "
+        "says 4500 dollars, pass price=4500 with currency USD, not 16650.\n\n" + ctx)
 
     def _gemini_answer(spin_note=None):
         gh = [{"role": ("model" if h["role"] == "assistant" else "user"), "text": h["text"]} for h in hist[-8:]]
@@ -10077,6 +10246,16 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
             if name == "add_buy_trade" and _num(args.get("quantity", 0)) > 0:
                 staged = {"op": "add", "row": _ai_add_args_to_row(args)}
                 note = tr("I prepared a buy for your confirmation 👇", "הכנתי קנייה לאישור שלך 👇")
+            elif name == "sell_trade":
+                staged = _ai_build_sell(df, args)
+                note = (tr("I prepared a sale for your confirmation 👇", "הכנתי מכירה לאישור שלך 👇")
+                        if staged else tr("I couldn't find a matching open lot — which one?",
+                                          "לא מצאתי לוט פתוח תואם — איזה מהם?"))
+            elif name == "edit_trade":
+                staged = _ai_build_edit(df, args)
+                note = (tr("I prepared an edit for your confirmation 👇", "הכנתי עריכה לאישור שלך 👇")
+                        if staged else tr("I couldn't find that trade — which Trade_ID?",
+                                          "לא מצאתי את העסקה — איזה Trade_ID?"))
             elif name == "delete_trade" and _clean(args.get("trade_id", "")):
                 staged = {"op": "delete", "trade_id": _clean(args.get("trade_id", ""))}
                 note = tr("I prepared a deletion for your confirmation 👇", "הכנתי מחיקה לאישור שלך 👇")
@@ -10086,6 +10265,10 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
                 hist.append({"role": "assistant", "text": note})
                 st.session_state["ai_chat_history"] = hist[-40:]
                 st.rerun()
+            elif note:
+                # A tool was called but couldn't be staged (e.g. lot not found) — a
+                # functionCall reply carries no text, so surface the note ourselves.
+                return (spin_note + note) if spin_note else note
         txt = _gemini_text(resp)
         if not txt:
             txt = "⚠️ " + tr("No response", "אין תגובה") + ": " + str(resp.get("detail") or resp.get("error") or "?")[:300]
