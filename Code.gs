@@ -1745,7 +1745,12 @@ function buildDashboardV2() {
   try { (readManualDeposits_("live").rows || []).forEach(function (d) { deposits += parseNum(d.Manual_Deposit_ILS); depByPlat[cleanText(d.Platform)] = parseNum(d.Manual_Deposit_ILS); }); } catch (e) {}
   Object.keys(depByPlat).forEach(function (p) { if (byPlat[p]) byPlat[p].dep = depByPlat[p]; });
 
-  const cash = deposits - totCost, totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
+  // Guard: if deposits failed to load (try/except above left it 0), do NOT compute
+  // cash = deposits - totCost — that yields -totCost and silently collapses the
+  // headline "total account value" KPI to the net P&L instead of the real balance.
+  // Treat 0/failed deposits as "uninvested cash unknown" → cash 0, account = holdings.
+  const cash = deposits > 0 ? (deposits - totCost) : 0;
+  const totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
   let cryptoVal = 0, equityVal = 0;
   Object.keys(byTicker).forEach(function (t) { if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
   const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
@@ -2166,7 +2171,12 @@ function computePortfolioStats_() {
   let deposits = 0; const depByPlat = {};
   try { (readManualDeposits_("live").rows || []).forEach(function (d) { deposits += parseNum(d.Manual_Deposit_ILS); depByPlat[cleanText(d.Platform)] = parseNum(d.Manual_Deposit_ILS); }); } catch (e) {}
   Object.keys(depByPlat).forEach(function (p) { if (byPlat[p]) byPlat[p].dep = depByPlat[p]; });
-  const cash = deposits - totCost, totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
+  // Guard: if deposits failed to load (try/except above left it 0), do NOT compute
+  // cash = deposits - totCost — that yields -totCost and silently collapses the
+  // headline "total account value" KPI to the net P&L instead of the real balance.
+  // Treat 0/failed deposits as "uninvested cash unknown" → cash 0, account = holdings.
+  const cash = deposits > 0 ? (deposits - totCost) : 0;
+  const totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
   let cryptoVal = 0, equityVal = 0;
   Object.keys(byTicker).forEach(function (t) { if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
   const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
