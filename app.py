@@ -4391,21 +4391,29 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
             elif row["Action"] == "SELL" and qty != 0:
                 sell_qty = abs(qty)
                 sell_price = abs(float(_num(row["Current_Value_ILS"]))) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else unit_cost
-                while sell_qty > 1e-9 and lots:
-                    lot = lots[0]
-                    used = min(lot.qty, sell_qty)
-                    realized += used * (sell_price - lot.cost_per_unit)
-                    lot.qty -= used
-                    sell_qty -= used
-                    if lot.qty <= 1e-9:
-                        lots.pop(0)
-                # Fully-closed positions are stored as a SINGLE row carrying both
-                # the buy cost (Cost_ILS) and the sale proceeds (Current_Value_ILS)
-                # with no separate BUY lot, so the loop above matches nothing.
-                # Realize the unmatched quantity against this row's own cost basis.
-                # Without this, realized P/L was always 0 for closed positions.
-                if sell_qty > 1e-9:
+                # A closed position is stored as a SINGLE self-contained row carrying
+                # BOTH its own buy cost (Cost_ILS) and sale proceeds (Current_Value_ILS)
+                # — it is a complete round-trip, NOT a market sell against the running
+                # lot inventory. Realize it against its OWN cost basis and leave open
+                # BUY lots untouched; otherwise a closed row would cannibalise an
+                # unrelated still-open lot of the same ticker (understating open qty
+                # AND pricing realized P/L off the wrong cost basis) the moment a
+                # ticker has both an open lot and a closed row.
+                if _num(row["Cost_ILS"]) != 0:
                     realized += sell_qty * (sell_price - unit_cost)
+                else:
+                    # True-ledger sell with no own cost basis → consume oldest open
+                    # lots first (FIFO), then any residual against this row's cost.
+                    while sell_qty > 1e-9 and lots:
+                        lot = lots[0]
+                        used = min(lot.qty, sell_qty)
+                        realized += used * (sell_price - lot.cost_per_unit)
+                        lot.qty -= used
+                        sell_qty -= used
+                        if lot.qty <= 1e-9:
+                            lots.pop(0)
+                    if sell_qty > 1e-9:
+                        realized += sell_qty * (sell_price - unit_cost)
 
         open_qty = sum(lot.qty for lot in lots)
         # Emit a row when there's an open position OR realized P/L to report.
