@@ -12393,7 +12393,8 @@ def main() -> None:
             def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview") -> None:
 
                 st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
-                exposure_cols = ["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]
+                # Return shown in the ORIGIN currency (per-ticker), not ILS (user pref).
+                exposure_cols = ["Ticker", "Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin"]
                 if summary_df.empty:
                     exposure_base = pd.DataFrame(columns=exposure_cols)
                 else:
@@ -12438,7 +12439,7 @@ def main() -> None:
                     # essential columns there so everything fits and nothing is cut.
                     if is_mobile:
                         _keep = [localize_column_name(x, language)
-                                 for x in ["Ticker", "Open_Qty", "Value_ILS", "Net_PnL_ILS", "Yield_ILS"]]
+                                 for x in ["Ticker", "Open_Qty", "Value_ILS", "Net_PnL_ILS", "Yield_Origin"]]
                         _keep = [c for c in _keep if c in exposure_view.columns]
                         if _keep:
                             exposure_view = exposure_view[_keep]
