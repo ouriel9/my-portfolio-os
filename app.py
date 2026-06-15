@@ -2591,6 +2591,20 @@ def _inject_design_overlay(is_dark: bool) -> None:
         text-transform: uppercase; font-size: .74rem !important;
     }}
 
+    /* Content surfaces — charts sit in the SAME elevated card as the metric tiles,
+       so the dashboard reads as one cohesive system instead of charts floating on
+       the page background. Plotly uses a transparent paper bg, so the card shows
+       through cleanly in both themes. */
+    [data-testid="stPlotlyChart"],
+    [data-testid="stVegaLiteChart"] {{
+        background: {card_bg} !important;
+        border: 1px solid {card_brd} !important;
+        border-radius: var(--pp-radius) !important;
+        padding: .55rem .5rem .3rem !important;
+        box-shadow: {card_sh} !important;
+        animation: ppPop .5s var(--pp-ease) both;
+    }}
+
     /* Buttons — rounded, lift + animated shine */
     .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {{
         border-radius: 13px !important; font-weight: 680 !important;
