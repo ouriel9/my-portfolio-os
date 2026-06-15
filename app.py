@@ -10790,9 +10790,14 @@ def main() -> None:
                 opacity: .92 !important;
             }}
             .app-logo-badge {{
-                background: rgba(255,255,255,.18) !important;
-                border: 1px solid rgba(255,255,255,.32) !important;
+                /* Dark glass chip — a translucent-white pill failed WCAG badly over
+                   the vivid hero (white-on-pill CR 1.71 on the amber/yellow accents,
+                   3.30 on indigo). A slate fill at .46 lifts worst-case contrast to
+                   ~5.1:1 across ALL six page accents while keeping the glassy look. */
+                background: rgba(15,23,42,.46) !important;
+                border: 1px solid rgba(255,255,255,.30) !important;
                 color: #ffffff !important;
+                text-shadow: 0 1px 2px rgba(0,0,0,.28) !important;
                 backdrop-filter: blur(6px) !important;
                 -webkit-backdrop-filter: blur(6px) !important;
                 font-weight: 650 !important;
