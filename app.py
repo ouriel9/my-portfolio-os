@@ -13035,10 +13035,13 @@ def main() -> None:
                 _fifo_keep = [c for c in _fifo_keep if c in fifo_view.columns]
                 if _fifo_keep:
                     fifo_view = fifo_view[_fifo_keep]
+            # No inline ₪ in the cells: the st.dataframe canvas font lacks the shekel
+            # glyph and rendered it as a tofu box (▢5,197). The column HEADERS already
+            # state "(₪)", so plain numbers are both correct and cleaner.
             _fifo_fmt = {
                 tr("Open Qty (FIFO)", "כמות פתוחה (FIFO)"): _smart_qty,
-                tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "₪{:,.0f}",
-                realized_col: "₪{:,.0f}",
+                tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "{:,.0f}",
+                realized_col: "{:,.0f}",
             }
             if is_mobile:
                 # #2 — wide table headers clipped on phones ("Open Qty (FIF(").
