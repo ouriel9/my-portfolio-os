@@ -8523,6 +8523,13 @@ def load_sim_prefs() -> Dict[str, object]:
     return {**local, **remote}
 
 
+# Debounce state for the cross-device simulator-prefs push. The simulator calls
+# save_sim_prefs() on EVERY rerun (every slider/input change); previously each of
+# those did a synchronous Apps Script POST, so interactions waited on a remote
+# round-trip. We now push in a daemon thread and only when the snapshot changed.
+_SIM_PREFS_PUSH_STATE: Dict[str, object] = {"sig": None}
+
+
 def save_sim_prefs(values: Mapping[str, object]) -> bool:
     """Persist the simulator input snapshot — ADDITIVE merge so that
     switching modes never overwrites the other mode's saved data.
@@ -8556,8 +8563,19 @@ def save_sim_prefs(values: Mapping[str, object]) -> bool:
             json.dumps(merged, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        # Push to the shared store so other devices (phone, Next.js) pick it up.
-        _remote_sim_prefs_save(merged)
+        # Push to the shared store so other devices (phone, Next.js) pick it up —
+        # in the BACKGROUND and only when the snapshot actually changed, so a
+        # slider drag never blocks the rerun on a slow Apps Script round-trip.
+        try:
+            import threading
+            _sig = json.dumps(merged, sort_keys=True, ensure_ascii=False)
+            if _sig != _SIM_PREFS_PUSH_STATE.get("sig"):
+                _SIM_PREFS_PUSH_STATE["sig"] = _sig
+                threading.Thread(
+                    target=_remote_sim_prefs_save, args=(merged,), daemon=True
+                ).start()
+        except Exception:
+            pass
         return True
     except Exception:
         return False
