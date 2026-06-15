@@ -65,6 +65,18 @@ function cleanText(val) {
   return String(val).replace(new RegExp("[\\u200e\\u200f]", "g"), "").trim();
 }
 
+// Defense-in-depth against spreadsheet formula injection. A token-authorized
+// writer must never be able to store text that Sheets evaluates as a formula
+// (leading =, +, -, @, or a tab/CR). Prefix such values with an apostrophe —
+// Sheets treats it as a plain-text marker and strips it from getValue(), so
+// downstream key-matching (Trade_ID / Ticker) is unaffected. No-op for normal
+// data (tickers, platforms, statuses never start with these characters).
+function neuterFormula_(val) {
+  var s = cleanText(val);
+  if (s && /^[=+\-@\t\r]/.test(s)) return "'" + s;
+  return s;
+}
+
 function parseNum(val) {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
@@ -172,7 +184,7 @@ function sanitizeManualDepositsRows_(rows) {
   const src = Array.isArray(rows) ? rows : [];
   for (let i = 0; i < src.length; i++) {
     const r = src[i] || {};
-    const platform = cleanText(r.Platform || r.platform || "");
+    const platform = neuterFormula_(r.Platform || r.platform || "");
     if (!platform) continue;
     out.push({
       Platform: platform,
@@ -1077,17 +1089,17 @@ function readSnapshotRows_() {
 function sanitizeTrade_(trade) {
   const out = {};
   Object.keys(trade).forEach(function (k) { out[k] = trade[k]; });
-  out.Current_Location = cleanText(out.Current_Location || out["מיקום נוכחי"] || "");
-  out.Platform = cleanText(out.Platform || out["פלטפורמה"] || "");
-  out.Type = cleanText(out.Type || out["סוג נכס"] || "קריפטו");
-  out.Ticker = cleanText(out.Ticker || out["טיקר"] || "").toUpperCase();
+  out.Current_Location = neuterFormula_(out.Current_Location || out["מיקום נוכחי"] || "");
+  out.Platform = neuterFormula_(out.Platform || out["פלטפורמה"] || "");
+  out.Type = neuterFormula_(out.Type || out["סוג נכס"] || "קריפטו");
+  out.Ticker = neuterFormula_((out.Ticker || out["טיקר"] || "").toUpperCase());
   out.Purchase_Date = normalizeDateOnly_(out.Purchase_Date || out["תאריך רכישה"] || "");
   out.Quantity = parseNum(out.Quantity || out["כמות"]);
   out.Origin_Buy_Price = parseNum(out.Origin_Buy_Price || out["שער קנייה"]);
   out.Cost_Origin = parseNum(out.Cost_Origin || out["עלות כוללת"]);
-  out.Origin_Currency = cleanText(out.Origin_Currency || out["מטבע"] || "ILS").toUpperCase();
+  out.Origin_Currency = neuterFormula_((out.Origin_Currency || out["מטבע"] || "ILS").toUpperCase());
   out.Commission = parseNum(out.Commission || out["עמלה"]);
-  out.Status = cleanText(out.Status || out["סטטוס"] || "פתוח");
+  out.Status = neuterFormula_(out.Status || out["סטטוס"] || "פתוח");
   out.Sell_Date = normalizeDateOnly_(out.Sell_Date || out["תאריך מכירה"] || "");
   out.Trade_ID = cleanText(out.Trade_ID || "");
 
@@ -2025,8 +2037,10 @@ function handleTelegramUpdate_(update) {
   if (!msg || !msg.chat) return;
   const chatId = String(msg.chat.id);
   // Privacy: only answer the owner (the web app is anonymous-accessible).
+  // Fail CLOSED — if no owner chat-id is configured, refuse everyone rather than
+  // broadcasting live portfolio data to any stranger who finds the bot.
   const allowed = cleanText(PropertiesService.getScriptProperties().getProperty("TELEGRAM_CHAT_ID") || "");
-  if (allowed && chatId !== allowed) { tgSend_(chatId, "מצטער, זהו בוט פרטי של אוריאל 🔒"); return; }
+  if (!allowed || chatId !== allowed) { tgSend_(chatId, "מצטער, זהו בוט פרטי של אוריאל 🔒"); return; }
   const text = cleanText(msg.text || "");
   if (!text) { tgSend_(chatId, tgHelp_()); return; }
 
