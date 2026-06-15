@@ -11108,9 +11108,28 @@ def main() -> None:
             c.classList.{_lock_action}('pp-chart-locked');
           }});
         }}
-        applyLock();
-        // Keep observing indefinitely so new charts on other tabs get locked too
-        var obs = new MutationObserver(function(){{ requestAnimationFrame(applyLock); }});
+        // Collapse PHANTOM containers that render at 0 height but still add flex-gap
+        // space above the sticky hero — the dead space that appears after navigating
+        // to a page (e.g. the AI agent) and back. Only targets style/script-only
+        // markdown injections and attribute-less 0-height JS-effect iframes, so the
+        // visible TradingView widget and still-loading charts are never touched.
+        function killPhantoms() {{
+          var main = d.querySelector('section.main') || d;
+          main.querySelectorAll('[data-testid="stElementContainer"]').forEach(function(el){{
+            if (el.dataset.ppHidden) return;
+            var ifr = el.querySelector(':scope > iframe[data-testid="stIFrame"]');
+            var phantomIframe = ifr && ifr.offsetHeight === 0 && !ifr.getAttribute('height');
+            var md = el.querySelector(':scope > [data-testid="stMarkdown"] > [data-testid="stMarkdownContainer"]');
+            var onlyStyle = md && md.children.length > 0 &&
+              Array.prototype.every.call(md.children, function(c){{ return c.tagName==='STYLE'||c.tagName==='SCRIPT'; }}) &&
+              !((md.innerText||'').trim());
+            if (phantomIframe || onlyStyle) {{ el.style.display='none'; el.dataset.ppHidden='1'; }}
+          }});
+        }}
+        function tick() {{ applyLock(); killPhantoms(); }}
+        tick();
+        // Keep observing indefinitely so new charts/phantoms on other tabs are handled.
+        var obs = new MutationObserver(function(){{ requestAnimationFrame(tick); }});
         obs.observe(d.body, {{childList:true, subtree:true}});
       }} catch(e){{}}
     }})();</script>""", height=0, width=0)
