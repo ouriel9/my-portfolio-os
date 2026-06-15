@@ -11575,7 +11575,8 @@ def main() -> None:
 
                 if is_mobile:
                     kpi_r1 = st.columns(2)
-                    kpi_r1[0].metric(tr("Total Value (₪)", "שווי כולל (₪)"), _tv_txt)
+                    with kpi_r1[0].container(key="kpi_total"):
+                        st.metric(tr("Total Value (₪)", "שווי כולל (₪)"), _tv_txt)
                     with kpi_r1[1].container(key="kpi_pnl"):
                         st.metric(tr("Open P&L (₪)", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     kpi_r2 = st.columns(2)
@@ -11590,7 +11591,8 @@ def main() -> None:
                         )
                 else:
                     kpi_cols = st.columns(4)
-                    kpi_cols[0].metric(tr("Total Value (₪)", "שווי כולל (₪)"), _tv_txt)
+                    with kpi_cols[0].container(key="kpi_total"):
+                        st.metric(tr("Total Value (₪)", "שווי כולל (₪)"), _tv_txt)
                     with kpi_cols[1].container(key="kpi_pnl"):
                         st.metric(tr("Open P&L (₪)", "רווח/הפסד פתוח (₪)"), _tp_txt)
                     with kpi_cols[2].container(key="kpi_ret"):
@@ -11608,9 +11610,27 @@ def main() -> None:
                 # #7 contrast: darker red (#b91c1c ≈ 6:1 on white) for negatives.
                 _pnl_c = "#b91c1c" if _tp < 0 else "#15803d"
                 _ret_c = "#b91c1c" if _tr_val < 0 else "#15803d"
+                # Visual hierarchy: the TOTAL VALUE is the headline number, so its card
+                # gets a premium indigo-gradient fill with white numerics — instantly
+                # readable as "this is THE figure", with the P&L/Return/Positions cards
+                # reading as supporting context. P&L + Return additionally carry a
+                # semantic top-accent bar (red when losing, green when gaining) so the
+                # state is pre-attentive — grasped before the digits are even read.
+                _total_grad = "linear-gradient(135deg,#4338ca 0%,#6366f1 52%,#818cf8 100%)"
                 st.markdown(
-                    "<style>.st-key-kpi_pnl [data-testid='stMetricValue'],.st-key-kpi_pnl [data-testid='stMetricValue'] *{color:" + _pnl_c + " !important;}"
-                    ".st-key-kpi_ret [data-testid='stMetricValue'],.st-key-kpi_ret [data-testid='stMetricValue'] *{color:" + _ret_c + " !important;}</style>",
+                    "<style>"
+                    ".st-key-kpi_total [data-testid='stMetric']{background:" + _total_grad + " !important;"
+                    "border:none !important;box-shadow:0 20px 44px -20px rgba(79,70,229,.62) !important;}"
+                    ".st-key-kpi_total [data-testid='stMetric']::before{height:0 !important;}"
+                    ".st-key-kpi_total [data-testid='stMetricValue'],.st-key-kpi_total [data-testid='stMetricValue'] *{"
+                    "color:#ffffff !important;text-shadow:0 1px 10px rgba(0,0,0,.20) !important;}"
+                    ".st-key-kpi_total [data-testid='stMetricLabel'],.st-key-kpi_total [data-testid='stMetricLabel'] *{"
+                    "color:rgba(255,255,255,.94) !important;}"
+                    ".st-key-kpi_pnl [data-testid='stMetric']::before{background:" + _pnl_c + " !important;opacity:1 !important;}"
+                    ".st-key-kpi_ret [data-testid='stMetric']::before{background:" + _ret_c + " !important;opacity:1 !important;}"
+                    ".st-key-kpi_pnl [data-testid='stMetricValue'],.st-key-kpi_pnl [data-testid='stMetricValue'] *{color:" + _pnl_c + " !important;}"
+                    ".st-key-kpi_ret [data-testid='stMetricValue'],.st-key-kpi_ret [data-testid='stMetricValue'] *{color:" + _ret_c + " !important;}"
+                    "</style>",
                     unsafe_allow_html=True,
                 )
 
