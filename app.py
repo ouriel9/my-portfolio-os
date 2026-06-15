@@ -9743,6 +9743,167 @@ def _claude_via_relay(prompt: str, web_app_url: str, token: str, max_wait: int =
         return None
 
 
+# ── AI agent trade write-back: Gemini function-calling, human-confirmed ──────
+# The model can PROPOSE adding a buy or deleting a trade; nothing is written until
+# Ouriel approves the staged action. Sells stay on the Manage page (FIFO lot
+# matching is too error-prone to delegate to an LLM).
+_AI_TRADE_TOOLS = [{
+    "function_declarations": [
+        {
+            "name": "add_buy_trade",
+            "description": ("Record a NEW BUY (purchase) in the portfolio. Extract every field you can "
+                            "from the user's words or an attached broker screenshot. The user confirms "
+                            "before anything is saved. For SELLS, do NOT call this — tell the user to use "
+                            "the Manage page so the sale is matched to the right open lot (FIFO)."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "Asset symbol, e.g. BTC, ETH, VOO, QQQ"},
+                    "quantity": {"type": "number", "description": "Number of units bought"},
+                    "price": {"type": "number", "description": "Buy price per unit in the origin currency"},
+                    "currency": {"type": "string", "enum": ["ILS", "USD"], "description": "Origin currency (ILS or USD)"},
+                    "platform": {"type": "string", "description": "Broker/exchange, e.g. Bit2C, Horizon, Excellence"},
+                    "asset_type": {"type": "string", "description": "קריפטו for crypto, שוק ההון for stocks/ETFs"},
+                    "date": {"type": "string", "description": "Purchase date YYYY-MM-DD; today if unknown"},
+                    "commission": {"type": "number", "description": "Fee in origin currency; 0 if unknown"},
+                },
+                "required": ["ticker", "quantity", "price"],
+            },
+        },
+        {
+            "name": "delete_trade",
+            "description": ("Delete an existing trade by its Trade_ID (shown in the open-lots list in the "
+                            "data context). The user confirms before it is deleted."),
+            "parameters": {
+                "type": "object",
+                "properties": {"trade_id": {"type": "string", "description": "The Trade_ID to delete"}},
+                "required": ["trade_id"],
+            },
+        },
+    ]
+}]
+
+
+def _ai_extract_function_call(resp: Dict[str, object]) -> Optional[Dict[str, object]]:
+    """Pull the first functionCall (name + args) out of a Gemini response, if any."""
+    try:
+        for p in resp["candidates"][0]["content"]["parts"]:
+            if isinstance(p, dict) and isinstance(p.get("functionCall"), dict):
+                fc = p["functionCall"]
+                return {"name": _clean(fc.get("name", "")), "args": dict(fc.get("args", {}) or {})}
+    except Exception:
+        pass
+    return None
+
+
+def _ai_add_args_to_row(args: Mapping[str, object]) -> Dict[str, object]:
+    """Convert add_buy_trade function args into a trade_row the existing save path
+    (sync_trade_to_sheet / apply_local_trade) understands. BUY/open only."""
+    qty = float(_num(args.get("quantity", 0)))
+    price = float(_num(args.get("price", 0)))
+    cur = _clean(args.get("currency", "")).upper()
+    cur = cur if cur in ("ILS", "USD") else "ILS"
+    date = _clean(args.get("date", "")) or datetime.now().strftime("%Y-%m-%d")
+    return {
+        "Current_Location": "",
+        "Platform": _clean(args.get("platform", "")),
+        "Type": _clean(args.get("asset_type", "")),
+        "Ticker": _clean(args.get("ticker", "")).upper(),
+        "Origin_Currency": cur,
+        "Quantity": qty,
+        "Origin_Buy_Price": price,
+        "Cost_Origin": qty * price,
+        "Commission": float(_num(args.get("commission", 0))),
+        "Action": "BUY",
+        "Event_Type": "TRADE",
+        "Status": "פתוח",
+        "Sell_Date": "",
+        "Current_Value_ILS": 0.0,
+        "Cost_ILS": 0.0,
+        "Purchase_Date": date,
+    }
+
+
+def _ai_execute_trade(pending: Mapping[str, object], web_app_url: str, token: str) -> Tuple[bool, str]:
+    """Execute a human-approved staged trade. Mirrors the Manage form: push to
+    Google first when configured, then persist locally."""
+    op = _clean(pending.get("op", ""))
+    has_google = is_apps_script_web_app_url(_clean(web_app_url))
+    if op == "add":
+        row = dict(pending.get("row", {}))
+        row["Trade_ID"] = _to_trade_id(pd.Series(row))
+        if has_google:
+            ok, msg = sync_trade_to_sheet(web_app_url, token, "add", row)
+            if not ok:
+                return False, msg
+            apply_local_trade("add", row, mark_dirty=False)
+        else:
+            apply_local_trade("add", row, mark_dirty=True)
+        return True, row.get("Trade_ID", "")
+    if op == "delete":
+        tid = _clean(pending.get("trade_id", ""))
+        if not tid:
+            return False, "missing trade_id"
+        if has_google:
+            ok, msg = sync_trade_to_sheet(web_app_url, token, "delete", {"Trade_ID": tid})
+            if not ok:
+                return False, msg
+            apply_local_trade("delete", {"Trade_ID": tid}, mark_dirty=False)
+        else:
+            apply_local_trade("delete", {"Trade_ID": tid}, mark_dirty=True)
+        return True, tid
+    return False, "unknown op"
+
+
+def _render_ai_pending_trade(tr, web_app_url, token) -> None:
+    """If the agent has staged a trade, show a confirmation card. Nothing is
+    written until the user clicks Approve."""
+    pending = st.session_state.get("_ai_pending_trade")
+    if not pending:
+        return
+    op = _clean(pending.get("op", ""))
+    with st.container(border=True):
+        if op == "add":
+            row = dict(pending.get("row", {}))
+            st.markdown("### " + tr("⚠ Confirm new BUY", "⚠ אישור קנייה חדשה"))
+            cur = _clean(row.get("Origin_Currency", "ILS"))
+            _sym = "$" if cur == "USD" else "₪"
+            st.markdown(
+                f"**{_clean(row.get('Ticker',''))}** · "
+                f"{tr('Qty','כמות')} {row.get('Quantity',0):g} · "
+                f"{tr('Price','מחיר')} {_sym}{row.get('Origin_Buy_Price',0):,.2f} · "
+                f"{tr('Cost','עלות')} {_sym}{row.get('Cost_Origin',0):,.2f}"
+                + (f" · {_clean(row.get('Platform',''))}" if _clean(row.get('Platform','')) else "")
+                + f" · {_clean(row.get('Purchase_Date',''))}"
+            )
+        elif op == "delete":
+            st.markdown("### " + tr("⚠ Confirm delete", "⚠ אישור מחיקה"))
+            st.markdown(tr("Delete trade", "מחיקת עסקה") + f" `{_clean(pending.get('trade_id',''))}`"
+                        + (f" — {_clean(pending.get('label',''))}" if pending.get("label") else ""))
+        ca, cc = st.columns(2)
+        if ca.button(tr("✅ Approve & save", "✅ אשר ושמור"), key="_ai_trade_ok", type="primary", use_container_width=True):
+            ok, msg = _ai_execute_trade(pending, web_app_url, token)
+            st.session_state.pop("_ai_pending_trade", None)
+            if ok:
+                # Bust the snapshot caches so the next render reflects the write
+                # (mirrors the Manage form's post-save refresh).
+                for _c in (load_google_snapshot_data, load_google_snapshot_data_via_gspread):
+                    try:
+                        _c.clear()
+                    except Exception:
+                        pass
+                st.session_state.setdefault("ai_chat_history", []).append(
+                    {"role": "assistant", "text": tr("✅ Done — saved.", "✅ בוצע — נשמר.") + f" ({msg})"})
+                st.toast(tr("Trade saved", "העסקה נשמרה"), icon="✅")
+            else:
+                st.session_state.setdefault("ai_chat_history", []).append(
+                    {"role": "assistant", "text": tr("❌ Save failed", "❌ השמירה נכשלה") + f": {msg}"})
+            st.rerun()
+        if cc.button(tr("✖ Cancel", "✖ ביטול"), key="_ai_trade_cancel", use_container_width=True):
+            st.session_state.pop("_ai_pending_trade", None)
+            st.rerun()
+
+
 def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile) -> None:
     # ── Professional, Gemini-like chat styling (theme-aware, app accent) ──
     _abg = "#1f2937" if is_dark else "#ffffff"
@@ -9828,6 +9989,9 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
             st.rerun()
     provider = pmap.get(prov_label, "gemini")
 
+    # A staged (proposed) trade waits here for explicit human approval before any write.
+    _render_ai_pending_trade(tr, web_app_url, token)
+
     hist = st.session_state.setdefault("ai_chat_history", [])
     if not hist:
         st.markdown("<div style='margin:8px 0 2px;opacity:.75'>" + tr("Try asking:", "נסה לשאול:") + "</div>",
@@ -9877,12 +10041,34 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         "clear and concise, and analyze the data freely (returns, risk, allocation, what-ifs, advice). "
         "You can read attached images (e.g. a broker buy/sell screenshot) and extract the trade details. "
         "Currency is ₪ (ILS). Use ONLY the data below; never invent numbers. "
-        "If asked to add/edit/delete a trade, extract the fields and present them clearly for confirmation "
-        "(full trade write-back is being wired in).\n\n" + ctx)
+        "TRADE ACTIONS: when the user clearly wants to RECORD A PURCHASE (e.g. 'קניתי 0.5 ETH ב-12000 ש\"ח ב-Bit2C' "
+        "or an attached buy screenshot), call the add_buy_trade tool with every field you can extract. "
+        "When they clearly want to remove a trade, call delete_trade with the matching Trade_ID from the open-lots "
+        "list below. Do NOT call a tool for a SALE — explain that sells are done on the Manage page so the sale is "
+        "matched to the correct open lot (FIFO). Every tool call is shown to the user for explicit confirmation "
+        "before anything is written, so propose confidently but never assume it is already saved.\n\n" + ctx)
 
     def _gemini_answer(spin_note=None):
         gh = [{"role": ("model" if h["role"] == "assistant" else "user"), "text": h["text"]} for h in hist[-8:]]
-        resp = _gemini_chat(system, gh, user_text or "(ניתחתי את התמונה המצורפת)", images)
+        resp = _gemini_chat(system, gh, user_text or "(ניתחתי את התמונה המצורפת)", images, tools=_AI_TRADE_TOOLS)
+        # Trade action proposed → stage it for explicit confirmation, then rerun so
+        # the confirmation card renders at the top. Nothing is written here.
+        fc = _ai_extract_function_call(resp)
+        if fc:
+            name, args = fc.get("name", ""), fc.get("args", {})
+            staged, note = None, ""
+            if name == "add_buy_trade" and _num(args.get("quantity", 0)) > 0:
+                staged = {"op": "add", "row": _ai_add_args_to_row(args)}
+                note = tr("I prepared a buy for your confirmation 👇", "הכנתי קנייה לאישור שלך 👇")
+            elif name == "delete_trade" and _clean(args.get("trade_id", "")):
+                staged = {"op": "delete", "trade_id": _clean(args.get("trade_id", ""))}
+                note = tr("I prepared a deletion for your confirmation 👇", "הכנתי מחיקה לאישור שלך 👇")
+            if staged:
+                st.session_state["_ai_pending_trade"] = staged
+                hist.append({"role": "user", "text": user_text or "📎 (תמונה)"})
+                hist.append({"role": "assistant", "text": note})
+                st.session_state["ai_chat_history"] = hist[-40:]
+                st.rerun()
         txt = _gemini_text(resp)
         if not txt:
             txt = "⚠️ " + tr("No response", "אין תגובה") + ": " + str(resp.get("detail") or resp.get("error") or "?")[:300]
