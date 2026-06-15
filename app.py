@@ -2604,6 +2604,16 @@ def _inject_design_overlay(is_dark: bool) -> None:
         box-shadow: {card_sh} !important;
         animation: ppPop .5s var(--pp-ease) both;
     }}
+    /* Data tables get the same elevated card so they read as deliberate panels,
+       not raw grids floating on the page. overflow:hidden clips the table to the
+       card's rounded corners; the inner grid keeps its own cell borders. */
+    [data-testid="stDataFrame"] {{
+        border: 1px solid {card_brd} !important;
+        border-radius: var(--pp-radius) !important;
+        box-shadow: {card_sh} !important;
+        overflow: hidden !important;
+        background: {card_bg} !important;
+    }}
 
     /* Buttons — rounded, lift + animated shine */
     .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {{
