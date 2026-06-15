@@ -2613,6 +2613,17 @@ def _inject_design_overlay(is_dark: bool) -> None:
         background: {card_bg} !important;
     }}
 
+    /* Tabs span the FULL width, evenly — each tab gets an equal share of the row so
+       the bar is symmetric on phone and desktop (no right-clustered pills). High
+       specificity so it wins over the earlier tab rules. */
+    html body [data-testid="stTabs"] > div [data-baseweb="tab-list"] {{
+        width: 100% !important; display: flex !important; gap: .3rem !important;
+        overflow-x: visible !important; mask-image: none !important;
+    }}
+    html body [data-testid="stTabs"] > div [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+        flex: 1 1 0 !important; min-width: 0 !important; justify-content: center !important;
+    }}
+
     /* Buttons — rounded, lift + animated shine */
     .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {{
         border-radius: 13px !important; font-weight: 680 !important;
