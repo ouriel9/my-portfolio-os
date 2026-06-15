@@ -2652,7 +2652,9 @@ def _inject_design_overlay(is_dark: bool) -> None:
     [data-baseweb="tab-list"] {{ gap: .15rem !important; }}
     [data-baseweb="tab"] {{ border-radius: 11px 11px 0 0 !important; font-weight: 640 !important;
         transition: color .15s ease, background .15s ease !important; }}
-    [data-baseweb="tab"][aria-selected="true"] {{ color: var(--pp-accent) !important; }}
+    /* Active-tab text: #4f46e5 (6.3:1 on white) instead of the brand #6366f1 (4.46,
+       just under AA) — fixes the axe color-contrast violation on st.tabs labels. */
+    [data-baseweb="tab"][aria-selected="true"] {{ color: #4f46e5 !important; }}
 
     /* Expanders + dataframes + charts — unified premium card surface (rise-in) */
     [data-testid="stExpander"] {{
@@ -6913,7 +6915,7 @@ def _pp_inject_premium_css(is_dark: bool, is_mobile: bool) -> None:
     button[data-baseweb="tab"] {{
         border-radius: 10px 10px 0 0 !important; font-weight: 600 !important;
     }}
-    button[data-baseweb="tab"][aria-selected="true"] {{ color: var(--pp-accent) !important; }}
+    button[data-baseweb="tab"][aria-selected="true"] {{ color: #4f46e5 !important; }}
     details[data-testid="stExpander"], div[data-testid="stExpander"] {{
         border-radius: var(--pp-radius) !important;
         border: 1px solid var(--pp-border-soft) !important;
