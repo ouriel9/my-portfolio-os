@@ -961,7 +961,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     .app-logo-text {{
         display: flex !important;
         flex-direction: column !important;
-        align-items: flex-end !important;
+        align-items: center !important;   /* badge optically centered under the title */
         gap: 0.08rem !important;
     }}
     .app-logo-badge {{
