@@ -265,9 +265,7 @@ COLUMN_LABELS = {
     "ETF_Qty": {LANG_EN: "ETF Qty", LANG_HE: "דרך קרן סל (יחידות)"},
     "ETF_ILS": {LANG_EN: "ETF (ILS)", LANG_HE: "דרך קרן סל (₪)"},
     "Total_Exposure_ILS": {LANG_EN: "Total (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
-    "Estimated_BTC_Qty": {LANG_EN: "Est. BTC Qty", LANG_HE: "כמות BTC מוערכת (כולל IBIT/MSTR)"},
-    "Estimated_ETH_Qty": {LANG_EN: "Est. ETH Qty", LANG_HE: "כמות ETH מוערכת (כולל ETHA)"},
-    "Estimated_SOL_Qty": {LANG_EN: "Est. SOL Qty", LANG_HE: "כמות SOL מוערכת (כולל BSOL)"},
+    "Estimated_Coin_Qty": {LANG_EN: "Est. coin qty (incl. ETF)", LANG_HE: "כמות מטבע מוערכת (כולל קרן סל)"},
     "Category": {LANG_EN: "Category", LANG_HE: "סוג"},
     "Yield": {LANG_EN: "Return", LANG_HE: "תשואה"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
@@ -4744,9 +4742,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
                 "ETF_Qty": etf_qty,
                 "ETF_ILS": etf_val,
                 "Total_Exposure_ILS": direct_val + etf_val,
-                "Estimated_BTC_Qty": estimated_asset_qty if asset == "BTC" else np.nan,
-                "Estimated_ETH_Qty": estimated_asset_qty if asset == "ETH" else np.nan,
-                "Estimated_SOL_Qty": estimated_asset_qty if asset == "SOL" else np.nan,
+                "Estimated_Coin_Qty": estimated_asset_qty,
             }
         )
 
@@ -12845,8 +12841,9 @@ def main() -> None:
                             except Exception:
                                 pass
                     report_styled = localized_df.style
-                    if fmt_map:
-                        report_styled = report_styled.format(fmt_map)
+                    # na_rep so empty cells render as "—" instead of a literal "None"
+                    # (e.g. the ETHA/BSOL columns in the Crypto-Concentration table).
+                    report_styled = report_styled.format(fmt_map or None, na_rep="—")
                     signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "תשואה", "רווח"])]
                     if is_mobile:
                         # #1: render as cards so wide report tables never clip on a phone
