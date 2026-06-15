@@ -11188,41 +11188,30 @@ def main() -> None:
         }
         mobile_options = list(mobile_label_to_id.keys())
 
-        # If we're on the "Data" page (entered via the sidebar button), show
-        # a compact breadcrumb + back button rather than the 4-pill radio so
-        # the page switcher doesn't force-override the selection.
-        if active_page_id in ("quality", "chat"):
-            _bc_icon, _bc_label = (("database", tr("Data", "נתונים")) if active_page_id == "quality"
-                                   else ("smart_toy", tr("AGENT AI", "סוכן AI")))
-            # #4/#13 — a single compact back button (the page name already shows
-            # in the hero below, so the old chip was redundant AND its full-width
-            # columns created a ~100px empty gap before the hero).
-            with st.container(key="pp_breadcrumb"):
-                if st.button(
-                    tr("⬅  Back to overview", "⬅  חזרה לסקירה"),
-                    key="mobile_page_back",
-                ):
-                    st.session_state["active_page_id"] = "dashboard"
-                    st.rerun()
-        else:
-            active_mobile_index = 0
-            for i, lbl in enumerate(mobile_options):
-                if mobile_label_to_id.get(lbl) == active_page_id:
-                    active_mobile_index = i
-                    break
-            # Sync widget state BEFORE creating the widget so single-click works.
-            _mobile_nav_key = "mobile_page_nav_radio"
-            _expected_label = mobile_options[active_mobile_index]
-            if st.session_state.get(_mobile_nav_key) not in mobile_options:
-                st.session_state[_mobile_nav_key] = _expected_label
-            page_choice = st.radio(
-                tr("Page", "עמוד"),
-                mobile_options,
-                horizontal=True,
-                label_visibility="collapsed",
-                key=_mobile_nav_key,
-            )
-            active_page_id = mobile_label_to_id.get(page_choice, "dashboard")
+        # The 4-pill nav is ALWAYS shown. On pages that aren't one of the pills
+        # (Data / Agent, entered via the sidebar), NO pill is highlighted
+        # (index=None) — and clicking any pill navigates straight there. The key
+        # embeds the active page so the widget re-initialises (honouring the
+        # index, including None) whenever navigation comes from outside the pills.
+        active_mobile_index = next(
+            (i for i, lbl in enumerate(mobile_options)
+             if mobile_label_to_id.get(lbl) == active_page_id),
+            None,
+        )
+        page_choice = st.radio(
+            tr("Page", "עמוד"),
+            mobile_options,
+            horizontal=True,
+            label_visibility="collapsed",
+            index=active_mobile_index,
+            key=f"mobile_page_nav_radio_{active_page_id}",
+        )
+        _chosen_id = mobile_label_to_id.get(page_choice) if page_choice else None
+        if _chosen_id and _chosen_id != active_page_id:
+            st.session_state["active_page_id"] = _chosen_id
+            st.rerun()
+        elif _chosen_id:
+            active_page_id = _chosen_id
     else:
         # ── Desktop: sidebar option-menu navigation ──
         st.sidebar.title(tr("Navigation", "ניווט"))
