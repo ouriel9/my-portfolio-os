@@ -8780,6 +8780,35 @@ def sim_project_portfolio(
     })
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def sim_monte_carlo_band(initial_capital: float, monthly_contribution: float,
+                         annual_return_pct: float, annual_vol_pct: float, years: float,
+                         lump_sum: float = 0.0, lump_sum_month: int = 0,
+                         n_paths: int = 800, seed: int = 7) -> pd.DataFrame:
+    """Probabilistic envelope around the deterministic projection: same contribution
+    schedule, but each month's growth is drawn from a normal with the given annual
+    mean/vol. Returns per-YEAR p10/p50/p90 balances (with the lump applied)."""
+    months = int(round(max(0.0, years) * 12))
+    if months <= 0 or n_paths <= 0:
+        return pd.DataFrame()
+    r_m = (1.0 + annual_return_pct / 100.0) ** (1.0 / 12.0) - 1.0
+    vol_m = (annual_vol_pct / 100.0) / (12.0 ** 0.5)
+    rng = np.random.default_rng(seed)
+    shocks = rng.normal(r_m, max(vol_m, 1e-9), size=(n_paths, months))
+    bal = np.full(n_paths, float(initial_capital) + (float(lump_sum) if lump_sum_month == 0 else 0.0))
+    yr_idx, p10, p50, p90, yrs = 0, [], [], [], []
+    for m in range(1, months + 1):
+        bal = bal * (1.0 + shocks[:, m - 1]) + float(monthly_contribution)
+        if m == int(lump_sum_month) and lump_sum_month > 0:
+            bal = bal + float(lump_sum)
+        if m % 12 == 0 or m == months:
+            p10.append(float(np.percentile(bal, 10)))
+            p50.append(float(np.percentile(bal, 50)))
+            p90.append(float(np.percentile(bal, 90)))
+            yrs.append(m / 12.0)
+    return pd.DataFrame({"year": yrs, "p10": p10, "p50": p50, "p90": p90})
+
+
 def sim_safe_withdrawal_monthly(final_balance: float, swr_pct: float) -> float:
     """Trinity-style: monthly pension = final_balance * (swr/100) / 12."""
     try:
@@ -9123,6 +9152,14 @@ def render_simulator_page(
                 min_value=-20.0, max_value=40.0, step=0.25, key=k,
                 help=tr("S&P 500 long-run ≈ 7% real / 10% nominal.",
                         "ממוצע רב-שנתי של S&P 500: ≈7% ריאלי / 10% נומינלי."),
+            ))
+            regular_vol = float(st.number_input(
+                tr("Expected volatility (% / yr)", "תנודתיות צפויה (% לשנה)"),
+                min_value=0.0, max_value=60.0, value=15.0, step=1.0, key="sim_vol_pct_widget",
+                help=tr("Annual standard deviation used for the probability band around the "
+                        "projection. Diversified equity ≈ 15%; all-stock ≈ 18%; crypto-heavy 40%+.",
+                        "סטיית התקן השנתית לחישוב רצועת ההסתברות סביב התחזית. תיק מניות מפוזר ≈15%; "
+                        "מנייתי לגמרי ≈18%; כבד-קריפטו 40%+."),
             ))
             k = _need("regular_lump")
             regular_lump = float(st.number_input(
@@ -9472,6 +9509,25 @@ def render_simulator_page(
     # ── Projection chart (regular bucket only — funds are point-in-time) ─
     chart_height = 340 if is_mobile else 420
     fig = go.Figure()
+    # Probabilistic envelope (p10–p90) so the projection reads as a RANGE of likely
+    # outcomes, not a single deterministic promise. Drawn first → sits behind lines.
+    try:
+        _mc_band = sim_monte_carlo_band(regular_initial, regular_monthly, regular_return,
+                                        regular_vol, years_total, regular_lump, regular_lump_month)
+    except Exception:
+        _mc_band = pd.DataFrame()
+    if not _mc_band.empty:
+        fig.add_trace(go.Scatter(x=_mc_band["year"], y=_mc_band["p90"], mode="lines",
+                                 line=dict(width=0), showlegend=False, hoverinfo="skip"))
+        fig.add_trace(go.Scatter(
+            x=_mc_band["year"], y=_mc_band["p10"], mode="lines",
+            name=tr("Likely range (10–90%)", "טווח סביר (10–90%)"),
+            line=dict(width=0), fill="tonexty", fillcolor="rgba(99,102,241,0.14)",
+            hovertemplate="₪%{y:,.0f}<extra>P10</extra>"))
+        fig.add_trace(go.Scatter(
+            x=_mc_band["year"], y=_mc_band["p50"], mode="lines",
+            name=tr("Median outcome", "תרחיש חציוני"),
+            line=dict(color="#8b5cf6", width=1.3, dash="dot")))
     fig.add_trace(go.Scatter(
         x=df_reg["year"], y=df_reg["contributions_cum"],
         mode="lines",
@@ -9489,8 +9545,6 @@ def render_simulator_page(
         mode="lines",
         name=tr("Regular bucket (with lump)", "תיק רגיל (עם חד-פעמית)"),
         line=dict(color="#6366f1", width=2.4),
-        fill="tozeroy",
-        fillcolor="rgba(99,102,241,0.10)",
     ))
     if regular_lump > 0:
         fig.add_vline(
