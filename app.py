@@ -52,12 +52,18 @@ except Exception:
 
 RISK_FREE_ANNUAL = 0.02
 
-# ── Auto-detect corporate proxy (Intel WPAD) so yfinance / requests work ──
+# ── Optional corporate proxy (Intel WPAD) so yfinance / requests work on a ──
+# ── locked-down corp network. OPT-IN ONLY: set PP_USE_INTEL_PROXY=1.        ──
+# Security: this must NOT auto-activate. Silently routing ALL outbound traffic
+# (which carries the API token and GitHub PAT) through a corp proxy the moment a
+# `wpad.intel.com` hostname happens to resolve — including on an untrusted or
+# DNS-spoofed network — is an exfiltration risk for a public-repo finance app.
+# When explicitly enabled, an unreachable proxy host falls back to direct.
 def _auto_detect_proxy() -> None:
-    """If HTTPS_PROXY is not set and we're on an Intel network (WPAD),
-    auto-configure os.environ so that all Python HTTP libs go through the proxy."""
     if os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
-        return  # already configured
+        return  # already configured by the environment
+    if os.environ.get("PP_USE_INTEL_PROXY", "").strip().lower() not in ("1", "true", "yes"):
+        return  # not opted in → never touch proxy settings
     try:
         import urllib.request
         urllib.request.urlopen("http://wpad.intel.com/wpad.dat", timeout=2)

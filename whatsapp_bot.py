@@ -112,14 +112,40 @@ def handle(message: str) -> str:
 
 # ── Flask webhook (only imported when actually serving) ──────────────────
 def create_app():
-    from flask import Flask, request, Response
+    from flask import Flask, request, Response, abort
+    from xml.sax.saxutils import escape as _xml_escape
+
     app = Flask(__name__)
+
+    # Twilio auth token — used to verify each request's X-Twilio-Signature so
+    # that ONLY Twilio (not anyone who finds the public tunnel URL) can drive
+    # real sheet mutations through this webhook.
+    try:
+        _cfg = json.loads((ROOT / "whatsapp_config.json").read_text(encoding="utf-8"))
+        _auth_token = _cfg.get("auth_token", "")
+    except Exception:
+        _auth_token = ""
 
     @app.route("/whatsapp", methods=["POST"])
     def whatsapp():
+        # Verify the request actually came from Twilio (signed with the auth token).
+        if _auth_token:
+            try:
+                from twilio.request_validator import RequestValidator
+                validator = RequestValidator(_auth_token)
+                signature = request.headers.get("X-Twilio-Signature", "")
+                if not validator.validate(request.url, request.form, signature):
+                    abort(403)
+            except ImportError:
+                abort(503)  # twilio lib missing → fail closed rather than open
+        else:
+            # No auth token configured → cannot verify caller → refuse (fail closed).
+            abort(503)
         body = request.form.get("Body", "")
         reply = handle(body)
-        twiml = f"<?xml version='1.0' encoding='UTF-8'?><Response><Message>{reply}</Message></Response>"
+        # Escape so portfolio/error text can never break or inject into the TwiML.
+        twiml = (f"<?xml version='1.0' encoding='UTF-8'?>"
+                 f"<Response><Message>{_xml_escape(reply)}</Message></Response>")
         return Response(twiml, mimetype="application/xml")
 
     @app.route("/health")
@@ -144,4 +170,6 @@ if __name__ == "__main__":
     elif "--test" in sys.argv:
         print(handle(" ".join(sys.argv[sys.argv.index("--test") + 1:]) or "מצב"))
     else:
-        create_app().run(host="0.0.0.0", port=5005)
+        # Bind to loopback — the public tunnel (ngrok) terminates here; there is no
+        # reason to expose the raw Flask port to the whole LAN.
+        create_app().run(host="127.0.0.1", port=5005)
