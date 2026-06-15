@@ -6540,7 +6540,14 @@ def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
 
 
 def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
-    """Refresh Current_Value_ILS for all open trades using live yfinance prices.
+    """RETIRED — intentionally NOT called (kept for reference only).
+
+    The per-load synchronous yfinance refresh this performed was removed in favour
+    of instant local-first paint + a background sync + the live-price KPI fragment.
+    Do NOT re-wire it into the load path: it does a blocking network loop that would
+    reintroduce the slow first-paint it was built to avoid.
+
+    Refresh Current_Value_ILS for all open trades using live yfinance prices.
 
     Should be called once after loading portfolio data from local store so that
     KPI totals (total_value, total_profit) reflect real-time market prices instead
@@ -7873,6 +7880,16 @@ def pp_monte_carlo_projection(start_value: float,
                          "p10": p10, "p50": p50, "p90": p90, "mean": mean})
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _mc_projection_cached(start_value: float, daily_returns, horizon_days: int, n_paths: int) -> pd.DataFrame:
+    """Memoized Monte Carlo. The simulation is deterministic (fixed seed) and its
+    inputs (start value + the cached daily-return series) only change every ~15min,
+    so re-running 1000×252 paths on every Risk-page rerun (theme toggle, etc.) was
+    pure waste. st.cache_data hashes the return array and reuses the result."""
+    return pp_monte_carlo_projection(start_value=start_value, daily_returns=daily_returns,
+                                     horizon_days=horizon_days, n_paths=n_paths)
+
+
 def pp_dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str = "Portfolio") -> bytes:
     buf = _pp_io.BytesIO()
     try:
@@ -8355,7 +8372,7 @@ def render_advanced_analytics(
     _chart_help("Monte Carlo simulation: 1,000 random paths based on historical daily returns. Shows the range of possible portfolio values in 1 year.",
                 "סימולציית מונטה-קרלו: 1,000 מסלולים אקראיים על בסיס תשואות יומיות היסטוריות. טווח שווי אפשרי לתיק בעוד שנה.", language)
     try:
-        mc = pp_monte_carlo_projection(
+        mc = _mc_projection_cached(
             start_value=float(vs.iloc[-1]) if len(vs) else float(total_value),
             daily_returns=daily_ret.values,
             horizon_days=252, n_paths=1000,
