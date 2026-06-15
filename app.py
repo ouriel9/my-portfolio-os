@@ -2659,10 +2659,19 @@ def _inject_design_overlay(is_dark: bool) -> None:
         border-radius: 0 0 22px 22px !important;
     }}
 
-    /* Section headings (st.markdown ### …) */
+    /* Section headings (st.markdown ### …) — leading accent bar gives the page
+       a clear vertical rhythm and a premium "sectioned" structure (RTL-aware via
+       inset-inline-start, so the bar sits on the right in Hebrew). */
     .main h3 {{
         font-weight: 780 !important; letter-spacing: -.015em !important;
-        margin-top: .5rem !important;
+        margin-top: .75rem !important;
+        position: relative !important;
+        padding-inline-start: .72rem !important;
+    }}
+    .main h3::before {{
+        content: ""; position: absolute; inset-inline-start: 0; top: .2em; bottom: .2em;
+        width: 4px; border-radius: 3px;
+        background: linear-gradient(180deg, #6366f1, #818cf8) !important;
     }}
     /* KPI delta rendered as a soft pill */
     [data-testid="stMetricDelta"] {{
