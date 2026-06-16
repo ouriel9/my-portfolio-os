@@ -12982,11 +12982,34 @@ def main() -> None:
                     elif status_scope == closed_label:
                         tx_view = tx_view[tx_view["Status"].map(_is_closed_status)]
 
+                # Dedicated closed-trade sale-return columns — origin-rate and ₪-rate —
+                # mirroring the native apps (web/js/app.js) + the sheet's "תשואה במכירה (₪)".
+                # Computed only for closed rows (blank for open → auto-hidden). Feeds the
+                # static render path; the live fragment recomputes the same two columns.
+                if "Status" in tx_view.columns and not tx_view.empty:
+                    _sale_clm = tx_view["Status"].map(_is_closed_status)
+                    _sale_bp = tx_view["Origin_Buy_Price"].map(_num) if "Origin_Buy_Price" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    _sale_sp = tx_view["Sell_Price_Origin"].map(_num) if "Sell_Price_Origin" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    _sale_ci = tx_view["Cost_ILS"].map(_num) if "Cost_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    _sale_vi = tx_view["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    # Origin-rate fallback requires a REAL sell price (sp>0); otherwise leave
+                    # blank rather than emit a false -100% (e.g. CRK has no recorded sell price).
+                    _sale_orig_fb = pd.Series(np.where((_sale_bp > 0) & (_sale_sp > 0), (_sale_sp - _sale_bp) / _sale_bp, np.nan), index=tx_view.index)
+                    if "Yield_At_Sale" in tx_view.columns:
+                        _sale_orig = tx_view["Yield_At_Sale"].map(_num_or_nan)
+                        _sale_orig = _sale_orig.where(~_sale_orig.isna(), _sale_orig_fb)
+                    else:
+                        _sale_orig = _sale_orig_fb
+                    tx_view = tx_view.drop(columns=[c for c in ["Yield_At_Sale", "תשואה במכירה"] if c in tx_view.columns], errors="ignore")
+                    tx_view["תשואה במכירה (מקור)"] = np.where(_sale_clm, _sale_orig, np.nan)
+                    tx_view["תשואה במכירה (₪)"] = np.where(_sale_clm & (_sale_ci > 0), (_sale_vi - _sale_ci) / _sale_ci, np.nan)
+
                 if is_open_only:
                     sale_related_cols = [
                         c for c in [
                             "Status", "Action", "Sell_Date", "Sell_Price_Origin", "Yield_At_Sale",
                             "סטטוס", "פעולה", "תאריך מכירה", "שער מכירה", "מחיר מכירה", "תשואה במכירה",
+                            "תשואה במכירה (מקור)", "תשואה במכירה (₪)",
                         ]
                         if c in tx_view.columns
                     ]
@@ -13218,6 +13241,14 @@ def main() -> None:
 
                         _ci = _tx["Cost_ILS"].map(_num) if "Cost_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
                         _vi = _tx["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        # Dedicated closed-trade sale returns: origin-rate (from Yield_At_Sale)
+                        # and ₪-rate (STORED sale proceeds vs cost — NOT live prices; the sale
+                        # already happened). Blank for open rows. Mirrors the static path above.
+                        _clm_f = _tx["Status"].map(_is_closed_status) if "Status" in _tx.columns else pd.Series(False, index=_tx.index)
+                        if "Yield_At_Sale" in _tx.columns:
+                            _tx["תשואה במכירה (מקור)"] = np.where(_clm_f, _tx["Yield_At_Sale"].map(_num_or_nan), np.nan)
+                            _tx = _tx.drop(columns=["Yield_At_Sale"], errors="ignore")
+                        _tx["תשואה במכירה (₪)"] = np.where(_clm_f & (_ci > 0), (_vi - _ci) / _ci, np.nan)
                         # ── Update Current_Value_ILS from live prices BEFORE computing yields ──
                         # Without this, _vi is the stale value from portfolio_data.json and
                         # the per-trade yield won't reflect real-time prices.
