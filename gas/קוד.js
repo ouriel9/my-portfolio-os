@@ -11,7 +11,7 @@ const SNAPSHOT_CANONICAL_HEADERS = [
   "מיקום נוכחי", "פלטפורמה", "סוג נכס", "טיקר", "תאריך רכישה", "כמות", "שער קנייה",
   "עלות כוללת", "מטבע", "עמלה", "סטטוס", "שער נוכחי USD", "עלות USD", "עלות ILS",
   "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי ILS", "שער מכירה",
-  "תאריך מכירה", "תשואה במכירה", "תשואה מקור", "תשואה שקלית", "Trade_ID"
+  "תאריך מכירה", "תשואה במכירה", "תשואה מקור", "תשואה שקלית", "Trade_ID", "תשואה במכירה (₪)"
 ];
 const SNAPSHOT_FIELD_ALIASES = {
   location: ["מיקום נוכחי", "Current_Location"],
@@ -38,6 +38,7 @@ const SNAPSHOT_FIELD_ALIASES = {
   yieldAtSale: ["תשואה במכירה", "Yield_At_Sale"],
   yieldOrigin: ["תשואה מקור"],
   yieldIls: ["תשואה שקלית"],
+  yieldAtSaleIls: ["תשואה במכירה (₪)", "תשואה במכירה בשקלים", "Yield_At_Sale_ILS"],
   tradeId: ["Trade_ID"]
 };
 
@@ -911,6 +912,12 @@ function doPost(e) {
       return jsonResponse_({ ok: true, stats: stats });
     }
 
+    if (action === "add_sale_return_ils" || action === "add_sale_ils_col") {
+      const stats = addSaleReturnIlsColumn_();
+      appendAudit_("add_sale_return_ils", "SYSTEM", "OK", JSON.stringify(stats));
+      return jsonResponse_({ ok: true, stats: stats });
+    }
+
     if (action === "dump_all") {
       const ssd = SpreadsheetApp.getActiveSpreadsheet();
       const out = {};
@@ -1133,7 +1140,11 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
     // entered at sell time — NOT auto-computed from the live market price.
     yieldAtSale: '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
     yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
-    yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
+    yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')',
+    // Sale return in ILS — the ₪ analogue of yieldAtSale (W). Only populated for
+    // closed positions; uses sale proceeds in ILS (Q=שווי ILS) vs cost in ILS
+    // (O=עלות ILS). Blank for open rows so it reads as a true "at-sale" figure.
+    yieldAtSaleIls: '=IF(OR(K' + r + '<>"סגור", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')'
   };
 
   Object.keys(formulas).forEach(function (k) {
@@ -1141,6 +1152,37 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
     if (ix === undefined || ix < 0) return;
     ws.getRange(r, ix + 1).setFormula(formulas[k]);
   });
+}
+
+// One-off (idempotent) migration: add the "תשואה במכירה (₪)" column — the ILS
+// analogue of "תשואה במכירה" (origin-currency sale return) — and backfill it for
+// existing rows. APPENDS at the end so no existing hardcoded-letter formula shifts;
+// future rows auto-populate via applyCalculatedFormulasForRow_ (yieldAtSaleIls key).
+function addSaleReturnIlsColumn_() {
+  const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PORTFOLIO_SHEET);
+  if (!ws) throw new Error("Missing sheet: " + PORTFOLIO_SHEET);
+  const NEW_HEADER = "תשואה במכירה (₪)";
+  const lastCol = ws.getLastColumn();
+  const headers = ws.getRange(1, 1, 1, lastCol).getValues()[0].map(cleanText);
+  let col = headers.indexOf(NEW_HEADER) + 1; // 0 => not present yet
+  const created = col === 0;
+  if (created) col = lastCol + 1;
+  ws.getRange(1, col).setValue(NEW_HEADER)
+    .setBackground("#2C5282").setFontColor("white").setFontWeight("bold")
+    .setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
+  const lastRow = ws.getLastRow();
+  let filled = 0;
+  if (lastRow >= 2) {
+    const formulas = [];
+    for (let r = 2; r <= lastRow; r++) {
+      formulas.push(['=IF(OR(K' + r + '<>"סגור", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')']);
+    }
+    const rng = ws.getRange(2, col, formulas.length, 1);
+    rng.setFormulas(formulas);
+    rng.setNumberFormat("0.0%");
+    filled = formulas.length;
+  }
+  return { ok: true, header: NEW_HEADER, column: col, created: created, rows_filled: filled };
 }
 
 function rowToMapByHeaders_(headers, row) {
