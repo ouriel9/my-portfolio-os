@@ -12493,71 +12493,78 @@ def main() -> None:
                     )
 
             # Portfolio Build-Up — directly BELOW the "רווח/הפסד לפי נכס" bar, same (Overview) tab.
+            # Wrapped so a chart error can NEVER abort the rest of this block (e.g. the
+            # exposure table below) — that previously made the exposure vanish on mobile.
+            _build_up_slot = st.container()
             if can_show_build_up:
-                st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
-                perf_track = dashboard_df.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
-                perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
-                perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
-                _x = perf_track["Purchase_Date"]
-                _cost = perf_track["Cum_Cost_ILS"]
-                _value = perf_track["Cum_Value_ILS"]
-                _final_val = float(_value.iloc[-1]) if len(_value) else 0.0
-                _final_cost = float(_cost.iloc[-1]) if len(_cost) else 0.0
-                _ret = (_final_val / _final_cost - 1.0) if _final_cost else 0.0
-                _up = _final_val >= _final_cost
-                # Whole chart is tinted green/red by the overall result for an at-a-glance read.
-                _accent = "#22c55e" if _up else "#ef4444"
-                _line_col = ("#34d399" if is_dark else "#10b981") if _up else ("#f87171" if is_dark else "#ef4444")
-                _fill = "rgba(16,185,129,0.16)" if _up else "rgba(239,68,68,0.14)"
-                fig_track = go.Figure()
-                # Invested-capital baseline (muted dotted spline).
-                fig_track.add_trace(go.Scatter(
-                    x=_x, y=_cost, mode="lines", name=tr("Cumulative Cost", "עלות מצטברת"),
-                    line=dict(color="#94a3b8", width=1.6, dash="dot", shape="spline", smoothing=0.7),
-                    hovertemplate=tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
-                ))
-                # Portfolio value with a soft gain/loss band filled down to the cost line.
-                fig_track.add_trace(go.Scatter(
-                    x=_x, y=_value, mode="lines", name=tr("Cumulative Value", "שווי מצטבר"),
-                    line=dict(color=_line_col, width=3.4, shape="spline", smoothing=0.7),
-                    fill="tonexty", fillcolor=_fill,
-                    hovertemplate=tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
-                ))
-                # Emphasised final point + value/return badge.
-                if len(_x):
-                    fig_track.add_trace(go.Scatter(
-                        x=[_x.iloc[-1]], y=[_final_val], mode="markers",
-                        marker=dict(size=12, color=_accent, line=dict(color="#ffffff", width=2)),
-                        showlegend=False, hoverinfo="skip",
-                    ))
-                    fig_track.add_annotation(
-                        x=_x.iloc[-1], y=_final_val,
-                        text=f"<b>₪{_final_val:,.0f}</b>  ({_ret * 100:+.1f}%)",
-                        showarrow=False, yshift=22, xshift=-6,
-                        font=dict(color=_accent, size=13),
-                        bgcolor="rgba(15,23,42,0.65)" if is_dark else "rgba(255,255,255,0.75)",
-                        bordercolor=_accent, borderwidth=1, borderpad=4,
-                    )
-                fig_track.update_layout(
-                    template=template,
-                    xaxis_title=None,
-                    yaxis_title=tr("Value (ILS)", "שווי (₪)"),
-                    yaxis_tickformat="~s",
-                    hovermode="x unified",
-                    xaxis=dict(showgrid=False, showspikes=True, spikethickness=1,
-                               spikedash="dot", spikecolor="rgba(148,163,184,0.5)", spikemode="across"),
-                    yaxis=dict(gridcolor="rgba(148,163,184,0.14)", zeroline=False),
-                )
-                # Apply the shared theme, THEN force a visible legend ABOVE the plot.
-                _fig_track = _apply_plotly_theme(fig_track, is_dark, is_mobile)
-                _fig_track.update_layout(
-                    showlegend=True,
-                    legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
-                                font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
-                                bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(t=64, l=8, r=8, b=8),
-                )
-                st.plotly_chart(_fig_track, theme=None, use_container_width=True)
+                try:
+                    with _build_up_slot:
+                        st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
+                        perf_track = dashboard_df.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
+                        perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
+                        perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
+                        _x = perf_track["Purchase_Date"]
+                        _cost = perf_track["Cum_Cost_ILS"]
+                        _value = perf_track["Cum_Value_ILS"]
+                        _final_val = float(_value.iloc[-1]) if len(_value) else 0.0
+                        _final_cost = float(_cost.iloc[-1]) if len(_cost) else 0.0
+                        _ret = (_final_val / _final_cost - 1.0) if _final_cost else 0.0
+                        _up = _final_val >= _final_cost
+                        # Whole chart is tinted green/red by the overall result for an at-a-glance read.
+                        _accent = "#22c55e" if _up else "#ef4444"
+                        _line_col = ("#34d399" if is_dark else "#10b981") if _up else ("#f87171" if is_dark else "#ef4444")
+                        _fill = "rgba(16,185,129,0.16)" if _up else "rgba(239,68,68,0.14)"
+                        fig_track = go.Figure()
+                        # Invested-capital baseline (muted dotted spline).
+                        fig_track.add_trace(go.Scatter(
+                            x=_x, y=_cost, mode="lines", name=tr("Cumulative Cost", "עלות מצטברת"),
+                            line=dict(color="#94a3b8", width=1.6, dash="dot", shape="spline", smoothing=0.7),
+                            hovertemplate=tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
+                        ))
+                        # Portfolio value with a soft gain/loss band filled down to the cost line.
+                        fig_track.add_trace(go.Scatter(
+                            x=_x, y=_value, mode="lines", name=tr("Cumulative Value", "שווי מצטבר"),
+                            line=dict(color=_line_col, width=3.4, shape="spline", smoothing=0.7),
+                            fill="tonexty", fillcolor=_fill,
+                            hovertemplate=tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
+                        ))
+                        # Emphasised final point + value/return badge.
+                        if len(_x):
+                            fig_track.add_trace(go.Scatter(
+                                x=[_x.iloc[-1]], y=[_final_val], mode="markers",
+                                marker=dict(size=12, color=_accent, line=dict(color="#ffffff", width=2)),
+                                showlegend=False, hoverinfo="skip",
+                            ))
+                            fig_track.add_annotation(
+                                x=_x.iloc[-1], y=_final_val,
+                                text=f"<b>₪{_final_val:,.0f}</b>  ({_ret * 100:+.1f}%)",
+                                showarrow=False, yshift=22, xshift=-6,
+                                font=dict(color=_accent, size=13),
+                                bgcolor="rgba(15,23,42,0.65)" if is_dark else "rgba(255,255,255,0.75)",
+                                bordercolor=_accent, borderwidth=1, borderpad=4,
+                            )
+                        fig_track.update_layout(
+                            template=template,
+                            xaxis_title=None,
+                            yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                            yaxis_tickformat="~s",
+                            hovermode="x unified",
+                            xaxis=dict(showgrid=False, showspikes=True, spikethickness=1,
+                                       spikedash="dot", spikecolor="rgba(148,163,184,0.5)", spikemode="across"),
+                            yaxis=dict(gridcolor="rgba(148,163,184,0.14)", zeroline=False),
+                        )
+                        # Apply the shared theme, THEN force a visible legend ABOVE the plot.
+                        _fig_track = _apply_plotly_theme(fig_track, is_dark, is_mobile)
+                        _fig_track.update_layout(
+                            showlegend=True,
+                            legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
+                                        font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
+                                        bgcolor="rgba(0,0,0,0)"),
+                            margin=dict(t=64, l=8, r=8, b=8),
+                        )
+                        st.plotly_chart(_fig_track, theme=None, use_container_width=True)
+                except Exception:
+                    pass
 
             # Exposure table mirrored into Overview tab — live fragment updates every 20s
             _ov_exposure_slot = st.container()
