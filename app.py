@@ -10341,8 +10341,11 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 hhi = float((weights ** 2).sum())
                 top = by_tkr.loc[by_tkr["Current_Value_ILS"].idxmax()]
                 top_w = float(top["Current_Value_ILS"]) / total_val
-                df["_y"] = (df["Current_Value_ILS"] - df["Cost_ILS"]) / df["Cost_ILS"].where(df["Cost_ILS"] > 0, other=pd.NA)
-                tkr_y = df.dropna(subset=["_y"]).groupby("Ticker")["_y"].mean()
+                # Per-ticker yield from AGGREGATE value vs cost (NOT the mean of per-lot
+                # yields, which mis-ranks tickers held across several lots).
+                _agg_y = df.groupby("Ticker", as_index=False)[["Current_Value_ILS", "Cost_ILS"]].sum()
+                _agg_y["_y"] = (_agg_y["Current_Value_ILS"] - _agg_y["Cost_ILS"]) / _agg_y["Cost_ILS"].where(_agg_y["Cost_ILS"] > 0, other=pd.NA)
+                tkr_y = _agg_y.dropna(subset=["_y"]).set_index("Ticker")["_y"]
                 # Crypto exposure must use the SAME definition as the rest of the
                 # dashboard (build_home_inspired_reports / Crypto-Share KPI): spot
                 # crypto Type PLUS the crypto-proxy ETFs (IBIT/ETHA/BSOL/MSTR).
@@ -12775,7 +12778,9 @@ def main() -> None:
         with tab_reports:
             reports_payload = _shared_reports_payload
             try:
-                render_smart_features(open_trades, language)
+                # Use the LIVE-enriched frame (dashboard_df) so Smart Insights / Rebalancing
+                # reflect current market prices, not the stale stored Current_Value_ILS.
+                render_smart_features(dashboard_df if isinstance(dashboard_df, pd.DataFrame) and not dashboard_df.empty else open_trades, language)
                 st.markdown("---")
             except Exception as _sf_exc:
                 st.caption(f"Smart features unavailable ({str(_sf_exc)[:60]})")
