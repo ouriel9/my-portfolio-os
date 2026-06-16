@@ -12786,35 +12786,61 @@ def main() -> None:
 
         # Portfolio Build-Up — placed at the BOTTOM of the Allocation tab, below the
         # allocation pie + Net-P/L bar (renders into the allocation charts container).
-        with _alloc_charts_slot:
+        with _ov_equity_slot:
             if can_show_build_up:
                 st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
                 perf_track = dashboard_df.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
                 perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
-                _val_color = "#818cf8" if is_dark else "#4f46e5"
+                _x = perf_track["Purchase_Date"]
+                _cost = perf_track["Cum_Cost_ILS"]
+                _value = perf_track["Cum_Value_ILS"]
+                _final_val = float(_value.iloc[-1]) if len(_value) else 0.0
+                _final_cost = float(_cost.iloc[-1]) if len(_cost) else 0.0
+                _ret = (_final_val / _final_cost - 1.0) if _final_cost else 0.0
+                _up = _final_val >= _final_cost
+                # Whole chart is tinted green/red by the overall result for an at-a-glance read.
+                _accent = "#22c55e" if _up else "#ef4444"
+                _line_col = ("#34d399" if is_dark else "#10b981") if _up else ("#f87171" if is_dark else "#ef4444")
+                _fill = "rgba(16,185,129,0.16)" if _up else "rgba(239,68,68,0.14)"
                 fig_track = go.Figure()
+                # Invested-capital baseline (muted dotted spline).
                 fig_track.add_trace(go.Scatter(
-                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
-                    mode="lines", name=tr("Cumulative Cost", "עלות מצטברת"),
-                    line=dict(color="#94a3b8", width=1.8, dash="dot", shape="spline", smoothing=0.6),
-                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
+                    x=_x, y=_cost, mode="lines", name=tr("Cumulative Cost", "עלות מצטברת"),
+                    line=dict(color="#94a3b8", width=1.6, dash="dot", shape="spline", smoothing=0.7),
+                    hovertemplate=tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
                 ))
+                # Portfolio value with a soft gain/loss band filled down to the cost line.
                 fig_track.add_trace(go.Scatter(
-                    x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
-                    mode="lines", name=tr("Cumulative Value", "שווי מצטבר"),
-                    line=dict(color=_val_color, width=3, shape="spline", smoothing=0.6),
-                    fill="tonexty", fillcolor="rgba(99,102,241,0.16)",
-                    hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
+                    x=_x, y=_value, mode="lines", name=tr("Cumulative Value", "שווי מצטבר"),
+                    line=dict(color=_line_col, width=3.4, shape="spline", smoothing=0.7),
+                    fill="tonexty", fillcolor=_fill,
+                    hovertemplate=tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
                 ))
+                # Emphasised final point + value/return badge.
+                if len(_x):
+                    fig_track.add_trace(go.Scatter(
+                        x=[_x.iloc[-1]], y=[_final_val], mode="markers",
+                        marker=dict(size=12, color=_accent, line=dict(color="#ffffff", width=2)),
+                        showlegend=False, hoverinfo="skip",
+                    ))
+                    fig_track.add_annotation(
+                        x=_x.iloc[-1], y=_final_val,
+                        text=f"<b>₪{_final_val:,.0f}</b>  ({_ret * 100:+.1f}%)",
+                        showarrow=False, yshift=22, xshift=-6,
+                        font=dict(color=_accent, size=13),
+                        bgcolor="rgba(15,23,42,0.65)" if is_dark else "rgba(255,255,255,0.75)",
+                        bordercolor=_accent, borderwidth=1, borderpad=4,
+                    )
                 fig_track.update_layout(
                     template=template,
                     xaxis_title=None,
                     yaxis_title=tr("Value (ILS)", "שווי (₪)"),
                     yaxis_tickformat="~s",
                     hovermode="x unified",
-                    xaxis=dict(showgrid=False),
-                    yaxis=dict(gridcolor="rgba(148,163,184,0.16)", zeroline=False),
+                    xaxis=dict(showgrid=False, showspikes=True, spikethickness=1,
+                               spikedash="dot", spikecolor="rgba(148,163,184,0.5)", spikemode="across"),
+                    yaxis=dict(gridcolor="rgba(148,163,184,0.14)", zeroline=False),
                 )
                 # Apply the shared theme, THEN force a visible legend ABOVE the plot.
                 _fig_track = _apply_plotly_theme(fig_track, is_dark, is_mobile)
@@ -12823,7 +12849,7 @@ def main() -> None:
                     legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
                                 font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
                                 bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(t=58, l=8, r=8, b=8),
+                    margin=dict(t=64, l=8, r=8, b=8),
                 )
                 st.plotly_chart(_fig_track, theme=None, use_container_width=True)
 
@@ -13262,7 +13288,10 @@ def main() -> None:
                                 lambda t: _fx if _yf_price_currency(_clean(t).upper()) == "USD" else 1.0
                             ) if "Ticker" in _tx.columns else pd.Series(_fx, index=_tx.index)
                             _live_vi_tx = _qty_tx * _px_tx * _fxm_tx
-                            _has_live_tx = _px_tx > 0
+                            # NEVER apply a live price to a CLOSED position — its value is frozen
+                            # at the sale (proceeds × USD/ILS on the sell date). Overwriting it with
+                            # today's market price would corrupt the realised ILS return.
+                            _has_live_tx = (_px_tx > 0) & (~_clm_f)
                             if _has_live_tx.any():
                                 _vi = _vi.copy()
                                 _vi[_has_live_tx] = _live_vi_tx[_has_live_tx]
