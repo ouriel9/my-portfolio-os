@@ -4969,43 +4969,51 @@ def _normalize_manual_deposit_rows(rows: List[Dict[str, object]], default_platfo
 
 
 def load_local_settings() -> Dict[str, str]:
-    if not LOCAL_SETTINGS_FILE.exists():
-        # Streamlit Community Cloud has no local config file (it holds the API
-        # token and is gitignored). Fall back to st.secrets, configured in the
-        # app's dashboard → Settings → Secrets.
-        try:
-            import streamlit as _st
-            sec = _st.secrets
-            if ("api_token" in sec) or ("web_app_url" in sec):
-                return {
-                    "web_app_url": _clean(sec.get("web_app_url", DEFAULT_WEB_APP_URL)) or DEFAULT_WEB_APP_URL,
-                    "api_token": _clean(sec.get("api_token", "")),
-                    "spreadsheet_ref": _clean(sec.get("spreadsheet_ref", "")),
-                    "worksheet_name": _clean(sec.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
-                    "service_account_file": "",
-                    "language": _clean(sec.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
-                    "theme_mode": _normalize_theme_mode(sec.get("theme_mode", THEME_SYSTEM)),
-                    "demo_mode": str(sec.get("demo_mode", "false")).lower() == "true",
-                    "followed_symbols": _clean(sec.get("followed_symbols", "")),
-                }
-        except Exception:
-            pass
-        return {}
+    # DURABLE BASE: st.secrets persists on Streamlit Community Cloud across every
+    # restart/sleep/redeploy. The local file (app_local_config.json) is EPHEMERAL
+    # on Cloud — it gets wiped on reboot, which is why the URL/token "kept getting
+    # lost". So we ALWAYS merge st.secrets as the base, then overlay the local file
+    # (for desktop/local runs) where it has values. Set the secrets ONCE in the
+    # Cloud dashboard → Settings → Secrets and the sync never drops again.
+    secrets_layer: Dict[str, str] = {}
     try:
-        raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
-        return {
-            "web_app_url": _clean(raw.get("web_app_url", "")),
-            "api_token": _clean(raw.get("api_token", "")),
-            "spreadsheet_ref": _clean(raw.get("spreadsheet_ref", "")),
-            "worksheet_name": _clean(raw.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
-            "service_account_file": _clean(raw.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))),
-            "language": _clean(raw.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
-            "theme_mode": _normalize_theme_mode(raw.get("theme_mode", THEME_SYSTEM)),
-            "demo_mode": str(raw.get("demo_mode", "false")).lower() == "true",
-            "followed_symbols": _clean(raw.get("followed_symbols", "")),
-        }
+        import streamlit as _st
+        sec = _st.secrets
+        for k in ("web_app_url", "api_token", "spreadsheet_ref", "worksheet_name",
+                  "language", "theme_mode", "demo_mode", "followed_symbols"):
+            if k in sec:
+                v = _clean(str(sec.get(k, "")))
+                if v:
+                    secrets_layer[k] = v
     except Exception:
+        secrets_layer = {}
+
+    file_layer: Dict[str, str] = {}
+    if LOCAL_SETTINGS_FILE.exists():
+        try:
+            raw = json.loads(LOCAL_SETTINGS_FILE.read_text(encoding="utf-8"))
+            for k in ("web_app_url", "api_token", "spreadsheet_ref", "worksheet_name",
+                      "service_account_file", "language", "theme_mode", "demo_mode", "followed_symbols"):
+                v = _clean(str(raw.get(k, "")))
+                if v:
+                    file_layer[k] = v
+        except Exception:
+            file_layer = {}
+
+    merged = {**secrets_layer, **file_layer}  # local file overrides secrets where set
+    if not merged:
         return {}
+    return {
+        "web_app_url": _clean(merged.get("web_app_url", DEFAULT_WEB_APP_URL)) or DEFAULT_WEB_APP_URL,
+        "api_token": _clean(merged.get("api_token", "")),
+        "spreadsheet_ref": _clean(merged.get("spreadsheet_ref", "")),
+        "worksheet_name": _clean(merged.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME,
+        "service_account_file": _clean(file_layer.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))),
+        "language": _clean(merged.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE,
+        "theme_mode": _normalize_theme_mode(merged.get("theme_mode", THEME_SYSTEM)),
+        "demo_mode": str(merged.get("demo_mode", "false")).lower() == "true",
+        "followed_symbols": _clean(merged.get("followed_symbols", "")),
+    }
 
 
 def save_local_settings(
@@ -11840,6 +11848,21 @@ def main() -> None:
                 st.success(tr("Settings saved locally", "החיבור נשמר מקומית"))
             else:
                 st.error(tr("Failed to save settings", "שמירת החיבור נכשלה"))
+
+        # PERMANENT cloud persistence: on Streamlit Cloud the local file is wiped on
+        # every restart, so paste these into Settings → Secrets ONCE and it sticks.
+        with st.expander(tr("🔒 Make the connection permanent (cloud)", "🔒 חיבור קבוע (ענן) — שלא יתאפס יותר"), expanded=False):
+            st.caption(tr(
+                "On Streamlit Cloud the local file resets on restart. Copy the block below into the app dashboard → Settings → Secrets, save once, and the sync never drops again.",
+                "בענן הקובץ המקומי מתאפס בכל הפעלה. העתק את הבלוק למטה אל לוח הבקרה של האפליקציה ← Settings ← Secrets, שמור פעם אחת, והסנכרון לא ייעלם יותר.",
+            ))
+            _toml = (
+                f'web_app_url = "{web_app_url}"\n'
+                f'api_token = "{api_token}"\n'
+                f'spreadsheet_ref = "{spreadsheet_ref}"\n'
+                f'worksheet_name = "{worksheet_name}"\n'
+            )
+            st.code(_toml, language="toml")
 
         if st.button(tr("Refresh local data", "רענן נתונים מקומיים")):
             load_google_snapshot_data.clear()
