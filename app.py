@@ -6048,13 +6048,13 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_demo_snapshot_data() -> pd.DataFrame:
-    # Synthetic, intentionally *impressive* showcase portfolio used only for demo
-    # mode: ~34 holdings across 4 currencies (USD/EUR/GBP/ILS), every asset class
-    # (ETF / stock / crypto), wildly varied returns (mega-winners >+300% alongside
-    # heavy losers <-50%), and several closed trades (both gains and losses) so the
-    # realized-PnL, FIFO, allocation, risk and build-up views all light up richly.
-    # Mirrors the native apps' Engine.demoData() philosophy. Read-only.
-    FX = {"USD": 3.65, "EUR": 3.95, "GBP": 4.62, "ILS": 1.0}
+    # Synthetic showcase portfolio used only for demo mode. Intentionally compact
+    # (~10 open holdings, low total ≈ 80k ILS) so the allocation pie stays clean and
+    # readable, while still feeling varied: every asset class (ETF / stock / crypto),
+    # two currencies (USD/ILS), clear winners AND clear losers, plus two closed trades
+    # (one gain, one loss) so realized-PnL / FIFO / allocation / build-up all populate.
+    # Read-only. (Mirrors the native apps' demo philosophy at presentation scale.)
+    FX = {"USD": 3.65, "ILS": 1.0}
 
     def mk(ticker, typ, platform, ccy, qty, buy, now_mul, date, commission,
            closed=False, sell_date="2026-03-18", loc=""):
@@ -6083,50 +6083,35 @@ def build_demo_snapshot_data() -> pd.DataFrame:
         return row
 
     demo_rows = [
-        # ── US core ETFs (USD) ───────────────────────────────────────────────
-        mk("VOO",  "ETF", "Global Prime", "USD", 42,  408, 1.39, "2023-11-10", 6),
-        mk("QQQ",  "ETF", "Global Prime", "USD", 30,  372, 1.54, "2024-01-22", 6),
-        mk("VTI",  "ETF", "Global Prime", "USD", 38,  236, 1.23, "2024-03-15", 5),
-        mk("SCHD", "ETF", "Global Prime", "USD", 120, 27,  1.09, "2024-05-02", 5, loc="Income Sleeve"),
-        mk("SMH",  "ETF", "Global Prime", "USD", 22,  205, 1.78, "2024-02-19", 5),
-        mk("XLV",  "ETF", "Global Prime", "USD", 60,  138, 1.06, "2024-07-23", 4, loc="Defensive Sleeve"),
-        # ── US stocks (USD) — mega-winners + heavy losers ────────────────────
-        mk("NVDA", "שוק ההון", "Global Prime", "USD", 90,  92,  4.05, "2023-09-18", 5, loc="Growth Core"),
-        mk("AAPL", "שוק ההון", "Global Prime", "USD", 55,  165, 1.43, "2024-02-08", 5),
-        mk("MSFT", "שוק ההון", "Global Prime", "USD", 28,  328, 1.47, "2024-01-30", 5),
-        mk("AMZN", "שוק ההון", "Global Prime", "USD", 46,  131, 1.56, "2024-03-11", 4),
-        mk("GOOGL","שוק ההון", "Global Prime", "USD", 40,  135, 1.49, "2024-04-05", 4),
-        mk("PLTR", "שוק ההון", "Quant Desk",   "USD", 320, 16,  4.60, "2023-12-05", 6, loc="Momentum Book"),
-        mk("COIN", "שוק ההון", "Quant Desk",   "USD", 26,  205, 2.35, "2024-05-14", 7),
-        mk("TSLA", "שוק ההון", "Quant Desk",   "USD", 30,  255, 0.79, "2024-06-12", 6),
-        mk("INTC", "שוק ההון", "Quant Desk",   "USD", 130, 44,  0.42, "2024-04-19", 5, loc="Underwater"),
-        mk("BA",   "שוק ההון", "Quant Desk",   "USD", 26,  232, 0.73, "2024-03-28", 5, loc="Underwater"),
-        # ── Europe (EUR) ─────────────────────────────────────────────────────
-        mk("ASML", "שוק ההון", "EuroDesk", "EUR", 9,  610, 1.31, "2024-03-28", 8),
-        mk("SAP",  "שוק ההון", "EuroDesk", "EUR", 30, 142, 1.44, "2024-07-09", 7),
-        mk("MC.PA","שוק ההון", "EuroDesk", "EUR", 6,  720, 0.84, "2024-05-20", 8, loc="Underwater"),
-        # ── UK (GBP) ─────────────────────────────────────────────────────────
-        mk("AZN.L","שוק ההון", "EuroDesk", "GBP", 70, 104, 1.18, "2024-02-15", 9),
-        mk("SHEL.L","שוק ההון","EuroDesk", "GBP", 90, 25,  1.13, "2024-06-03", 8),
-        # ── Crypto spot (ILS · local desk) — one moon, one crash ─────────────
-        mk("BTC",  "קריפטו", "Bit2C", "ILS", 0.85, 142000, 2.28, "2023-08-14", 0, loc="Cold Wallet"),
-        mk("ETH",  "קריפטו", "Bit2C", "ILS", 11,   9200,   1.72, "2024-01-30", 0, loc="Cold Wallet"),
-        mk("SOL",  "קריפטו", "Bit2C", "ILS", 140,  390,    3.15, "2023-10-22", 0, loc="Staking Wallet"),
-        mk("LINK", "קריפטו", "Bit2C", "ILS", 700,  52,     1.36, "2024-04-11", 0),
-        mk("DOGE", "קריפטו", "Bit2C", "ILS", 65000,0.5,    0.51, "2024-09-11", 0, loc="Underwater"),
-        mk("ADA",  "קריפטו", "Bit2C", "ILS", 22000,1.6,    0.66, "2024-08-02", 0, loc="Underwater"),
-        # ── Crypto proxies (USD) ─────────────────────────────────────────────
-        mk("IBIT", "ETF",      "Global Prime", "USD", 240, 33,  1.64, "2024-02-19", 5),
-        mk("MSTR", "שוק ההון", "Quant Desk",   "USD", 16,  980, 2.05, "2024-04-03", 8),
-        # ── Israeli market (ILS) ─────────────────────────────────────────────
-        mk("TA35", "ETF", "IsraTrade", "ILS", 9, 1980, 1.15, "2024-06-01", 38, loc="Local Broker"),
-        # ── Realized / closed trades (winners + losers) ──────────────────────
-        mk("META", "שוק ההון", "Global Prime", "USD", 14, 300, 1.95, "2023-07-01", 5, closed=True, sell_date="2025-11-20"),
-        mk("ARKK", "ETF",      "Global Prime", "USD", 90, 51,  0.83, "2024-05-22", 4, closed=True, sell_date="2025-09-08"),
-        mk("TSM",  "שוק ההון", "Quant Desk",   "USD", 60, 168, 1.62, "2024-09-12", 4, closed=True, sell_date="2026-01-30"),
-        mk("NIO",  "שוק ההון", "Quant Desk",   "USD", 260, 28, 0.34, "2024-02-14", 5, closed=True, sell_date="2025-10-15"),
+        # ── ETFs (USD) — steady core ─────────────────────────────────────────
+        mk("VOO",  "ETF", "Global Prime", "USD", 6, 408, 1.33, "2023-11-10", 6),
+        mk("QQQ",  "ETF", "Global Prime", "USD", 4, 372, 1.46, "2024-01-22", 6),
+        mk("IBIT", "ETF", "Global Prime", "USD", 30, 33, 1.52, "2024-02-19", 4),
+        # ── Stocks (USD) — a big winner + clear losers ───────────────────────
+        mk("NVDA", "שוק ההון", "Global Prime", "USD", 7,  95,  2.65, "2023-09-18", 5),
+        mk("AAPL", "שוק ההון", "Global Prime", "USD", 5,  165, 1.28, "2024-02-08", 5),
+        mk("TSLA", "שוק ההון", "Quant Desk",   "USD", 4,  255, 0.80, "2024-06-12", 5, loc="Underwater"),
+        mk("INTC", "שוק ההון", "Quant Desk",   "USD", 12, 44,  0.53, "2024-04-19", 4, loc="Underwater"),
+        # ── Crypto (ILS · local desk) — a moon + a crash ─────────────────────
+        mk("BTC",  "קריפטו", "Bit2C", "ILS", 0.03, 142000, 1.85, "2023-08-14", 0, loc="Cold Wallet"),
+        mk("SOL",  "קריפטו", "Bit2C", "ILS", 11,   390,    2.20, "2023-10-22", 0, loc="Staking Wallet"),
+        mk("DOGE", "קריפטו", "Bit2C", "ILS", 4000, 0.5,    0.58, "2024-09-11", 0, loc="Underwater"),
+        # ── Closed trades (one gain, one loss) ───────────────────────────────
+        mk("META", "שוק ההון", "Global Prime", "USD", 5,  300, 1.70, "2023-07-01", 5, closed=True, sell_date="2025-11-20"),
+        mk("ARKK", "ETF",      "Global Prime", "USD", 20, 51,  0.84, "2024-05-22", 4, closed=True, sell_date="2025-09-08"),
     ]
     df = pd.DataFrame(demo_rows)
+
+    # Keep the demo total intentionally low for presentations (≈ 80k ILS open value)
+    # so the allocation pie and figures stay clean and uncluttered.
+    open_mask = df["Status"].map(_clean) != "סגור"
+    open_value_ils = float(df.loc[open_mask, "Current_Value_ILS"].map(_num).sum())
+    target_open_value_ils = 80000.0
+    if open_value_ils > (target_open_value_ils + 1e-9):
+        scale = target_open_value_ils / open_value_ils
+        for col in ["Cost_Origin", "Cost_ILS", "Current_Value_ILS", "Commission"]:
+            df.loc[open_mask, col] = df.loc[open_mask, col].map(_num) * scale
+
     return _normalize_snapshot_df(df)
 
 
