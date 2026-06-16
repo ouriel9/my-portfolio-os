@@ -12342,41 +12342,41 @@ def main() -> None:
                     if watchlist_reset_key not in st.session_state:
                         st.session_state[watchlist_reset_key] = False
                     reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
-                    open_container = st.expander(f"{watchlist_label}{reset_char}", expanded=False)
+                    # Floating POPOVER instead of an inline expander: opening the watchlist
+                    # now OVERLAYS the page (doesn't shove everything down), which is far
+                    # tidier on both desktop and mobile. Picking a symbol closes it + opens
+                    # the chart. Categories are organised into tabs inside.
+                    open_container = st.popover("📈 " + watchlist_label, use_container_width=True)
                     with open_container:
-                        st.caption(tr("Tap a symbol to open its live TradingView chart.",
-                                      "הקש על סימול לפתיחת גרף TradingView חי."))
-                        # Compact, responsive chip grid: 2 columns on phone, 4 on desktop, so
-                        # the watchlist stays tidy and tappable on both. Button shows the short
-                        # ticker; the full name appears on hover (help) to avoid wide buttons.
-                        _cat_meta = [
-                            (category_labels["crypto"], "🪙"),
-                            (category_labels["stocks"], "📈"),
-                            (category_labels["macro"], "🌐"),
+                        st.caption(tr("Pick an instrument to open its live TradingView chart.",
+                                      "בחר נכס לפתיחת גרף TradingView חי."))
+                        # Categories organised into TABS; each tab is a compact 2-col chip grid
+                        # so the panel stays short and tidy on phone + desktop. Button shows the
+                        # short ticker; the full instrument name appears on hover (help).
+                        _wl_cats = [
+                            ("crypto", "🪙 " + tr("Crypto", "קריפטו")),
+                            ("stocks", "📈 " + tr("Stocks", "מניות")),
+                            ("macro", "🌐 " + tr("Macro", "מאקרו")),
                         ]
-                        _ncol = 2 if is_mobile else 4
-                        for cat, emoji in _cat_meta:
-                            part = watch_df[watch_df["Category"] == cat]
-                            if part.empty:
-                                continue
-                            st.markdown(
-                                f"<div style='margin:.6rem 0 .3rem;font-weight:700;font-size:.9rem;"
-                                f"opacity:.85;unicode-bidi:plaintext'>{emoji} {cat}</div>",
-                                unsafe_allow_html=True,
-                            )
-                            _wrows = list(part.itertuples(index=False))
-                            for _base in range(0, len(_wrows), _ncol):
-                                _chunk = _wrows[_base:_base + _ncol]
-                                _cols = st.columns(_ncol)
-                                for _ci, row in enumerate(_chunk):
-                                    with _cols[_ci]:
-                                        if st.button(row.Ticker, help=row.Title, use_container_width=True,
-                                                     key=f"{widget_prefix}_watch_{cat}_{_base + _ci}_{row.Symbol}"):
-                                            st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
-                                            st.session_state["tv_chart_open"] = True
-                                            st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
-                                            st.session_state[watchlist_reset_key] = not bool(st.session_state.get(watchlist_reset_key, False))
-                                            st.rerun()
+                        _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
+                        for _ti, (catkey, _lbl) in enumerate(_wl_cats):
+                            with _wl_tabs[_ti]:
+                                part = watch_df[watch_df["Category"] == category_labels[catkey]]
+                                if part.empty:
+                                    st.caption("—")
+                                    continue
+                                _wrows = list(part.itertuples(index=False))
+                                for _base in range(0, len(_wrows), 2):
+                                    _chunk = _wrows[_base:_base + 2]
+                                    _cols = st.columns(2)
+                                    for _ci, row in enumerate(_chunk):
+                                        with _cols[_ci]:
+                                            if st.button(row.Ticker, help=row.Title, use_container_width=True,
+                                                         key=f"{widget_prefix}_watch_{catkey}_{_base + _ci}_{row.Symbol}"):
+                                                st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
+                                                st.session_state["tv_chart_open"] = True
+                                                st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
+                                                st.rerun()
                 else:
                     st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
