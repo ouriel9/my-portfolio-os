@@ -1743,6 +1743,14 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             cursor: pointer !important;
             -webkit-tap-highlight-color: transparent !important;
             transition: background 0.15s ease !important;
+            /* Kill the ~300ms mobile tap delay so the FIRST tap switches page. */
+            touch-action: manipulation !important;
+        }}
+        /* Make the whole segment (incl. its label) one reliable tap target. */
+        [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
+        [data-baseweb="radio"] * {{
+            touch-action: manipulation !important;
+            pointer-events: auto !important;
         }}
         [data-testid="stRadio"]:has([role="radiogroup"] > [data-baseweb="radio"]:nth-child(4):last-child)
         [data-baseweb="radio"] svg,
@@ -2308,9 +2316,16 @@ def _inject_design_v2(is_dark: bool) -> None:
     .main p, .main span, .main label, .main li, [data-testid="stMarkdownContainer"] {{ color: {ink}; }}
     .main h1, .main h2, .main h3, .main h4 {{ color: {ink} !important; letter-spacing: -.02em !important; font-weight: 700 !important; }}
 
-    /* PAGE TRANSITION */
-    section.main .block-container {{ animation: v2Up .55s var(--v2-ease) both; }}
-    [data-baseweb="tab-panel"] {{ animation: v2In .4s ease both; }}
+    /* PAGE TRANSITION — opacity entrance removed: it replayed on every Streamlit
+       rerun (navigation + 20s fragment updates), flashing the content pale/invisible. */
+    section.main .block-container {{ animation: none !important; }}
+    [data-baseweb="tab-panel"] {{ animation: none !important; }}
+
+    /* Mobile: remove the ~300ms tap delay so the FIRST tap on any control registers. */
+    .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button,
+    [role="tab"], [data-baseweb="radio"], [role="radio"], a, [role="button"], button {{
+        touch-action: manipulation !important;
+    }}
 
     /* ---- HERO header — animated aurora glass (beats pp-page-accent) ---- */
     html body .app-header-wrap {{
@@ -2546,10 +2561,10 @@ def _inject_design_overlay(is_dark: bool) -> None:
         -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
     }}
 
-    /* PAGE TRANSITION — main content fades + rises on each render */
-    section.main .block-container {{ animation: ppFadeUp .5s var(--pp-ease) both; }}
+    /* PAGE TRANSITION — opacity entrance removed (flashed content pale on every rerun) */
+    section.main .block-container {{ animation: none !important; }}
     /* Sub-tab panel cross-fade when switching tabs */
-    [data-baseweb="tab-panel"] {{ animation: ppFadeIn .38s ease both; }}
+    [data-baseweb="tab-panel"] {{ animation: none !important; }}
 
     /* Metric tiles — elevated glass cards, corner glow, hover lift, staggered entrance */
     [data-testid="stMetric"] {{
@@ -6754,7 +6769,7 @@ def _pp_inject_premium_css(is_dark: bool, is_mobile: bool) -> None:
         border-radius: 999px; border: 2px solid transparent; background-clip: padding-box;
     }}
     *::-webkit-scrollbar-track {{ background: transparent; }}
-    section.main > div.block-container {{ animation: pp-fade .35s ease both; }}
+    section.main > div.block-container {{ animation: none !important; }}
     @keyframes pp-fade {{
         from {{ opacity: 0; transform: translateY(4px); }}
         to   {{ opacity: 1; transform: translateY(0); }}
