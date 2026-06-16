@@ -12303,21 +12303,30 @@ def main() -> None:
                         yield_ils_col: "{:.2%}",
                     }
                     _fmt_map = {k: v for k, v in _fmt_map.items() if k in exposure_view.columns}
-                    exposure_styled = exposure_view.style.format(_fmt_map, na_rep="")
-                    _color_cols = [c for c in [pnl_col, yield_origin_col, yield_ils_col] if c in exposure_view.columns]
-                    exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
-                    # Mobile browsers sometimes drop Styler colors in virtualized grid;
-                    # st.table preserves static styled colors/percent formatting reliably.
-                    if is_mobile:
-                        st.table(exposure_styled)
-                    else:
-                        _render_dataframe_adaptive(
-                            exposure_styled,
-                            is_mobile,
-                            force_same_render_path=True,
-                            use_container_width=True,
-                            hide_index=True,
-                        )
+                    try:
+                        exposure_styled = exposure_view.style.format(_fmt_map, na_rep="")
+                        _color_cols = [c for c in [pnl_col, yield_origin_col, yield_ils_col] if c in exposure_view.columns]
+                        exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
+                        # Mobile: st.table(Styler) renders BLANK under pandas 3.x (only the
+                        # title showed, no rows). Render the Styler's own HTML instead — it
+                        # keeps the colors + percent formatting AND actually shows the data.
+                        if is_mobile:
+                            st.markdown(exposure_styled.to_html(), unsafe_allow_html=True)
+                        else:
+                            _render_dataframe_adaptive(
+                                exposure_styled,
+                                is_mobile,
+                                force_same_render_path=True,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                    except Exception:
+                        # A Styler/grid render quirk must NEVER hide the table (it left only the
+                        # "טבלת חשיפה" title with no data). Fall back to a plain, always-renderable table.
+                        try:
+                            st.dataframe(exposure_view, use_container_width=True, hide_index=True)
+                        except Exception:
+                            st.table(exposure_view)
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
                 category_labels = {
