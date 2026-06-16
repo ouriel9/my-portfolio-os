@@ -462,6 +462,7 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(30,41,59,0.5)",
             font_color="#f1f5f9",
+            title_font_color="#f1f5f9",   # keep the chart title readable in dark mode
         )
     # Always push legend below the chart to avoid overlapping the title
     fig.update_layout(
@@ -483,7 +484,7 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
     if is_mobile:
         fig.update_layout(
             hoverlabel=dict(font=dict(size=13), bgcolor="rgba(30,30,30,0.85)", font_color="#fff"),
-            title_font=dict(size=14),
+            title_font=dict(size=14, color="#f1f5f9" if is_dark else "#0f172a"),
             font=dict(size=11),
             autosize=True,
             height=320,          # minimum readable height on mobile
@@ -9209,7 +9210,7 @@ def render_simulator_page(
             ))
 
     # ── Pension fund (TAX-EXEMPT) ───────────────────────────────────────
-    with st.expander(f"🏦 {tr('Pension fund (קרן פנסיה) — tax-exempt', 'קרן פנסיה — פטורה ממס')}", expanded=False):
+    with st.expander(f"🏦 {tr('Pension fund — tax-exempt', 'קרן פנסיה — פטורה ממס')}", expanded=False):
         col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
         with col_l:
             k = _need("pension_initial")
@@ -9248,7 +9249,7 @@ def render_simulator_page(
             ))
 
     # ── Education fund (TAX-EXEMPT after 6 yr vest) ─────────────────────
-    with st.expander(f"🎓 {tr('Education fund (קרן השתלמות) — tax-exempt', 'קרן השתלמות — פטורה ממס')}", expanded=False):
+    with st.expander(f"🎓 {tr('Education fund — tax-exempt', 'קרן השתלמות — פטורה ממס')}", expanded=False):
         col_l, col_r = (st.columns(2) if not is_mobile else (st.container(), st.container()))
         with col_l:
             k = _need("education_initial")
