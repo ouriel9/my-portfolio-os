@@ -12991,43 +12991,46 @@ def main() -> None:
                     _render_dataframe_adaptive(rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}), is_mobile, use_container_width=True, hide_index=True)
             st.divider()
 
-        with _ov_equity_slot:
+        # Portfolio Build-Up — placed at the BOTTOM of the Allocation tab, below the
+        # allocation pie + Net-P/L bar (renders into the allocation charts container).
+        with _alloc_charts_slot:
             if can_show_build_up:
                 st.markdown(f"#### {tr('Portfolio Build-Up', 'התפתחות בניית התיק')}")
                 perf_track = dashboard_df.groupby("Purchase_Date", as_index=False)[["Cost_ILS", "Current_Value_ILS"]].sum().sort_values("Purchase_Date")
                 perf_track["Cum_Cost_ILS"] = perf_track["Cost_ILS"].cumsum()
                 perf_track["Cum_Value_ILS"] = perf_track["Current_Value_ILS"].cumsum()
+                _val_color = "#818cf8" if is_dark else "#4f46e5"
                 fig_track = go.Figure()
                 fig_track.add_trace(go.Scatter(
                     x=perf_track["Purchase_Date"], y=perf_track["Cum_Cost_ILS"],
-                    mode="lines+markers", name=tr("Cumulative Cost", "עלות מצטברת"),
-                    line=dict(color="#94a3b8", width=2),
+                    mode="lines", name=tr("Cumulative Cost", "עלות מצטברת"),
+                    line=dict(color="#94a3b8", width=1.8, dash="dot", shape="spline", smoothing=0.6),
                     hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Cost", "עלות") + ": ₪%{y:,.0f}<extra></extra>",
                 ))
                 fig_track.add_trace(go.Scatter(
                     x=perf_track["Purchase_Date"], y=perf_track["Cum_Value_ILS"],
-                    mode="lines+markers", name=tr("Cumulative Value", "שווי מצטבר"),
-                    line=dict(color="#4f46e5", width=2),
-                    fill="tonexty", fillcolor="rgba(79,70,229,0.08)",
+                    mode="lines", name=tr("Cumulative Value", "שווי מצטבר"),
+                    line=dict(color=_val_color, width=3, shape="spline", smoothing=0.6),
+                    fill="tonexty", fillcolor="rgba(99,102,241,0.16)",
                     hovertemplate=tr("Date", "תאריך") + ": %{x|%Y-%m-%d}<br>" + tr("Value", "שווי") + ": ₪%{y:,.0f}<extra></extra>",
                 ))
                 fig_track.update_layout(
                     template=template,
-                    xaxis_title=tr("Date", "תאריך"),
+                    xaxis_title=None,
                     yaxis_title=tr("Value (ILS)", "שווי (₪)"),
-                    yaxis_tickformat=",.0f",
+                    yaxis_tickformat="~s",
                     hovermode="x unified",
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(gridcolor="rgba(148,163,184,0.16)", zeroline=False),
                 )
-                # Apply the shared theme, THEN force a visible legend ABOVE the
-                # plot (the theme pushes it to y=-0.18, off-screen). theme=None
-                # so Streamlit can't strip it.
+                # Apply the shared theme, THEN force a visible legend ABOVE the plot.
                 _fig_track = _apply_plotly_theme(fig_track, is_dark, is_mobile)
                 _fig_track.update_layout(
                     showlegend=True,
                     legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
                                 font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
                                 bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(t=58),
+                    margin=dict(t=58, l=8, r=8, b=8),
                 )
                 st.plotly_chart(_fig_track, theme=None, use_container_width=True)
 
