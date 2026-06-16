@@ -12338,45 +12338,38 @@ def main() -> None:
 
                 if watch_rows:
                     watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    watchlist_reset_key = f"{widget_prefix}_watchlist_reset_token"
-                    if watchlist_reset_key not in st.session_state:
-                        st.session_state[watchlist_reset_key] = False
-                    reset_char = "\u200b" if bool(st.session_state.get(watchlist_reset_key, False)) else "\u200c"
-                    # Floating POPOVER instead of an inline expander: opening the watchlist
-                    # now OVERLAYS the page (doesn't shove everything down), which is far
-                    # tidier on both desktop and mobile. Picking a symbol closes it + opens
-                    # the chart. Categories are organised into tabs inside.
-                    open_container = st.popover("📈 " + watchlist_label, use_container_width=True)
-                    with open_container:
-                        st.caption(tr("Pick an instrument to open its live TradingView chart.",
-                                      "בחר נכס לפתיחת גרף TradingView חי."))
-                        # Categories organised into TABS; each tab is a compact 2-col chip grid
-                        # so the panel stays short and tidy on phone + desktop. Button shows the
-                        # short ticker; the full instrument name appears on hover (help).
-                        _wl_cats = [
-                            ("crypto", "🪙 " + tr("Crypto", "קריפטו")),
-                            ("stocks", "📈 " + tr("Stocks", "מניות")),
-                            ("macro", "🌐 " + tr("Macro", "מאקרו")),
-                        ]
-                        _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
-                        for _ti, (catkey, _lbl) in enumerate(_wl_cats):
-                            with _wl_tabs[_ti]:
-                                part = watch_df[watch_df["Category"] == category_labels[catkey]]
-                                if part.empty:
-                                    st.caption("—")
-                                    continue
-                                _wrows = list(part.itertuples(index=False))
-                                for _base in range(0, len(_wrows), 2):
-                                    _chunk = _wrows[_base:_base + 2]
-                                    _cols = st.columns(2)
-                                    for _ci, row in enumerate(_chunk):
-                                        with _cols[_ci]:
-                                            if st.button(row.Ticker, help=row.Title, use_container_width=True,
-                                                         key=f"{widget_prefix}_watch_{catkey}_{_base + _ci}_{row.Symbol}"):
-                                                st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
-                                                st.session_state["tv_chart_open"] = True
-                                                st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
-                                                st.rerun()
+                    # Inline category TABS (no floating popover): the watchlist sits in
+                    # normal document flow, so the chart that opens below it can NEVER be
+                    # covered — the popover used to overlay the chart. Organised by category;
+                    # 4-col chip grid on desktop, 2-col on mobile. Click a chip -> live chart.
+                    st.markdown("##### 📈 " + watchlist_label)
+                    st.caption(tr("Pick an instrument to open its live chart below.",
+                                  "בחר נכס לפתיחת גרף חי למטה."))
+                    _wl_cats = [
+                        ("crypto", "🪙 " + tr("Crypto", "קריפטו")),
+                        ("stocks", "📈 " + tr("Stocks", "מניות")),
+                        ("macro", "🌐 " + tr("Macro", "מאקרו")),
+                    ]
+                    _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
+                    _wl_ncol = 2 if is_mobile else 4
+                    for _ti, (catkey, _lbl) in enumerate(_wl_cats):
+                        with _wl_tabs[_ti]:
+                            part = watch_df[watch_df["Category"] == category_labels[catkey]]
+                            if part.empty:
+                                st.caption("—")
+                                continue
+                            _wrows = list(part.itertuples(index=False))
+                            for _base in range(0, len(_wrows), _wl_ncol):
+                                _chunk = _wrows[_base:_base + _wl_ncol]
+                                _cols = st.columns(_wl_ncol)
+                                for _ci, row in enumerate(_chunk):
+                                    with _cols[_ci]:
+                                        if st.button(row.Ticker, help=row.Title, use_container_width=True,
+                                                     key=f"{widget_prefix}_watch_{catkey}_{_base + _ci}_{row.Symbol}"):
+                                            st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
+                                            st.session_state["tv_chart_open"] = True
+                                            st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
+                                            st.rerun()
                 else:
                     st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
 
@@ -12597,6 +12590,8 @@ def main() -> None:
                                         font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
                                         bgcolor="rgba(0,0,0,0)"),
                             margin=dict(t=64, l=8, r=8, b=8),
+                            # Taller, more prominent on desktop; keep compact on mobile.
+                            height=320 if is_mobile else 460,
                         )
                         st.plotly_chart(_fig_track, theme=None, use_container_width=True)
                 except Exception:
