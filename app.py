@@ -4456,7 +4456,9 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 )
             elif row["Action"] == "SELL" and qty != 0:
                 sell_qty = abs(qty)
-                sell_price = abs(float(_num(row["Current_Value_ILS"]))) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else unit_cost
+                # Zero proceeds on a closed row = TOTAL LOSS (sold for nothing), so sell
+                # price is 0, not the buy price — otherwise the realized loss vanishes. (audit C3)
+                sell_price = abs(float(_num(row["Current_Value_ILS"]))) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else 0.0
                 # A closed position is stored as a SINGLE self-contained row carrying
                 # BOTH its own buy cost (Cost_ILS) and sale proceeds (Current_Value_ILS)
                 # — it is a complete round-trip, NOT a market sell against the running
@@ -11445,11 +11447,11 @@ def main() -> None:
         # the RIGHT, not the left. direction:rtl on the metrics row flips the
         # flex column order.
         _crit_css += ("html body [data-testid='stHorizontalBlock']:has([data-testid='stMetric']){direction:rtl !important;}")
-    # #5 badge: positive delta pill at WCAG AA (was green-on-lavender 3.78:1)
-    _bdg_bg = "rgba(34,197,94,.20)" if is_dark else "#dcfce7"
-    _bdg_tx = "#86efac" if is_dark else "#15803d"
-    _crit_css += ("html body [data-testid='stMetricDelta']{background:" + _bdg_bg + " !important;border-radius:8px !important;padding:1px 7px !important;}"
-                  "html body [data-testid='stMetricDelta'] *{color:" + _bdg_tx + " !important;}")
+    # Delta pill: NEUTRAL background + Streamlit's NATIVE sign-based text color
+    # (green = gain, red = loss). The old rule forced green text+background on EVERY
+    # delta, so losses showed up green — a critical misread of P&L. (audit C6)
+    _bdg_bg = "rgba(148,163,184,.16)" if is_dark else "#f1f5f9"
+    _crit_css += ("html body [data-testid='stMetricDelta']{background:" + _bdg_bg + " !important;border-radius:8px !important;padding:1px 7px !important;}")
     # #14 — the Closed-Positions "N open" delta is a NEUTRAL count, not a gain:
     # override the green pill with a muted grey chip and hide the up-arrow.
     _ncol = "#94a3b8" if is_dark else "#64748b"
