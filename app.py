@@ -6019,14 +6019,17 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
             # Keep truly missing yields as NaN so downstream logic can backfill.
             df[col] = df[col].map(_num_or_nan)
 
-    # ── Validate Cost_Origin against Quantity * Origin_Buy_Price ──
-    # If they diverge significantly, recalculate (fixes stale cost data from spreadsheet).
+    # ── Backfill Cost_Origin ONLY when it is missing/zero ──
+    # Previously a >5% divergence from Quantity*Origin_Buy_Price also triggered an
+    # overwrite + proportional Cost_ILS scaling — but a stored Cost_Origin legitimately
+    # differs (commission baked in, averaged partial fills), so that silently corrupted
+    # the cost basis (e.g. SOL). Trust a stored non-zero Cost_Origin; only fill blanks. (audit)
     qty = df["Quantity"]
     price = df["Origin_Buy_Price"]
     expected_cost = qty * price
     has_both = (qty.abs() > 1e-9) & (price.abs() > 1e-9)
     cost_orig = df["Cost_Origin"]
-    diverged = has_both & ((cost_orig < 1e-9) | ((cost_orig - expected_cost).abs() / expected_cost.clip(lower=1e-9) > 0.05))
+    diverged = has_both & (cost_orig < 1e-9)
     if diverged.any():
         df.loc[diverged, "Cost_Origin"] = expected_cost[diverged]
         # Proportionally fix Cost_ILS where it was based on the bad Cost_Origin
@@ -13277,7 +13280,11 @@ def main() -> None:
                             p = float(_num(_lpm.get(t, 0.0)))
                             if p <= 0: return np.nan
                             cur = _normalize_currency_code(row.get("Origin_Currency", ""))
-                            return p if cur == "USD" else (p * _fx if cur == "ILS" else p)
+                            # FX decision must use the currency YAHOO quotes in, not Origin_Currency:
+                            # a .TA (TASE) stock is ILS-quoted AND ILS-origin → must NOT be ×FX (was 3.6× too high). (audit)
+                            yf_cur = _yf_price_currency(t)
+                            if yf_cur == "USD" and cur == "ILS": return p * _fx   # USD quote on an ILS asset (e.g. Bit2C crypto)
+                            return p   # same currency (incl. .TA ILS stocks) → no conversion
 
                         def _spo(row: pd.Series) -> float:
                             if not _is_closed_status(row.get("Status", "")): return np.nan
@@ -13677,7 +13684,12 @@ def main() -> None:
             if t and t in _manage_live_prices:
                 p_usd = float(_num(_manage_live_prices.get(t, 0.0)))
                 if p_usd > 0:
-                    return p_usd if cur == "USD" else (p_usd * manage_fx if cur == "ILS" else p_usd)
+                    # Decide FX by Yahoo's quote currency, not Origin_Currency, so ILS-quoted
+                    # .TA stocks are not multiplied by the USD/ILS rate (~3.6× too high). (audit)
+                    yf_cur = _yf_price_currency(t)
+                    if yf_cur == "USD" and cur == "ILS":
+                        return p_usd * manage_fx
+                    return p_usd
             # Fallback: derive from stored current value / qty
             try:
                 cur_orig = float(trade_current_origin.loc[row.name])
