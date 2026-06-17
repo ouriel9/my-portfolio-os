@@ -10358,14 +10358,16 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 crypto_share = float(df.loc[crypto_mask, "Current_Value_ILS"].sum()) / total_val if total_val else 0.0
                 msgs = []
                 if top_w >= 0.30:
-                    msgs.append(("⚠️", _t(f"High concentration: {top['Ticker']} is {top_w:.0%} of the portfolio.",
-                                          f"ריכוזיות גבוהה: {top['Ticker']} מהווה {top_w:.0%} מהתיק.")))
+                    _tk_top = _esc(top['Ticker'])  # escape: ticker comes from the sheet → rendered as HTML below (audit XSS)
+                    msgs.append(("⚠️", _t(f"High concentration: {_tk_top} is {top_w:.0%} of the portfolio.",
+                                          f"ריכוזיות גבוהה: {_tk_top} מהווה {top_w:.0%} מהתיק.")))
                 msgs.append(("📊", _t(f"Concentration index (HHI): {hhi:.2f} ({'diversified' if hhi < 0.25 else 'concentrated'}).",
                                       f"מדד ריכוזיות (HHI): {hhi:.2f} ({'מפוזר' if hhi < 0.25 else 'מרוכז'}).")))
                 if not tkr_y.empty:
                     w, l = tkr_y.idxmax(), tkr_y.idxmin()
-                    msgs.append(("🏆", _t(f"Best: {w} ({tkr_y[w]:+.1%}) · Worst: {l} ({tkr_y[l]:+.1%}).",
-                                          f"מוביל: {w} ({tkr_y[w]:+.1%}) · מפגר: {l} ({tkr_y[l]:+.1%}).")))
+                    _we, _le = _esc(w), _esc(l)  # escape: sheet-sourced tickers rendered as HTML (audit XSS)
+                    msgs.append(("🏆", _t(f"Best: {_we} ({tkr_y[w]:+.1%}) · Worst: {_le} ({tkr_y[l]:+.1%}).",
+                                          f"מוביל: {_we} ({tkr_y[w]:+.1%}) · מפגר: {_le} ({tkr_y[l]:+.1%}).")))
                 msgs.append(("🪙", _t(f"Crypto is {crypto_share:.0%} of the portfolio.",
                                       f"קריפטו מהווה {crypto_share:.0%} מהתיק.")))
                 for icon, m in msgs:
