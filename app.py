@@ -75,7 +75,7 @@ def _auto_detect_proxy() -> None:
 _auto_detect_proxy()
 
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
-CRYPTO_SHARE_TICKERS = {"IBIT", "ETHA", "BSOL", "MSTR"}
+CRYPTO_SHARE_TICKERS = {"IBIT", "ETHA", "BSOL"}  # MSTR is a stock — keep crypto-share KPI consistent with the allocation pie (audit)
 BTC_SHARE_TICKERS = {"BTC", "IBIT"}
 CHART_CRYPTO_TICKERS = {"IBIT", "ETHA", "BSOL", "BTC", "ETH", "SOL", "XRP"}
 CHART_STOCK_TICKERS = {"MSTR"}
