@@ -6487,6 +6487,48 @@ import math as _pp_math
 from typing import Optional as _PP_Optional, Sequence as _PP_Sequence
 
 
+def _pp_inject_loading_bar() -> None:
+    """A clear top PAGE-LOADING bar: a thin animated gradient bar slides in while
+    Streamlit is rerunning (page switch / heavy compute) and completes + fades the
+    moment the page is ready for full interaction. Set up ONCE on the parent window
+    (survives the per-rerun component iframe). Debounced ~220ms so fast 20s-fragment
+    refreshes don't flash it. Works on desktop AND phone."""
+    components.html(
+        """
+        <script>(function(){
+          try{
+            var W=window.parent, doc=W.document;
+            if(W.__ppLoadbarInit) return;          // set up exactly once
+            W.__ppLoadbarInit=true;
+            var st=doc.createElement('style');
+            st.textContent='#pp-loadbar{position:fixed;top:0;left:0;height:3px;width:0;z-index:2147483647;'
+              +'background:linear-gradient(90deg,#6366f1,#22d3ee,#a78bfa);background-size:200% 100%;'
+              +'box-shadow:0 0 12px rgba(99,102,241,.75);border-radius:0 3px 3px 0;opacity:0;'
+              +'transition:width .2s ease,opacity .45s ease;animation:ppLoadShift 1.1s linear infinite;}'
+              +'@keyframes ppLoadShift{to{background-position:200% 0}}';
+            doc.head.appendChild(st);
+            var bar=doc.createElement('div'); bar.id='pp-loadbar'; doc.body.appendChild(bar);
+            var running=false, prog=0, anim=null, delay=null;
+            function up(){ prog=Math.min(prog+Math.max(0.4,(92-prog)*0.07),92); bar.style.width=prog+'%'; }
+            function start(){ if(running) return; running=true; prog=10; bar.style.opacity='1'; bar.style.width='10%'; anim=W.setInterval(up,180); }
+            function done(){ if(delay){W.clearTimeout(delay); delay=null;} if(!running) return; running=false; W.clearInterval(anim);
+              bar.style.width='100%'; W.setTimeout(function(){bar.style.opacity='0'; W.setTimeout(function(){bar.style.width='0';},450);},180); }
+            function busy(){ try{
+              if(doc.querySelector('[data-stale="true"]')) return true;
+              var sw=doc.querySelector('[data-testid="stStatusWidget"]');
+              if(sw && sw.offsetParent!==null) return true;
+            }catch(e){} return false; }
+            W.setInterval(function(){
+              if(busy()){ if(!running && !delay){ delay=W.setTimeout(function(){delay=null; start();},220); } }
+              else { done(); }
+            },140);
+          }catch(e){}
+        })();</script>
+        """,
+        height=0, width=0,
+    )
+
+
 def apply_premium_polish(language: str = "עברית",
                          is_dark: bool = False,
                          is_mobile: bool = False) -> None:
@@ -6509,6 +6551,10 @@ def apply_premium_polish(language: str = "עברית",
         pass
     try:
         _pp_inject_help_shim()
+    except Exception:
+        pass
+    try:
+        _pp_inject_loading_bar()
     except Exception:
         pass
 
