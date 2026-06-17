@@ -6508,17 +6508,19 @@ def _pp_inject_loading_bar() -> None:
               +'@keyframes ppLoadShift{to{background-position:200% 0}}';
             doc.head.appendChild(st);
             var bar=doc.createElement('div'); bar.id='pp-loadbar'; doc.body.appendChild(bar);
-            var running=false, prog=0, anim=null, delay=null;
+            var running=false, prog=0, anim=null, delay=null, startTs=0;
             function up(){ prog=Math.min(prog+Math.max(0.4,(92-prog)*0.07),92); bar.style.width=prog+'%'; }
-            function start(){ if(running) return; running=true; prog=10; bar.style.opacity='1'; bar.style.width='10%'; anim=W.setInterval(up,180); }
+            function start(){ if(running) return; running=true; startTs=Date.now(); prog=10; bar.style.opacity='1'; bar.style.width='10%'; anim=W.setInterval(up,180); }
             function done(){ if(delay){W.clearTimeout(delay); delay=null;} if(!running) return; running=false; W.clearInterval(anim);
               bar.style.width='100%'; W.setTimeout(function(){bar.style.opacity='0'; W.setTimeout(function(){bar.style.width='0';},450);},180); }
             function busy(){ try{
-              if(doc.querySelector('[data-stale="true"]')) return true;
+              // Only Streamlit's run-status widget — NOT [data-stale], which can stay
+              // stuck on some pages (e.g. the AI Agent) and froze the bar. (fix)
               var sw=doc.querySelector('[data-testid="stStatusWidget"]');
-              if(sw && sw.offsetParent!==null) return true;
-            }catch(e){} return false; }
+              return !!(sw && sw.offsetParent!==null);
+            }catch(e){ return false; } }
             W.setInterval(function(){
+              if(running && (Date.now()-startTs)>9000){ done(); return; }   // safety net: never stay stuck
               if(busy()){ if(!running && !delay){ delay=W.setTimeout(function(){delay=null; start();},220); } }
               else { done(); }
             },140);
@@ -11755,7 +11757,10 @@ def main() -> None:
             tr("AGENT AI", "סוכן AI") + ("  ✓" if _chat_active else ""),
             icon=":material/smart_toy:",
             use_container_width=True,
-            type=("primary" if _chat_active else "secondary"),
+            # Always secondary so the button keeps a consistent colour with the rest of
+            # the nav; the "✓" marks the active state instead of the accent-gradient
+            # primary style that made it suddenly stand out. (fix)
+            type="secondary",
             help=tr("Chat with your AI portfolio agent.", "שיחה עם סוכן ה-AI של התיק."),
             key="sidebar_chat_nav_btn",
         ):
