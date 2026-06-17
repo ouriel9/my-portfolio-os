@@ -2075,7 +2075,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         background-color: transparent !important;
         border-radius: 8px !important;
         overflow: hidden !important;
-        filter: invert(0.9) hue-rotate(180deg) !important;
+        filter: invert(1) hue-rotate(180deg) !important;  /* true invert preserves hue exactly (green stays green / red stays red); 0.9 distorted the signed Styler colors (audit) */
     }}
     /* Undo the inversion for images/icons inside the dataframe */
     [data-testid="stDataFrame"] img {{
