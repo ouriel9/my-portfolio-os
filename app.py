@@ -4387,7 +4387,11 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
         fx_df = _download_close_matrix(("USDILS=X",), days=max(int(days), 30))
         if not fx_df.empty and "USDILS=X" in fx_df.columns:
             fx_series = pd.to_numeric(fx_df["USDILS=X"], errors="coerce")
-        fx_spot = _usd_ils_rate()
+        # Must NOT call _usd_ils_rate() here: it writes st.session_state, which is
+        # forbidden inside this @st.cache_data function and crashed the Risk page.
+        # _safe_quote is session-state-free. (audit bug-st)
+        _spot = _safe_quote("USDILS=X")
+        fx_spot = _spot if _spot and _spot > 0 else 3.3
 
     frames = []
     for ticker, qty in qty_by_ticker.items():
@@ -10465,11 +10469,19 @@ def _snapshot_ls():
     NOT be wrapped in st.cache_resource/cache_data, because LocalStorage is a
     Streamlit component and widgets inside cached functions raise
     CachedWidgetWarning."""
+    # Per-session SINGLETON: read + save both call this in the same run, and creating
+    # two LocalStorage(key="_pp_snapshot_ls") widgets in one run raised DuplicateWidgetID
+    # and crashed first load. Instantiate once and reuse (matches the _sim_ls pattern). (audit bug-st)
+    if "_pp_snapshot_ls_obj" in st.session_state:
+        return st.session_state["_pp_snapshot_ls_obj"]
+    inst = None
     try:
         from streamlit_local_storage import LocalStorage
-        return LocalStorage(key="_pp_snapshot_ls")
+        inst = LocalStorage(key="_pp_snapshot_ls")
     except Exception:
-        return None
+        inst = None
+    st.session_state["_pp_snapshot_ls_obj"] = inst
+    return inst
 
 
 def _read_cached_snapshot_ls():
