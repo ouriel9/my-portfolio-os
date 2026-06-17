@@ -1587,7 +1587,12 @@ function InstallSystem() {
   // Keep Sell_Date values in V intact; only clear formula regions around it.
   mainSheet.getRange("L1").setValue("סטטוס מכירה");
   mainSheet.getRange("M:T").clear();  // preserve U (שער מכירה) — it's stored sale-price data now
-  mainSheet.getRange("W:AE").clear();
+  // Only clear the yield-FORMULA columns (W,X,Y) + the rate cell (Z1:AA1, rewritten
+  // just below). Clearing all of W:AE also wiped Trade_ID (AB) and "תשואה במכירה (₪)"
+  // (AC) — which InstallSystem never restores — so every SystemDoctor run silently
+  // destroyed all Trade_IDs and the next edit then duplicated every row. (audit C1)
+  mainSheet.getRange("W:Y").clear();
+  mainSheet.getRange("Z1:AA1").clearContent();
   const metricHeaders = [["שער נוכחי USD", "עלות USD", "עלות ILS", "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי ILS", "שער מכירה"]];
   mainSheet.getRange("M1:U1").setValues(metricHeaders).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
   mainSheet.getRange("V1").setValue("תאריך מכירה").setBackground("#4A5568").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
