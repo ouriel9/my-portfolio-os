@@ -153,6 +153,27 @@ function fxIlsPerUnitExpr_(dateCellRef, curCellRef) {
     usd + "))))))"; // unknown currency -> USDILS fallback (never silent 1:1)
 }
 
+// LIVE (current) ILS value of ONE unit of the row's Origin_Currency — the value-side
+// analogue of fxIlsPerUnitExpr_, but using the CURRENT spot rate instead of a dated
+// lookup. USD reuses the live $AA$1 cell (CURRENCY:USDILS); EUR/GBP use live
+// GOOGLEFINANCE pairs; GBX=GBP/100, ILA=ILS/100, ILS=1. Used by valueIls/spotIls so
+// the VALUE side is currency-aware exactly like the COST side, instead of hardcoding
+// USDILS for every currency. (audit fin-gas #2/#3, fin-fx CRITICAL)
+function fxIlsPerUnitLiveExpr_(curCellRef) {
+  function livePair(code) {
+    return "IFERROR(GOOGLEFINANCE(\"CURRENCY:" + code + "\"), $AA$1)";
+  }
+  const eur = livePair("EURILS");
+  const gbp = livePair("GBPILS");
+  return "IF(" + curCellRef + "=\"ILS\", 1," +
+    "IF(" + curCellRef + "=\"ILA\", 0.01," +
+    "IF(" + curCellRef + "=\"USD\", $AA$1," +
+    "IF(" + curCellRef + "=\"EUR\", " + eur + "," +
+    "IF(" + curCellRef + "=\"GBP\", " + gbp + "," +
+    "IF(" + curCellRef + "=\"GBX\", (" + gbp + ")/100," +
+    "$AA$1))))))"; // unknown currency -> live USDILS fallback (never silent 1:1)
+}
+
 function buildSnapshotHeaderIndexMap_(headers) {
   const cleanHeaders = (headers || []).map(cleanText);
   const out = {};
@@ -288,6 +309,13 @@ function readManualDeposits_(mode) {
 }
 
 function writeManualDeposits_(mode, rows) {
+  // Serialize the read-modify-write (getValues -> clearContent -> setValues) under the
+  // script lock so a concurrent deposits save can't clobber the other mode's rows.
+  // (audit bug-gas LockService)
+  return withScriptLock_(function () { return writeManualDepositsImpl_(mode, rows); });
+}
+
+function writeManualDepositsImpl_(mode, rows) {
   ensureCoreSheets_();
   const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(DEPOSITS_SHEET);
   const currentMode = cleanText(mode || "live").toLowerCase() === "demo" ? "demo" : "live";
@@ -543,7 +571,13 @@ function getColumnMap_(sheet) {
   ix.tradeId = findAny_(["Trade_ID", "Trade ID", "מזהה עסקה", "trade_id"]);
 
   if (ix.tradeId < 0) {
-    const col = sheet.getLastColumn() + 1;
+    // Append Trade_ID at a FIXED safe position past the canonical metric block, never
+    // at lastColumn+1. On a pre-install (<10-col) sheet, lastColumn+1 would land on K
+    // (the future סטטוס / metric-block slot), so the later InstallSystem column insert
+    // and hardcoded-letter formulas would all shift off by one. The canonical Trade_ID
+    // lives at column 28 (AB); placing it at max(lastColumn, 28)+1 keeps it clear of
+    // every hardcoded-letter column. (audit bug-gas getColumnMap_ Trade_ID slot)
+    const col = Math.max(sheet.getLastColumn(), 28) + 1;
     sheet.getRange(1, col).setValue("Trade_ID");
     ix.tradeId = col - 1;
   }
@@ -575,27 +609,33 @@ function findFormulaTemplateRow_(ws, excludeRow) {
   if (!ws) return -1;
   const lastRow = ws.getLastRow();
   if (lastRow < 2) return -1;
-  const headers = ws.getRange(1, 1, 1, ws.getLastColumn()).getValues()[0].map(cleanText);
+  const lastCol = ws.getLastColumn();
+  const headers = ws.getRange(1, 1, 1, lastCol).getValues()[0].map(cleanText);
   const map = buildSnapshotHeaderIndexMap_(headers);
   const keys = [
     "spotUsd", "costUsd", "costIls", "valueUsd", "valueIls",
     "buyUsd", "buyIls", "spotIls", "sellPrice", "yieldAtSale",
     "yieldOrigin", "yieldIls", "yieldAtSaleIls"
   ];
+  // Pre-resolve the keyed column indexes once.
+  const cols = [];
+  for (let i = 0; i < keys.length; i++) {
+    const ix = map[keys[i]];
+    if (ix !== undefined && ix >= 0 && ix < lastCol) cols.push(ix);
+  }
+  if (cols.length === 0) return -1;
 
+  // Read ALL data-row formulas in ONE batched call instead of one getFormula() per
+  // cell. The old per-cell scan degraded to O(rows*13) service round-trips on the
+  // add/edit hot path (~13k calls at 1000 rows if formulas were wiped) and could time
+  // out the API write. getFormulas() returns "" for non-formula cells. (audit perf-gas)
+  const formulas = ws.getRange(2, 1, lastRow - 1, lastCol).getFormulas();
   for (let r = lastRow; r >= 2; r--) {
     if (excludeRow && r === excludeRow) continue;
-    let hasFormula = false;
-    for (let i = 0; i < keys.length; i++) {
-      const ix = map[keys[i]];
-      if (ix === undefined || ix < 0) continue;
-      const f = ws.getRange(r, ix + 1).getFormula();
-      if (cleanText(f)) {
-        hasFormula = true;
-        break;
-      }
+    const rowFormulas = formulas[r - 2];
+    for (let c = 0; c < cols.length; c++) {
+      if (cleanText(rowFormulas[cols[c]])) return r;
     }
-    if (hasFormula) return r;
   }
   return -1;
 }
@@ -1253,10 +1293,22 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
   const map = buildSnapshotHeaderIndexMap_(headers);
   const r = rowNum;
   const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
-  const sRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "-1), 2, 2), $AA$1)), $AA$1)";
   // Currency-aware ILS-per-unit-of-origin rate on the buy date (E). Replaces the
   // old USDILS-only branch so EUR/GBP/GBX/ILA get their correct pair. (audit #7/#97)
   const fxBuy = fxIlsPerUnitExpr_("E" + r, "$I" + r);
+  // Currency-aware ILS-per-unit-of-origin rate on the SELL date (V) — used for the
+  // closed-position proceeds so a non-USD (e.g. ILS Bit2C/Horizon) sale is no longer
+  // multiplied by USDILS. (audit fin-gas #1, bug-gas closed-Q)
+  const fxSell = fxIlsPerUnitExpr_("V" + r, "$I" + r);
+  // Currency-aware LIVE ILS-per-unit-of-origin rate — used for the open-position
+  // value/spot side so EUR/GBP/GBX/ILA live values use their own pair, not USDILS.
+  // (audit fin-gas #2)
+  const fxLive = fxIlsPerUnitLiveExpr_("$I" + r);
+  // For crypto, spotUsd (M) is a genuine USD quote (CURRENCY:xxxUSD) regardless of the
+  // lot's Origin_Currency, so its live ILS rate is always USDILS ($AA$1). For stocks/
+  // ETFs M is the NATIVE quote currency (= Origin_Currency), so use the currency-aware
+  // live pair. (audit fin-gas #3 — M is not always USD)
+  const liveMRate = 'IF(C' + r + '="קריפטו", $AA$1, (' + fxLive + '))';
   const formulas = {
     // ETF/קרן סל priced like stocks (direct quote), not zeroed. (audit fix #95)
     spotUsd: '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(OR(C' + r + '="שוק ההון",C' + r + '="ETF",C' + r + '="קרן סל"), GOOGLEFINANCE(D' + r + ', "price"), 0)))',
@@ -1264,14 +1316,26 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
     costUsd: '=IF(H' + r + '="","", ((H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + ')) / ' + hRate + ')',
     costIls: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + '))',
     valueUsd: '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
-    valueIls: '=IF(P' + r + '="","", P' + r + ' * IF(K' + r + '="סגור", ' + sRate + ', $AA$1))',
+    // שווי ILS — computed DIRECTLY in ILS and currency-aware. Closed (with a stored
+    // sale price U): proceeds = qty × U(origin) × ILS-per-origin-unit at the SELL date.
+    // Open / closed-without-U: qty × spotIls-per-unit (T), which is itself currency-
+    // aware (USDILS only for crypto, the row's own pair for stocks/ETFs). The old
+    // formula multiplied EVERY currency's proceeds by USDILS, inflating ILS-denominated
+    // closed trades ~3.6-3.7x and using the wrong pair for EUR/GBP. (audit fin-gas #1/#2)
+    valueIls: '=IF(F' + r + '="","", F' + r + ' * IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ' * (' + fxSell + '), IF(M' + r + '="", 0, M' + r + ' * (' + liveMRate + '))))',
     buyUsd: '=IF(G' + r + '="","", ($G' + r + ' * (' + fxBuy + ')) / ' + hRate + ')',
     buyIls: '=IF(G' + r + '="","", $G' + r + ' * (' + fxBuy + '))',
-    spotIls: '=IF(M' + r + '="","", M' + r + ' * $AA$1)',
+    // שער נוכחי ILS (live price per unit, in ILS) — currency-aware: USDILS for crypto
+    // (M is USD), the row's own live pair for stocks/ETFs (M is native). (audit fin-gas #2/#3)
+    spotIls: '=IF(M' + r + '="","", M' + r + ' * (' + liveMRate + '))',
     // שער מכירה (U) is a STORED value (the real sale price) for closed positions,
     // entered at sell time — NOT auto-computed from the live market price.
     yieldAtSale: '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
-    yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
+    // תשואה מקור — origin-currency (FX-stripped) return. Origin market value is derived
+    // by dividing the (currency-correct) ILS value Q back out by the LIVE ILS-per-origin
+    // rate, so it is valid for EVERY currency (USD/ILS/EUR/GBP/GBX/ILA) instead of the
+    // old branch that mixed an ILS value with a foreign-currency cost basis. (audit fin-gas #4)
+    yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (($Q' + r + ' / (' + fxLive + ')) - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
     yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')',
     // Sale return in ILS — the ₪ analogue of yieldAtSale (W). Only populated for
     // closed positions; uses sale proceeds in ILS (Q=שווי ILS) vs cost in ILS
@@ -1326,7 +1390,10 @@ function addSaleReturnIlsColumn_() {
     }
     const rng = ws.getRange(2, col, formulas.length, 1);
     rng.setFormulas(formulas);
-    rng.setNumberFormat("0.0%");
+    // Match the precision InstallSystem re-installs for this same column ("0.00%"),
+    // so the displayed precision no longer flips depending on which maintenance
+    // routine last ran. (audit fin-gas number-format inconsistency)
+    rng.setNumberFormat("0.00%");
     filled = formulas.length;
   }
   return { ok: true, header: NEW_HEADER, column: col, created: created, rows_filled: filled, statusCol: kL, costIlsCol: oL, valueIlsCol: qL };
@@ -1415,6 +1482,18 @@ function syncAuditRowToPortfolio_(sheet, rowNum) {
 
   if (["add", "edit", "delete"].indexOf(action) < 0) return;
 
+  // Only process UNPROCESSED audit rows. After a row is applied we stamp its Status
+  // cell with OK/ERROR; a later manual edit of that same (old) row must NOT re-apply
+  // the trade — re-running an old "add" would silently RESURRECT a position that was
+  // since deleted from the portfolio. Skip when the Status cell already carries a
+  // processed marker, so only brand-new form submissions / blank rows run.
+  // (audit bug-gas audit-replay)
+  const statusColIx = headers.indexOf("Status");
+  if (statusColIx >= 0) {
+    const existingStatus = cleanText(row[statusColIx]).toUpperCase();
+    if (existingStatus === "OK" || existingStatus === "ERROR") return;
+  }
+
   const trade = tradeFromAuditRow_(headers, row);
   if (!trade || !trade.Trade_ID) return;
 
@@ -1479,7 +1558,30 @@ function findTradeRowByKey_(ws, ix, trade) {
   return -1;
 }
 
+// Serialize every snapshot-mutating write under the script lock so two near-
+// simultaneous clients (phone + desktop + Telegram) can't both read getLastRow()+1
+// and clobber the same physical row (a lost trade) or delete a wrong row after a
+// shift. dedupeSnapshotSchemaOnce_ already uses this pattern. (audit bug-gas
+// LockService / concurrent-write)
+function withScriptLock_(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function upsertTrade_(action, trade) {
+  return withScriptLock_(function () { return upsertTradeImpl_(action, trade); });
+}
+
+function deleteTrade_(tradeOrId) {
+  return withScriptLock_(function () { return deleteTradeImpl_(tradeOrId); });
+}
+
+function upsertTradeImpl_(action, trade) {
   const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PORTFOLIO_SHEET);
   const ix = getColumnMap_(ws);
   const width = ws.getLastColumn();
@@ -1597,7 +1699,7 @@ function upsertTrade_(action, trade) {
   return { ok: true, message: "Updated", row: rowIndex, trade_id: trade.Trade_ID };
 }
 
-function deleteTrade_(tradeOrId) {
+function deleteTradeImpl_(tradeOrId) {
   const ws = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(PORTFOLIO_SHEET);
   const ix = getColumnMap_(ws);
   const asTrade = (typeof tradeOrId === "object" && tradeOrId !== null) ? tradeOrId : { Trade_ID: tradeOrId };
@@ -1617,7 +1719,25 @@ function validateToken_(token) {
   // so an unset/cleared property silently authorized every request — granting
   // anyone with the public Web-App URL read/write access to the sheet.
   if (!required) throw new Error("Unauthorized: API_TOKEN script property is not configured");
-  if (token !== required) throw new Error("Unauthorized");
+  // Constant-time comparison so the !== compare can't be used as a timing oracle to
+  // recover the shared token byte-by-byte. Still fails CLOSED on any mismatch.
+  // (audit sec-gas — constant-time token compare)
+  if (!constantTimeEquals_(String(token == null ? "" : token), String(required))) {
+    throw new Error("Unauthorized");
+  }
+}
+
+// Length-independent constant-time string equality. Always walks max(len) characters
+// and accumulates a difference bitmask, so total work does not reveal how many leading
+// characters matched. Returns false for any length/content mismatch.
+function constantTimeEquals_(a, b) {
+  const sa = String(a), sb = String(b);
+  const n = Math.max(sa.length, sb.length);
+  let diff = sa.length ^ sb.length;
+  for (let i = 0; i < n; i++) {
+    diff |= (sa.charCodeAt(i) || 0) ^ (sb.charCodeAt(i) || 0);
+  }
+  return diff === 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1773,7 +1893,11 @@ function InstallSystem() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const mainSheet = ss.getSheetByName("תמונת מצב");
   if (!mainSheet) return;
-  if (mainSheet.getRange("J1").getValue() !== "עמלה") {
+  // Detect "already installed" robustly: a stray space or RTL mark in J1 must NOT
+  // trigger the destructive 2-column insert (which would shift the whole metric +
+  // Trade_ID block under the hardcoded-letter formulas and orphan every Trade_ID).
+  // cleanText strips bidi marks + trims before comparing. (audit bug-gas J1-guard)
+  if (cleanText(mainSheet.getRange("J1").getValue()) !== "עמלה") {
     mainSheet.insertColumnsAfter(9, 2);
     mainSheet.getRange("J1:K1").setValues([["עמלה", "סטטוס"]]).setBackground("#4A5568").setFontColor("white").setFontWeight("bold");
     if (mainSheet.getLastRow() > 1) {
@@ -1804,9 +1928,13 @@ function InstallSystem() {
   for (let i = 0; i < numRows; i++) {
     const r = i + 2;
     const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
-    const sRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "-1), 2, 2), $AA$1)), $AA$1)";
     // Currency-aware ILS-per-unit-of-origin rate on the buy date. (audit #7/#97)
     const fxBuy = fxIlsPerUnitExpr_("E" + r, "$I" + r);
+    // Sell-date and live currency-aware ILS-per-origin-unit rates (mirror of
+    // applyCalculatedFormulasForRow_). (audit fin-gas #1/#2/#3/#4)
+    const fxSell = fxIlsPerUnitExpr_("V" + r, "$I" + r);
+    const fxLive = fxIlsPerUnitLiveExpr_("$I" + r);
+    const liveMRate = 'IF(C' + r + '="קריפטו", $AA$1, (' + fxLive + '))';
     pricingFormulas.push([
       // spotUsd: crypto via CURRENCY pair; stocks AND ETFs (שוק ההון / ETF / קרן סל)
       // via direct price quote. Previously ETF/קרן סל fell to the 0 branch → valueIls=0
@@ -1815,14 +1943,21 @@ function InstallSystem() {
       '=IF(H' + r + '="","", ((H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + ')) / ' + hRate + ')',
       '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + '))',
       '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
-      '=IF(P' + r + '="","", P' + r + ' * IF(K' + r + '="סגור", ' + sRate + ', $AA$1))',
+      // שווי ILS — currency-aware (see applyCalculatedFormulasForRow_). Closed-with-U:
+      // qty×U(origin)×ILS-per-origin at SELL date; else qty×M×live-rate (USDILS only for
+      // crypto, the row's own pair for stocks/ETFs). Fixes the ~3.7x ILS-close inflation
+      // and the EUR/GBP wrong-pair value. (audit fin-gas #1/#2)
+      '=IF(F' + r + '="","", F' + r + ' * IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ' * (' + fxSell + '), IF(M' + r + '="", 0, M' + r + ' * (' + liveMRate + '))))',
       '=IF(G' + r + '="","", ($G' + r + ' * (' + fxBuy + ')) / ' + hRate + ')',
       '=IF(G' + r + '="","", $G' + r + ' * (' + fxBuy + '))',
-      '=IF(M' + r + '="","", M' + r + ' * $AA$1)'
+      // שער נוכחי ILS — currency-aware live per-unit price in ILS. (audit fin-gas #2/#3)
+      '=IF(M' + r + '="","", M' + r + ' * (' + liveMRate + '))'
     ]);
     yieldFormulas.push([
       '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
-      '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (IF($I' + r + '="USD", $P' + r + ', $Q' + r + ') - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
+      // תשואה מקור — FX-stripped origin return for EVERY currency (Q back-converted by
+      // the live origin pair), replacing the old USD/ILS-only branch. (audit fin-gas #4)
+      '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (($Q' + r + ' / (' + fxLive + ')) - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
       '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
     ]);
   }
@@ -2668,23 +2803,44 @@ function tgSinceStart_(S) {
 // This avoids the Apps Script web-app 302-redirect problem that breaks webhooks,
 // and runs entirely in Google's cloud (works with the PC off).
 function pollTelegram_() {
-  const props = PropertiesService.getScriptProperties();
-  const offset = parseInt(props.getProperty("TELEGRAM_OFFSET") || "0", 10) || 0;
-  let resp;
+  // Prevent overlapping ticks from double-processing the same burst. If the previous
+  // poll is still running (a slow Gemini call on a big burst), just skip this tick —
+  // the offset hasn't advanced yet so nothing is lost. (audit perf-gas burst/no-lock)
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(0)) return 0;
   try {
-    resp = tgApi_("getUpdates", { offset: offset, timeout: 0, allowed_updates: ["message", "edited_message"] });
-  } catch (e) {
-    try { appendAudit_("telegram_error", "GETUPDATES", "ERROR", String(e)); } catch (e2) {}
-    return -1;
+    const props = PropertiesService.getScriptProperties();
+    let offset = parseInt(props.getProperty("TELEGRAM_OFFSET") || "0", 10) || 0;
+    let resp;
+    try {
+      // limit: 5 caps how many queued updates one execution pulls, so a backlog can't
+      // force N sequential Gemini calls past the 6-min execution limit in a single run.
+      resp = tgApi_("getUpdates", { offset: offset, timeout: 0, limit: 5, allowed_updates: ["message", "edited_message"] });
+    } catch (e) {
+      try { appendAudit_("telegram_error", "GETUPDATES", "ERROR", String(e)); } catch (e2) {}
+      return -1;
+    }
+    if (!resp || !resp.ok || !resp.result || !resp.result.length) return 0;
+    const startMs = Date.now();
+    let processed = 0;
+    const updates = resp.result;
+    for (let i = 0; i < updates.length; i++) {
+      const u = updates[i];
+      try { handleTelegramUpdate_(u); } catch (e) { try { appendAudit_("telegram_error", "POLL", "ERROR", String(e)); } catch (e2) {} }
+      // Advance the offset INCREMENTALLY after each handled update so a partial run
+      // (e.g. one that dies near the execution limit) still makes forward progress and
+      // never re-fetches/re-replies to the same update on the next tick. (audit perf-gas)
+      offset = u.update_id + 1;
+      props.setProperty("TELEGRAM_OFFSET", String(offset));
+      processed++;
+      // Wall-clock guard: stop well before the ~6-min limit; remaining updates are
+      // picked up (from the advanced offset) on the next tick.
+      if (Date.now() - startMs > 4 * 60 * 1000) break;
+    }
+    return processed;
+  } finally {
+    lock.releaseLock();
   }
-  if (!resp || !resp.ok || !resp.result || !resp.result.length) return 0;
-  let maxId = offset - 1;
-  resp.result.forEach(function (u) {
-    if (u.update_id > maxId) maxId = u.update_id;
-    try { handleTelegramUpdate_(u); } catch (e) { try { appendAudit_("telegram_error", "POLL", "ERROR", String(e)); } catch (e2) {} }
-  });
-  props.setProperty("TELEGRAM_OFFSET", String(maxId + 1));
-  return resp.result.length;
 }
 
 // Keep the Streamlit Community Cloud app WARM so the phone opens instantly
