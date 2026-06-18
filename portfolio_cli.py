@@ -36,13 +36,19 @@ CONFIG = ROOT / "app_local_config.json"
 
 
 def _config() -> dict:
-    cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+    try:
+        cfg = json.loads(CONFIG.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        sys.exit(f"Config not found: {CONFIG}")
+    except json.JSONDecodeError as e:
+        sys.exit(f"Config is not valid JSON: {e}")
     if not cfg.get("web_app_url") or not cfg.get("api_token"):
         sys.exit("app_local_config.json missing web_app_url/api_token")
     return cfg
 
 
 def call(action: str, extra: dict | None = None) -> dict:
+    import urllib.error, socket
     cfg = _config()
     payload = {"token": cfg["api_token"], "action": action}
     if extra:
@@ -53,8 +59,17 @@ def call(action: str, extra: dict | None = None) -> dict:
         headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=45) as r:
-        out = json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=45) as r:
+            body = r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        sys.exit(f"HTTP {e.code}: {e.reason}")
+    except (urllib.error.URLError, socket.timeout) as e:
+        sys.exit(f"Network error: {e}")
+    try:
+        out = json.loads(body)
+    except json.JSONDecodeError:
+        sys.exit(f"Server returned non-JSON (likely auth/redirect): {body[:200]}")
     if not out.get("ok"):
         sys.exit(f"API error: {out.get('error')}")
     return out
@@ -77,16 +92,28 @@ def cmd_snapshot(_args) -> None:
     print(f"\n{len(rows)} rows | {n_open} open | {n_closed} closed")
 
 
+def _parse_trade_json(raw: str) -> dict:
+    if not raw or not raw.strip():
+        sys.exit("--json must not be empty")
+    try:
+        trade = json.loads(raw)
+    except json.JSONDecodeError as e:
+        sys.exit(f"--json is not valid JSON: {e}")
+    if not isinstance(trade, dict):
+        sys.exit("--json must be a JSON object {…}, not a list or primitive")
+    return trade
+
+
 def cmd_add(args) -> None:
-    trade = json.loads(args.json)
+    trade = _parse_trade_json(args.json)
     out = call("add", {"trade": trade})
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
 def cmd_edit(args) -> None:
-    trade = json.loads(args.json)
-    if not trade.get("Trade_ID"):
-        sys.exit("edit requires Trade_ID in the JSON")
+    trade = _parse_trade_json(args.json)
+    if not str(trade.get("Trade_ID", "")).strip():
+        sys.exit("edit requires a non-empty Trade_ID in the JSON")
     out = call("edit", {"trade": trade})
     print(json.dumps(out, ensure_ascii=False, indent=2))
 

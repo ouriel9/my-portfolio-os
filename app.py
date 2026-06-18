@@ -6889,6 +6889,13 @@ def _pp_inject_help_shim() -> None:
 
 
 def _pp_inject_premium_css(is_dark: bool, is_mobile: bool) -> None:
+    try:
+        _key = ("_pp_premium_css", bool(is_dark), bool(is_mobile))
+        if st.session_state.get("_pp_premium_css_key") == _key:
+            return
+        st.session_state["_pp_premium_css_key"] = _key
+    except Exception:
+        pass
     accent = "#6366f1"
     accent_2 = "#06b6d4"
     bg_soft = "rgba(148,163,184,0.10)" if is_dark else "rgba(99,102,241,0.06)"
@@ -7075,6 +7082,13 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     components and never hide or change layout semantics. Safe on desktop
     (no-ops inside media queries where appropriate).
     """
+    try:
+        _key = ("_pp_mobile_polish", bool(is_dark), bool(is_mobile))
+        if st.session_state.get("_pp_mobile_polish_key") == _key:
+            return
+        st.session_state["_pp_mobile_polish_key"] = _key
+    except Exception:
+        pass
     bg_base = "#0b1220" if is_dark else "#f7f8fb"
     surface = "rgba(30,41,59,0.62)" if is_dark else "rgba(255,255,255,0.72)"
     surface_strong = "rgba(15,23,42,0.88)" if is_dark else "rgba(255,255,255,0.94)"
