@@ -1564,12 +1564,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             width: 100% !important;
             text-align: left !important;
             border: none !important;
-            border-bottom: 1px solid #f0f0f0 !important;
+            border-bottom: 1px solid {df_line} !important;
             border-radius: 0 !important;
             padding: 15px 8px !important;
             background: transparent !important;
             box-shadow: none !important;
-            color: #333 !important;
+            color: {metric_text} !important;
             transition: none !important;
             animation: none !important;
         }}
@@ -1577,7 +1577,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         [data-testid="stSidebar"] [data-testid="stRadio"] [data-baseweb="radio"] p {{
             text-align: left !important;
             font-weight: 500 !important;
-            color: #333 !important;
+            color: {metric_text} !important;
             font-size: 0.96rem !important;
             margin: 0 !important;
             word-break: normal !important;
@@ -1819,9 +1819,10 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         /* ══════════════════════════════════════════════════════════════════ */
     }}
 
-    # Sidebar customizations
-    <style>
-    /* Force the Streamlit sidebar to stay on the LEFT even in Hebrew (RTL) mode. */
+    /* Sidebar customizations: force the Streamlit sidebar to stay on the LEFT
+       even in Hebrew (RTL) mode. (Previously this was wrapped in a stray raw
+       `# comment` + nested <style> that closed the outer style block early and
+       silently dropped every rule after it.) */
     section[data-testid="stSidebar"],
     [data-testid="stSidebar"] {{
         left: 0 !important;
@@ -4574,6 +4575,37 @@ def _usd_ils_rate(default: float = 3.3) -> float:
     return default
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _usdils_on(date_str: str) -> float:
+    """USD/ILS close on a specific (past) date, for converting backdated-sale
+    proceeds at the actual sell-date rate rather than today's spot.
+
+    Returns the close on `date_str` (or the most recent trading day on/before it
+    within a short window). Returns 0.0 on any failure so callers can fall back
+    to the live rate. NOTE: must NOT touch st.session_state (cached fn)."""
+    d = _clean(date_str)
+    if not d:
+        return 0.0
+    try:
+        start = pd.to_datetime(d, errors="coerce")
+        if pd.isna(start):
+            return 0.0
+        # Pull a small window ending the day after the target so the close on the
+        # target date (or the prior trading day if it was a weekend/holiday) is included.
+        win_start = (start - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
+        win_end = (start + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        data = yf.download("USDILS=X", start=win_start, end=win_end,
+                           progress=False, auto_adjust=False)
+        if data is None or data.empty or "Close" in data.columns is False:
+            return 0.0
+        close = pd.to_numeric(data["Close"].squeeze(), errors="coerce").dropna()
+        if close.empty:
+            return 0.0
+        return float(close.iloc[-1])
+    except Exception:
+        return 0.0
+
+
 def _smart_qty(v) -> str:
     """Format a quantity sensibly: whole counts show no decimals; fractional
     (crypto) shows up to 6 decimals with trailing zeros trimmed. Replaces the
@@ -4704,9 +4736,11 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     summary = work.groupby("Ticker", as_index=False).agg(
         Cost_ILS=("Cost_ILS", "sum"),
         Value_ILS=("Current_Value_ILS", "sum"),
-        # Use plain Cost_Origin (no commission) for winner/loser Yield so it
-        # stays consistent with per-trade display and exposure table.
+        # Commission is part of the cost basis: include it in the origin-yield
+        # denominator (Cost_Origin + Commission) to match GAS yieldOrigin and
+        # engine.js. (audit #10)
         Cost_Origin=("Cost_Origin", "sum"),
+        Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
         Value_Origin=("Value_Origin_Est", "sum"),
     )
     if summary.empty:
@@ -4718,8 +4752,8 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
             0.0,
         )
         _rpt_origin_raw = np.where(
-            summary["Cost_Origin"] > 0,
-            (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"],
+            summary["Cost_Origin_With_Fee"] > 0,
+            (summary["Value_Origin"] - summary["Cost_Origin_With_Fee"]) / summary["Cost_Origin_With_Fee"],
             0.0,
         )
         summary["Yield"] = np.where(
@@ -5096,7 +5130,7 @@ _PORTFOLIO_TRADE_FIELDS = [
     "Purchase_Date", "Sell_Date", "Quantity", "Origin_Buy_Price",
     "Cost_Origin", "Origin_Currency", "Commission", "Status",
     "Cost_ILS", "Current_Value_ILS", "Sell_Price_Origin",
-    "Yield_At_Sale", "Yield_Origin", "Yield_ILS", "Trade_ID",
+    "Yield_At_Sale", "Yield_At_Sale_ILS", "Yield_Origin", "Yield_ILS", "Trade_ID",
 ]
 
 
@@ -5999,6 +6033,7 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
         "שווי ILS": "Current_Value_ILS",
         "שער מכירה": "Sell_Price_Origin",
         "תשואה במכירה": "Yield_At_Sale",
+        "תשואה במכירה (₪)": "Yield_At_Sale_ILS",
         "תשואה מקור": "Yield_Origin",
         "תשואה שקלית": "Yield_ILS",
         "Trade_ID": "Trade_ID",
@@ -6018,7 +6053,7 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
     if "Sell_Price_Origin" in df.columns:
         df["Sell_Price_Origin"] = df["Sell_Price_Origin"].map(_num)
 
-    for col in ["Yield_At_Sale", "Yield_Origin", "Yield_ILS"]:
+    for col in ["Yield_At_Sale", "Yield_At_Sale_ILS", "Yield_Origin", "Yield_ILS"]:
         if col in df.columns:
             # Keep truly missing yields as NaN so downstream logic can backfill.
             df[col] = df[col].map(_num_or_nan)
@@ -6359,13 +6394,13 @@ def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     }
 
 
-def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
+@st.cache_data(ttl=120, show_spinner=False, hash_funcs={pd.DataFrame: lambda d: (len(d), tuple(d.columns), str(pd.util.hash_pandas_object(d.head(50)).sum() if len(d) else 0))})
+def _enrich_compute(open_trades: pd.DataFrame, live_prices: Mapping[str, float], usd_ils: float) -> pd.DataFrame:
+    """Pure (no session_state) per-row live-price enrichment. Cached on
+    (data, live_prices, rate) so repeated dashboard reruns reuse the result
+    instead of re-running the pandas maps every time. The session_state-touching
+    rate/price resolution stays in the thin wrapper below. (perf-st)"""
     out = open_trades.copy()
-    tickers = tuple(sorted(t for t in out["Ticker"].dropna().unique() if _clean(t))) if "Ticker" in out.columns else tuple()
-    live_prices = fetch_prices(tickers)
-    usd_ils = _safe_quote("USDILS=X")
-    if usd_ils <= 0:
-        usd_ils = _usd_ils_rate()
     out["מחיר שוק"] = out["Ticker"].map(live_prices).fillna(0.0) if "Ticker" in out.columns else 0.0
     qty_series = out["Quantity"].map(_num) if "Quantity" in out.columns else 0.0
     out["שווי שוק (יחסי מטבע מקור)"] = qty_series * out["מחיר שוק"]
@@ -6382,6 +6417,16 @@ def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
     has_live = out["מחיר שוק"] > 0
     out.loc[has_live, "Current_Value_ILS"] = live_value_ils[has_live]
     return out
+
+
+def enrich_open_trades_with_prices(open_trades: pd.DataFrame) -> pd.DataFrame:
+    out = open_trades.copy()
+    tickers = tuple(sorted(t for t in out["Ticker"].dropna().unique() if _clean(t))) if "Ticker" in out.columns else tuple()
+    live_prices = fetch_prices(tickers)
+    usd_ils = _safe_quote("USDILS=X")
+    if usd_ils <= 0:
+        usd_ils = _usd_ils_rate()  # session_state-touching fallback stays OUT of the cached compute
+    return _enrich_compute(out, dict(live_prices), float(usd_ils))
 
 
 def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
@@ -6571,6 +6616,16 @@ def _pp_inject_help_shim() -> None:
          0-height children consume 16px. This is what was creating
          ~200px of "dead space" above the title.
     """
+    # Idempotency guard: the JS plants persistent parent-document listeners +
+    # a polling interval once (`__pp_help_shim_installed`). Re-injecting on every
+    # rerun only spawns a throwaway iframe, so inject once per session.
+    # (perf-st: idempotent injector)
+    try:
+        if st.session_state.get("_pp_help_shim_done"):
+            return
+        st.session_state["_pp_help_shim_done"] = True
+    except Exception:
+        pass
     components.html(
         """
         <script>(function(){
@@ -7485,6 +7540,17 @@ def _pp_inline_icon(color: str) -> str:
 
 
 def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
+    # Idempotency guard: the JS uses an `ensure()` upsert into the parent <head>,
+    # so re-running it only spawns a throwaway iframe. Inject once per session,
+    # re-injecting only when the theme or language changes (those alter the
+    # manifest / theme-color). (perf-st: idempotent injector)
+    try:
+        _pwa_key = (language, bool(is_dark))
+        if st.session_state.get("_pp_pwa_assets_key") == _pwa_key:
+            return
+        st.session_state["_pp_pwa_assets_key"] = _pwa_key
+    except Exception:
+        pass
     theme_color = "#0f172a" if is_dark else "#6366f1"
     manifest = {
         "name": "Portfolio Manager",
@@ -7528,6 +7594,18 @@ def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
 
 
 def _pp_inject_productivity_layer(language: str) -> None:
+    # Idempotency guard: this injects a command-palette + keyboard-shortcut layer
+    # into the PARENT document (which persists across reruns) and the JS already
+    # self-guards on `pp-cmdk-overlay`. Re-running it on every rerun only spawns a
+    # fresh throwaway iframe. Inject once per session (re-inject if language flips,
+    # since the command labels are localized). (perf-st: idempotent injector)
+    try:
+        _pl_guard = st.session_state.get("_pp_prod_layer_lang")
+        if _pl_guard == language:
+            return
+        st.session_state["_pp_prod_layer_lang"] = language
+    except Exception:
+        pass
     is_he = language.startswith("ע")
     cmds = [
         {"id": "nav-dashboard", "label": "דשבורד" if is_he else "Dashboard", "hint": "g d"},
@@ -7998,7 +8076,7 @@ def render_advanced_analytics(
         )
         st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
     with gc2:
-        kpi_row = st.columns(3)
+        kpi_row = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
         kpi_row[0].metric(
             tr("Daily VaR 95%", "VaR יומי 95%"), f"{var_95:.2%}",
             tr("Potential loss / day", "הפסד פוטנציאלי ליום"),
@@ -8022,7 +8100,7 @@ def render_advanced_analytics(
                 "יחס סורטינו = (תשואה − ריבית חסרת סיכון) / סטיית ירידה. בניגוד לשארפ — מעניש רק תנועות ירידה; תנודתיות בעליות נחשבת 'תנודתיות טובה' ומוסרת מהמשוואה. פרשנות: <1 חלש · 1-2 סביר · 2-3 טוב · >3 מצוין. סורטינו גבוה משמעותית משארפ מעיד על תיק שבו רוב ה'רעש' מגיע מעליות — וזה סימן בריא. ליעד עבור תיקי מניות long-only: 1.5-2.5.",
             ),
         )
-        kpi_row2 = st.columns(3)
+        kpi_row2 = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
         kpi_row2[0].metric(
             tr("Calmar", "קלמאר"), f"{calmar:.2f}",
             help=tr(
@@ -8299,7 +8377,7 @@ def render_advanced_analytics(
         st.plotly_chart(_apply_plotly_theme(mc_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
 
         final_row = mc.iloc[-1]
-        mc_cols = st.columns(3)
+        mc_cols = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
         mc_cols[0].metric(
             tr("1Y P10 (pessimistic)", "P10 לשנה (פסימי)"),
             f"₪{float(final_row['p10']):,.0f}",
@@ -9238,7 +9316,11 @@ def render_simulator_page(
 
     # ── KPI row — NET totals (after tax + fees) ────────────────────────
     st.markdown(f"### 💰 {tr('Net results (after tax + fees)', 'תוצאות נטו (אחרי מס ודמי-ניהול)')}")
-    k1, k2, k3, k4 = st.columns(4)
+    if is_mobile:
+        k1, k2 = st.columns(2)
+        k3, k4 = st.columns(2)
+    else:
+        k1, k2, k3, k4 = st.columns(4)
     _real_delta_total = (
         f"≈ ₪{total_real:,.0f} " + tr("real", "ריאלי")
     ) if inflation_pct > 0 else None
@@ -9341,7 +9423,7 @@ def render_simulator_page(
                 f"לא ניתן להגיע לעצמאות כלכלית עד גיל {fi_age} בחיסכון סביר — "
                 "העלה את הגיל, הורד את ההכנסה הרצויה, או הגדל את התשואה הצפויה."))
         else:
-            g1, g2, g3 = st.columns(3)
+            g1, g2, g3 = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
             g1.metric(tr("Required monthly saving", "להפריש בחודש"), f"₪{req:,.0f}",
                       help=tr(f"Into the regular portfolio, for {int(_yrs_fi)} years.",
                               f"לתיק הרגיל, למשך {int(_yrs_fi)} שנים."))
@@ -9406,7 +9488,7 @@ def render_simulator_page(
 
     # ── Per-bucket breakdown ───────────────────────────────────────────
     with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=False):
-        b1, b2, b3 = st.columns(3)
+        b1, b2, b3 = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
         b1.metric(
             tr("Regular (gross)", "רגיל (לפני מס)"),
             f"₪{reg_final_gross:,.0f}",
@@ -9902,8 +9984,15 @@ def _ai_build_sell(df, args: Mapping[str, object]) -> Optional[Dict[str, object]
     if sell_qty <= 0:
         return None
     cur = _normalize_currency_code(src.get("Origin_Currency", "")) or "ILS"
-    fx = _usd_ils_rate() if cur == "USD" else 1.0
     sell_date = _clean(args.get("sell_date", "")) or datetime.now().strftime("%Y-%m-%d")
+    # Backdated sale: convert proceeds at the sell-DATE FX rate (matching GAS's
+    # sRate), not today's spot. Fall back to today's live rate if the historical
+    # lookup fails. (audit #9)
+    if cur == "USD":
+        _hist_fx = _usdils_on(sell_date)
+        fx = _hist_fx if _hist_fx > 0 else _usd_ils_rate()
+    else:
+        fx = 1.0
     src_cost = float(_num(src.get("Cost_Origin", 0)))
     src_comm = float(_num(src.get("Commission", 0)))
     ratio = sell_qty / src_qty if src_qty else 0.0
@@ -9920,7 +10009,10 @@ def _ai_build_sell(df, args: Mapping[str, object]) -> Optional[Dict[str, object]
         "Sell_Date": sell_date, "Sell_Price_Origin": sell_price,
         "Current_Value_ILS": sell_qty * sell_price * fx, "Cost_ILS": 0.0,
     }
-    realized = sell_qty * sell_price * fx - alloc_cost * (fx if cur == "USD" else 1.0)
+    # Realized P&L must net out the full acquisition cost: allocated cost basis
+    # PLUS the allocated buy commission (a real cost of acquiring the lot). Omitting
+    # the commission overstated realized gains vs the GAS dashboard (audit #11).
+    realized = sell_qty * sell_price * fx - (alloc_cost + alloc_comm) * (fx if cur == "USD" else 1.0)
     label = "%s · %g @ %s%.2f" % (ticker, sell_qty, ("$" if cur == "USD" else "₪"), sell_price)
     if (src_qty - sell_qty) > 1e-9:  # partial
         source_update = dict(src)
@@ -11949,6 +12041,7 @@ def main() -> None:
             Cost_ILS=("Cost_ILS", "sum"),
             Value_ILS=("Current_Value_ILS", "sum"),
             Cost_Origin=("Cost_Origin", "sum"),      # plain cost, no commission
+            Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),  # incl. commission (denom)
             Value_Origin=("Value_Origin_Est", "sum"),
         )
         summary["Net_PnL_ILS"] = summary["Value_ILS"] - summary["Cost_ILS"]
@@ -11963,8 +12056,8 @@ def main() -> None:
         # For USD pure tickers: use origin-currency computation (legit different)
         # For mixed-currency tickers: fall back to Yield_ILS
         _dash_origin_raw = np.where(
-            summary["Cost_Origin"] > 0,
-            (summary["Value_Origin"] - summary["Cost_Origin"]) / summary["Cost_Origin"],
+            summary["Cost_Origin_With_Fee"] > 0,
+            (summary["Value_Origin"] - summary["Cost_Origin_With_Fee"]) / summary["Cost_Origin_With_Fee"],
             0.0,
         )
         summary["Yield_Origin"] = np.where(
@@ -12297,6 +12390,7 @@ def main() -> None:
                     Cost_ILS=("Cost_ILS", "sum"),
                     Value_ILS=("Current_Value_ILS", "sum"),
                     Cost_Origin=("Cost_Origin", "sum"),
+                    Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                     Value_Origin=("Value_Origin_Est", "sum"),
                 )
                 out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS"]
@@ -12304,9 +12398,10 @@ def main() -> None:
                 # Yield_Origin: use origin-currency computation only for pure-single-currency
                 # tickers. For mixed-currency tickers (BTC/ETH with ILS+USD trades) use
                 # Yield_ILS (ILS-denominated) which is always unambiguous.
+                # Commission is in the cost-basis denominator to match GAS. (audit #10)
                 _origin_raw = np.where(
-                    out["Cost_Origin"] > 0,
-                    (out["Value_Origin"] - out["Cost_Origin"]) / out["Cost_Origin"],
+                    out["Cost_Origin_With_Fee"] > 0,
+                    (out["Value_Origin"] - out["Cost_Origin_With_Fee"]) / out["Cost_Origin_With_Fee"],
                     0.0,
                 )
                 _is_pure = out["Ticker"].map(lambda t: _ticker_pure.get(t, True))
@@ -12529,6 +12624,7 @@ def main() -> None:
                                     Cost_ILS=("Cost_ILS", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
                                     Cost_Origin=("Cost_Origin", "sum"),
+                                    Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
                                 live_summary["Net_PnL_ILS"] = live_summary["Value_ILS"] - live_summary["Cost_ILS"]
@@ -12550,8 +12646,8 @@ def main() -> None:
                                     .to_dict()
                                 )
                                 _e_origin_raw = np.where(
-                                    live_summary["Cost_Origin"] > 0,
-                                    (live_summary["Value_Origin"] - live_summary["Cost_Origin"]) / live_summary["Cost_Origin"],
+                                    live_summary["Cost_Origin_With_Fee"] > 0,
+                                    (live_summary["Value_Origin"] - live_summary["Cost_Origin_With_Fee"]) / live_summary["Cost_Origin_With_Fee"],
                                     0.0,
                                 )
                                 live_summary["Yield_Origin"] = np.where(
@@ -12706,6 +12802,7 @@ def main() -> None:
                                     Cost_ILS=("Cost_ILS", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
                                     Cost_Origin=("Cost_Origin", "sum"),
+                                    Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
                                 _ov_summary["Net_PnL_ILS"] = _ov_summary["Value_ILS"] - _ov_summary["Cost_ILS"]
@@ -12727,8 +12824,8 @@ def main() -> None:
                                     .to_dict()
                                 )
                                 _ov_origin_raw = np.where(
-                                    _ov_summary["Cost_Origin"] > 0,
-                                    (_ov_summary["Value_Origin"] - _ov_summary["Cost_Origin"]) / _ov_summary["Cost_Origin"],
+                                    _ov_summary["Cost_Origin_With_Fee"] > 0,
+                                    (_ov_summary["Value_Origin"] - _ov_summary["Cost_Origin_With_Fee"]) / _ov_summary["Cost_Origin_With_Fee"],
                                     0.0,
                                 )
                                 _ov_summary["Yield_Origin"] = np.where(
@@ -12760,7 +12857,7 @@ def main() -> None:
                 crypto_share_label = tr("Crypto Share", "משקל קריפטו")
                 btc_portfolio_label = tr("BTC Share of Portfolio", "משקל ביטקוין בתיק")
                 btc_crypto_label = tr("BTC Share of Crypto", "משקל ביטקוין מתוך הקריפטו")
-            alloc_kpi_cols = st.columns(3)
+            alloc_kpi_cols = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
             alloc_kpi_cols[0].metric(
                 crypto_share_label,
                 f"{float(allocation_payload.get('crypto_share', 0.0)):.2%}",
@@ -13409,6 +13506,11 @@ def main() -> None:
                                 _vi[_has_live_tx] = _live_vi_tx[_has_live_tx]
                         _yic = np.where(_ci > 0, (_vi - _ci) / _ci, np.nan)
                         _co = _tx["Cost_Origin"].map(_num) if "Cost_Origin" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        _comm_tx = _tx["Commission"].map(_num) if "Commission" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        # Commission is part of the cost basis: include it in the origin-yield
+                        # denominator (Cost_Origin + Commission) to match GAS yieldOrigin and
+                        # engine.js. (audit #10)
+                        _cowf = _co + _comm_tx
                         # Value in origin currency: for USD assets divide ILS value by FX rate;
                         # for ILS assets the value is already in ILS.
                         _is_usd_cur = _tx["Origin_Currency"].map(_normalize_currency_code) == "USD"
@@ -13422,7 +13524,7 @@ def main() -> None:
                         # discrepancy for ILS assets, so we force them equal.
                         _yoc = np.where(
                             _is_usd_cur,
-                            np.where(_co > 0, (_vo - _co) / _co, np.nan),
+                            np.where(_cowf > 0, (_vo - _cowf) / _cowf, np.nan),
                             _yic,  # ILS assets: Yield_Origin == Yield_ILS
                         )
                         # Always use fresh live yields — don't preserve stale values from the
@@ -13573,7 +13675,11 @@ def main() -> None:
         value_series = portfolio_price_history(tuple(holdings["Ticker"]), tuple(holdings["Quantity"]), days=365)
         metrics = risk_metrics(value_series)
 
-        c1, c2, c3, c4 = st.columns(4)
+        if is_mobile:
+            c1, c2 = st.columns(2)
+            c3, c4 = st.columns(2)
+        else:
+            c1, c2, c3, c4 = st.columns(4)
         c1.metric("Sharpe", f"{metrics['sharpe']:.2f}",
                   help=tr(
                       "Sharpe Ratio = (Portfolio Return − Risk-Free Rate) / Annualized Volatility. Introduced by Nobel laureate William Sharpe (1966). It asks: 'for every unit of risk you take, how much excess return do you earn?' Benchmarks on annualized daily-returns basis: <0 = losing to cash · 0–1 = sub-par · 1–2 = good · 2–3 = very strong · >3 = outlier (double-check data quality). Weakness: Sharpe treats upside volatility as 'risk' — it penalises good surprises the same as bad ones. For asymmetric returns prefer Sortino (below).",
@@ -13991,7 +14097,13 @@ def main() -> None:
                         ratio = (sell_qty / src_qty) if src_qty > 1e-12 else 0.0
                         allocated_cost = float(src_cost * ratio)
                         allocated_commission = float(src_commission * ratio)
-                        fx_for_origin = manage_fx if _normalize_currency_code(source_row.get("Origin_Currency", "")) == "USD" else 1.0
+                        # Backdated sale: value proceeds at the sell-DATE FX (matching
+                        # GAS sRate), not today's spot; fall back to today's rate. (audit #9)
+                        if _normalize_currency_code(source_row.get("Origin_Currency", "")) == "USD":
+                            _sell_fx_hist = _usdils_on(sell_date_txt)
+                            fx_for_origin = _sell_fx_hist if _sell_fx_hist > 0 else manage_fx
+                        else:
+                            fx_for_origin = 1.0
 
                         new_row.update(
                             {
@@ -14054,7 +14166,13 @@ def main() -> None:
                         )
                         sell_price_origin = st.number_input(tr("Sell price", "מחיר מכירה"), value=0.0, help=field_help["Sell_Price_Origin"])
                         new_row["Sell_Price_Origin"] = float(sell_price_origin)
-                        fx_for_origin = manage_fx if _normalize_currency_code(new_row.get("Origin_Currency", "")) == "USD" else 1.0
+                        # Backdated sale: value proceeds at the sell-DATE FX (matching
+                        # GAS sRate), not today's spot; fall back to today's rate. (audit #9)
+                        if _normalize_currency_code(new_row.get("Origin_Currency", "")) == "USD":
+                            _sell_fx_hist_m = _usdils_on(_sell_date_manual)
+                            fx_for_origin = _sell_fx_hist_m if _sell_fx_hist_m > 0 else manage_fx
+                        else:
+                            fx_for_origin = 1.0
                         new_row["Current_Value_ILS"] = float(new_row["Quantity"] * sell_price_origin * fx_for_origin)
                         new_row["Cost_ILS"] = 0.0
 
@@ -14332,7 +14450,11 @@ def main() -> None:
         if "Purchase_Date" in df.columns:
             missing_date = int(_parse_dates_flexible(df["Purchase_Date"]).isna().sum())
 
-        cqa1, cqa2, cqa3, cqa4 = st.columns(4)
+        if is_mobile:
+            cqa1, cqa2 = st.columns(2)
+            cqa3, cqa4 = st.columns(2)
+        else:
+            cqa1, cqa2, cqa3, cqa4 = st.columns(4)
         cqa1.metric(tr("Data Completeness", "שלמות נתונים"), f"{completeness:.1%}")
         cqa2.metric(tr("Duplicate Trade IDs", "כפילויות Trade ID"), f"{dupes}")
         cqa3.metric(tr("Missing Tickers", "טיקרים חסרים"), f"{missing_ticker}")
