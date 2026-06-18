@@ -4,14 +4,39 @@
 // =========================================================================
 
 const CRYPTO_ETFS = ["IBIT", "ETHA", "BSOL", "MSTR"];
+// Crypto-SHARE tickers exclude MSTR: it is treated as a pure stock so the crypto-share
+// KPI agrees with the allocation pie, matching app.py CRYPTO_SHARE_TICKERS and
+// engine.js. (cross-file convention — MSTR is NOT crypto for the share %)
+const CRYPTO_SHARE_TICKERS = ["IBIT", "ETHA", "BSOL"];
 const PORTFOLIO_SHEET = "תמונת מצב";
 const AUDIT_SHEET = "תגובות לטופס 1";
 const DEPOSITS_SHEET = "הפקדות ידניות";
+// Canonical column order MUST match the live InstallSystem layout exactly,
+// otherwise running dedup (which rewrites the sheet to this order) followed by
+// InstallSystem (which rewrites formulas by hardcoded column letter) shifts every
+// metric column off by one. The live layout has a hidden dummy column
+// 'סטטוס מכירה' at position 12 (index 11, between 'סטטוס' and 'שער נוכחי USD'),
+// and the live USD/ILS rate label 'שער USD/ILS עדכני:' at the end (col Z). Both
+// are included here so the dedup output is column-compatible with InstallSystem.
+// (audit fix #15 / #2)
+// Order MUST mirror the physical live layout produced by InstallSystem:
+//  A..K  = location..status (indices 0-10)
+//  L     = 'סטטוס מכירה' hidden dummy (index 11)
+//  M..U  = metric block (indices 12-20)
+//  V     = 'תאריך מכירה' (index 21)
+//  W..Y  = yield columns (indices 22-24)
+//  Z     = 'שער USD/ILS עדכני:' label (index 25)
+//  AA    = USD/ILS rate cell, headerless placeholder (index 26)
+//  AB    = 'Trade_ID' (index 27)
+//  AC    = 'תשואה במכירה (₪)' (index 28)
+// Keeping this identical to the live layout means running dedup followed by
+// InstallSystem no longer shifts any metric column off by one. (audit fix #15 / #2)
 const SNAPSHOT_CANONICAL_HEADERS = [
   "מיקום נוכחי", "פלטפורמה", "סוג נכס", "טיקר", "תאריך רכישה", "כמות", "שער קנייה",
-  "עלות כוללת", "מטבע", "עמלה", "סטטוס", "שער נוכחי USD", "עלות USD", "עלות ILS",
+  "עלות כוללת", "מטבע", "עמלה", "סטטוס", "סטטוס מכירה", "שער נוכחי USD", "עלות USD", "עלות ILS",
   "שווי USD", "שווי ILS", "שער קנייה USD", "שער קנייה ILS", "שער נוכחי ILS", "שער מכירה",
-  "תאריך מכירה", "תשואה במכירה", "תשואה מקור", "תשואה שקלית", "Trade_ID", "תשואה במכירה (₪)"
+  "תאריך מכירה", "תשואה במכירה", "תשואה מקור", "תשואה שקלית", "שער USD/ILS עדכני:", "",
+  "Trade_ID", "תשואה במכירה (₪)"
 ];
 const SNAPSHOT_FIELD_ALIASES = {
   location: ["מיקום נוכחי", "Current_Location"],
@@ -25,6 +50,7 @@ const SNAPSHOT_FIELD_ALIASES = {
   currency: ["מטבע", "Origin_Currency"],
   fee: ["עמלה", "Commission"],
   status: ["סטטוס", "Status"],
+  saleStatus: ["סטטוס מכירה"],
   sellDate: ["תאריך מכירה", "Sell_Date"],
   spotUsd: ["שער נוכחי USD"],
   valueUsd: ["שווי USD", "שווי נוכחי USD"],
@@ -39,7 +65,8 @@ const SNAPSHOT_FIELD_ALIASES = {
   yieldOrigin: ["תשואה מקור"],
   yieldIls: ["תשואה שקלית"],
   yieldAtSaleIls: ["תשואה במכירה (₪)", "תשואה במכירה בשקלים", "Yield_At_Sale_ILS"],
-  tradeId: ["Trade_ID"]
+  tradeId: ["Trade_ID"],
+  usdIlsRateLabel: ["שער USD/ILS עדכני:", "USD/ILS", "שער דולר שקל"]
 };
 
 function onOpen() {
@@ -82,6 +109,48 @@ function parseNum(val) {
   if (val === null || val === undefined || val === "") return 0;
   if (typeof val === "number") return val;
   return parseFloat(String(val).replace("₪", "").replace("$", "").split(",").join("").split("%").join("").split(" ").join("").trim()) || 0;
+}
+
+// Convert a 0-based column index to its A1 column letter(s) (0=>A, 25=>Z, 26=>AA).
+function colLetter_(idx) {
+  let n = Number(idx);
+  if (!isFinite(n) || n < 0) return "";
+  n += 1; // to 1-based
+  let s = "";
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+// Dated FX helper: builds a spreadsheet formula fragment that yields the ILS value
+// of ONE unit of the row's Origin_Currency on a given date, using the CORRECT pair
+// per currency rather than always USDILS. Handles USD/EUR/GBP plus the sub-unit
+// currencies GBX (pence = GBP/100) and ILA (agorot = ILS/100). Falls back to $AA$1
+// (live USDILS) only for the USD branch / unknown currencies, never silently 1:1.
+// (audit fix #7 / #97)
+//   dateCellRef e.g. "E5" (buy date) or "V5" (sell date)
+//   curCellRef  e.g. "$I5" (Origin_Currency)
+function fxIlsPerUnitExpr_(dateCellRef, curCellRef) {
+  function pair(code) {
+    // Historical INDEX(GOOGLEFINANCE("CURRENCY:<code>","price",date),2,2) with a
+    // one-day-back retry, then live $AA$1 (USDILS) as a last-ditch fallback.
+    return "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:" + code + "\", \"price\", " + dateCellRef +
+      "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:" + code + "\", \"price\", " + dateCellRef +
+      "-1), 2, 2), $AA$1)), $AA$1)";
+  }
+  const usd = pair("USDILS");
+  const eur = pair("EURILS");
+  const gbp = pair("GBPILS");
+  return "IF(" + curCellRef + "=\"ILS\", 1," +
+    "IF(" + curCellRef + "=\"ILA\", 0.01," +
+    "IF(" + curCellRef + "=\"USD\", " + usd + "," +
+    "IF(" + curCellRef + "=\"EUR\", " + eur + "," +
+    "IF(" + curCellRef + "=\"GBP\", " + gbp + "," +
+    "IF(" + curCellRef + "=\"GBX\", (" + gbp + ")/100," +
+    usd + "))))))"; // unknown currency -> USDILS fallback (never silent 1:1)
 }
 
 function buildSnapshotHeaderIndexMap_(headers) {
@@ -224,22 +293,38 @@ function writeManualDeposits_(mode, rows) {
   const currentMode = cleanText(mode || "live").toLowerCase() === "demo" ? "demo" : "live";
   const normalized = sanitizeManualDepositsRows_(rows);
 
+  // Replace this mode's rows atomically by REWRITING the data region rather than
+  // deleting rows one-by-one. The previous per-row deleteRow loop is fragile (every
+  // deleteRow physically shifts the sheet, and any future top-down variant would
+  // skip/double-delete with interleaved modes); rewriting is shift-proof and also
+  // far fewer API calls. We keep every OTHER mode's rows verbatim, then append the
+  // new rows for the current mode. (audit fix #75 / bug-gas #8)
   const lastRow = ws.getLastRow();
   const dataStart = cleanText(ws.getRange(1, 1).getValue()).indexOf("הפקדות ידניות") >= 0 ? 3 : 2;
+
+  const kept = [];
   if (lastRow >= dataStart) {
-    const existingModes = ws.getRange(dataStart, 2, lastRow - dataStart + 1, 1).getValues();
-    for (let i = existingModes.length - 1; i >= 0; i--) {
-      if (cleanText(existingModes[i][0]).toLowerCase() === currentMode) {
-        ws.deleteRow(i + dataStart);
-      }
+    const existing = ws.getRange(dataStart, 1, lastRow - dataStart + 1, 4).getValues();
+    for (let i = 0; i < existing.length; i++) {
+      const r = existing[i];
+      const rowMode = cleanText(r[1]).toLowerCase();
+      const rowPlatform = cleanText(r[2]);
+      // Drop rows belonging to the mode being replaced; keep everything else that
+      // has real content (skip fully blank trailing rows).
+      if (rowMode === currentMode) continue;
+      if (!rowMode && !rowPlatform) continue;
+      kept.push([r[0], r[1], r[2], r[3]]);
     }
+    // Clear the whole data region before rewriting so removed rows actually vanish.
+    ws.getRange(dataStart, 1, lastRow - dataStart + 1, 4).clearContent();
   }
 
-  if (normalized.length > 0) {
-    const payload = normalized.map(function (r) {
-      return [new Date(), currentMode, r.Platform, r.Manual_Deposit_ILS];
-    });
-    ws.getRange(ws.getLastRow() + 1, 1, payload.length, 4).setValues(payload);
+  const newRows = normalized.map(function (r) {
+    return [new Date(), currentMode, r.Platform, r.Manual_Deposit_ILS];
+  });
+  const out = kept.concat(newRows);
+  if (out.length > 0) {
+    ws.getRange(dataStart, 1, out.length, 4).setValues(out);
   }
 
   return { ok: true, mode: currentMode, rows: normalized, count: normalized.length };
@@ -268,6 +353,7 @@ function _snapshotSemanticGroups_() {
     ["מטבע", "Origin_Currency"],
     ["עמלה", "Commission"],
     ["סטטוס", "Status"],
+    ["סטטוס מכירה"],
     ["שער נוכחי USD", "שער נוכחי USD (כפילות)"],
     ["עלות USD"],
     ["עלות ILS"],
@@ -372,6 +458,10 @@ function dedupeSnapshotSchemaOnce_() {
 
     const canonicalHeaders = SNAPSHOT_CANONICAL_HEADERS.slice();
     const canonicalIdx = canonicalHeaders.map(function (h) {
+      // Headerless placeholder (the AA USD/ILS rate cell) has no source column;
+      // InstallSystem rewrites it afterwards. Never match it against a stray blank
+      // source column, which would pull unrelated data into the rate slot.
+      if (!cleanText(h)) return -1;
       return _findFirstHeaderByAliases_(headers, _aliasesForCanonicalHeader_(h));
     });
 
@@ -396,7 +486,13 @@ function dedupeSnapshotSchemaOnce_() {
     if (outRows.length > 0) {
       ws.getRange(2, 1, outRows.length, canonicalHeaders.length).setValues(outRows);
     }
-    formatMainSheet();
+    // getValues() above froze every GOOGLEFINANCE formula into a static number and
+    // ws.clear() dropped the live AA1 USD/ILS rate cell. Re-running InstallSystem
+    // restores the AA1 rate formula, re-installs all live pricing/yield formulas,
+    // and re-applies formatting — leaving the sheet live instead of frozen. Calling
+    // formatMainSheet() alone (the previous behavior) left the sheet permanently
+    // broken (zeroed ILS values). (audit fix #2 / #14)
+    InstallSystem();
 
     const doneAt = new Date().toISOString();
     props.setProperty("SNAPSHOT_SCHEMA_DEDUP_DONE", doneAt);
@@ -463,7 +559,7 @@ function copyCalculatedFormulaCells_(ws, sourceRow, targetRow) {
   const keys = [
     "spotUsd", "costUsd", "costIls", "valueUsd", "valueIls",
     "buyUsd", "buyIls", "spotIls", "sellPrice", "yieldAtSale",
-    "yieldOrigin", "yieldIls"
+    "yieldOrigin", "yieldIls", "yieldAtSaleIls"
   ];
   keys.forEach(function (k) {
     const ix = map[k];
@@ -484,7 +580,7 @@ function findFormulaTemplateRow_(ws, excludeRow) {
   const keys = [
     "spotUsd", "costUsd", "costIls", "valueUsd", "valueIls",
     "buyUsd", "buyIls", "spotIls", "sellPrice", "yieldAtSale",
-    "yieldOrigin", "yieldIls"
+    "yieldOrigin", "yieldIls", "yieldAtSaleIls"
   ];
 
   for (let r = lastRow; r >= 2; r--) {
@@ -725,14 +821,18 @@ function dedupeRows_(rows, ix) {
     const tradeId = cleanText(r[ix.tradeId]);
     const key = tradeId
       ? "TID|" + tradeId
+      // Fallback key (only when Trade_ID is blank). Use toFixed(12) to match the
+      // canonical identity precision in tradeIdFromRow_ — toFixed(8) here could
+      // collapse two rows as duplicate that the canonical hash would treat as
+      // distinct (and vice-versa), desyncing dedup from Trade_ID. (audit fix #8)
       : [
         cleanText(r[ix.platform]),
         cleanText(r[ix.type]),
         cleanText(r[ix.ticker]).toUpperCase(),
         normalizeDateOnly_(r[ix.purchaseDate]),
-        parseNum(r[ix.quantity]).toFixed(8),
-        parseNum(r[ix.buyPrice]).toFixed(8),
-        parseNum(r[ix.cost]).toFixed(8),
+        parseNum(r[ix.quantity]).toFixed(12),
+        parseNum(r[ix.buyPrice]).toFixed(12),
+        parseNum(r[ix.cost]).toFixed(12),
         cleanText(r[ix.status])
       ].join("|");
     if (seen[key]) {
@@ -815,7 +915,12 @@ function fixSnapshotSheet_() {
     return true;
   });
 
+  // dedupeRows_ returns the de-duplicated array in dedup.rows; it must feed the
+  // patch step and the final write. Previously applyCrossCheckPatches_ was passed
+  // the ORIGINAL rows, so duplicates were counted but never actually removed from
+  // the sheet. (audit fix #70)
   const dedup = dedupeRows_(rows, ix);
+  rows = dedup.rows;
   const patched = applyCrossCheckPatches_(rows, ix);
 
   // Write the (possibly fewer) normalized rows; delete any orphaned trailing rows.
@@ -870,9 +975,19 @@ function doGet() {
 function doPost(e) {
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
-    // Telegram webhook updates carry no api token — identify by update_id/message and
-    // handle them on a fully separate path so they can never affect the apps' API.
-    if (payload && (payload.update_id !== undefined || payload.message || payload.edited_message)) {
+    // Telegram webhook updates carry no api token. The OLD heuristic (any of
+    // update_id/message/edited_message present) was trivially bypassable: an attacker
+    // who knows the Web App URL could attach those keys to an API payload to skip
+    // validateToken_ entirely. Tighten it: a genuine Telegram update has a POSITIVE
+    // INTEGER update_id AND carries NO action/token fields. Anything else falls
+    // through to validateToken_ as a normal API request. (audit fix #83)
+    const looksTelegram = payload &&
+      typeof payload.update_id === "number" &&
+      isFinite(payload.update_id) && payload.update_id > 0 &&
+      Math.floor(payload.update_id) === payload.update_id &&
+      payload.action === undefined && payload.Action === undefined &&
+      payload.token === undefined;
+    if (looksTelegram) {
       try { handleTelegramUpdate_(payload); } catch (tgErr) { try { appendAudit_("telegram_error", "TG", "ERROR", String(tgErr)); } catch (e2) {} }
       return ContentService.createTextOutput("ok");
     }
@@ -1108,7 +1223,19 @@ function sanitizeTrade_(trade) {
   out.Commission = parseNum(out.Commission || out["עמלה"]);
   out.Status = neuterFormula_(out.Status || out["סטטוס"] || "פתוח");
   out.Sell_Date = normalizeDateOnly_(out.Sell_Date || out["תאריך מכירה"] || "");
-  out.Trade_ID = cleanText(out.Trade_ID || "");
+  // Sell_Price_Origin (שער מכירה) is a STORED value used by the closed-trade yield
+  // formulas. It must be explicitly carried through sanitize so an edit that marks a
+  // trade "סגור" and includes a sale price is not silently dropped. (audit fix #72)
+  var rawSellPrice = (out.Sell_Price_Origin !== undefined && out.Sell_Price_Origin !== "")
+    ? out.Sell_Price_Origin
+    : (out["שער מכירה"] !== undefined ? out["שער מכירה"] : "");
+  out.Sell_Price_Origin = (rawSellPrice === "" || rawSellPrice === null || rawSellPrice === undefined)
+    ? "" : parseNum(rawSellPrice);
+  // neuterFormula_ (not just cleanText) so a crafted Trade_ID beginning with =/+/-/@
+  // can never be evaluated as a formula if it is ever rendered into a formula-capable
+  // cell. Canonical IDs are SHA-1 hex so this is a no-op for legitimate data.
+  // (audit fix sec-gas #2)
+  out.Trade_ID = neuterFormula_(out.Trade_ID || "");
 
   if (out.Cost_Origin <= 0 && out.Quantity > 0 && out.Origin_Buy_Price > 0) {
     out.Cost_Origin = out.Quantity * out.Origin_Buy_Price;
@@ -1127,14 +1254,19 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
   const r = rowNum;
   const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
   const sRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "-1), 2, 2), $AA$1)), $AA$1)";
+  // Currency-aware ILS-per-unit-of-origin rate on the buy date (E). Replaces the
+  // old USDILS-only branch so EUR/GBP/GBX/ILA get their correct pair. (audit #7/#97)
+  const fxBuy = fxIlsPerUnitExpr_("E" + r, "$I" + r);
   const formulas = {
-    spotUsd: '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0)))',
-    costUsd: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) / IF($I' + r + '="USD", 1, ' + hRate + '))',
-    costIls: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * IF($I' + r + '="ILS", 1, ' + hRate + '))',
+    // ETF/קרן סל priced like stocks (direct quote), not zeroed. (audit fix #95)
+    spotUsd: '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(OR(C' + r + '="שוק ההון",C' + r + '="ETF",C' + r + '="קרן סל"), GOOGLEFINANCE(D' + r + ', "price"), 0)))',
+    // costUsd / buyUsd = ILS amount converted back to USD via the dated USDILS rate.
+    costUsd: '=IF(H' + r + '="","", ((H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + ')) / ' + hRate + ')',
+    costIls: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + '))',
     valueUsd: '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
     valueIls: '=IF(P' + r + '="","", P' + r + ' * IF(K' + r + '="סגור", ' + sRate + ', $AA$1))',
-    buyUsd: '=IF(G' + r + '="","", IF($I' + r + '="USD", $G' + r + ', $G' + r + ' / ' + hRate + '))',
-    buyIls: '=IF(G' + r + '="","", IF($I' + r + '="ILS", $G' + r + ', $G' + r + ' * ' + hRate + '))',
+    buyUsd: '=IF(G' + r + '="","", ($G' + r + ' * (' + fxBuy + ')) / ' + hRate + ')',
+    buyIls: '=IF(G' + r + '="","", $G' + r + ' * (' + fxBuy + '))',
     spotIls: '=IF(M' + r + '="","", M' + r + ' * $AA$1)',
     // שער מכירה (U) is a STORED value (the real sale price) for closed positions,
     // entered at sell time — NOT auto-computed from the live market price.
@@ -1143,8 +1275,12 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
     yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')',
     // Sale return in ILS — the ₪ analogue of yieldAtSale (W). Only populated for
     // closed positions; uses sale proceeds in ILS (Q=שווי ILS) vs cost in ILS
-    // (O=עלות ILS). Blank for open rows so it reads as a true "at-sale" figure.
-    yieldAtSaleIls: '=IF(OR(K' + r + '<>"סגור", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')'
+    // (O=עלות ILS). Also requires the stored sale price U<>"" so this reads as a
+    // true "at-sale" figure: Q (שווי ILS) for a closed row is qty×U×sRate(sell-date)
+    // ONLY when U is present; if U is blank, Q falls back to the LIVE market price
+    // (M) and the return would drift daily. Gating on U<>"" (matching yieldAtSale)
+    // keeps it frozen at the actual sale, blank otherwise. (audit fix #74)
+    yieldAtSaleIls: '=IF(OR(K' + r + '<>"סגור", U' + r + '="", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')'
   };
 
   Object.keys(formulas).forEach(function (k) {
@@ -1170,19 +1306,30 @@ function addSaleReturnIlsColumn_() {
   ws.getRange(1, col).setValue(NEW_HEADER)
     .setBackground("#2C5282").setFontColor("white").setFontWeight("bold")
     .setHorizontalAlignment("center").setVerticalAlignment("middle").setWrap(true);
+  // Resolve status / costIls / valueIls columns DYNAMICALLY rather than hardcoding
+  // K/O/Q. Those letters are only correct in the live (post-InstallSystem) layout;
+  // if this runs while the sheet is in the CANONICAL post-dedup state (O=שווי USD,
+  // Q=שער קנייה USD), the hardcoded letters compute a nonsensical return on the
+  // wrong columns. buildSnapshotHeaderIndexMap_ + colLetter_ keep it correct in any
+  // layout. (audit fix #16)
+  const map = buildSnapshotHeaderIndexMap_(headers);
+  const kL = colLetter_(map.status);    // סטטוס
+  const oL = colLetter_(map.costIls);   // עלות ILS
+  const qL = colLetter_(map.valueIls);  // שווי ILS
+  const uL = colLetter_(map.sellPrice); // שער מכירה (stored sale price)
   const lastRow = ws.getLastRow();
   let filled = 0;
-  if (lastRow >= 2) {
+  if (lastRow >= 2 && kL && oL && qL && uL) {
     const formulas = [];
     for (let r = 2; r <= lastRow; r++) {
-      formulas.push(['=IF(OR(K' + r + '<>"סגור", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')']);
+      formulas.push(['=IF(OR(' + kL + r + '<>"סגור", ' + uL + r + '="", ' + oL + r + '="", ' + oL + r + '=0, ' + qL + r + '=""), "", (' + qL + r + '-' + oL + r + ')/' + oL + r + ')']);
     }
     const rng = ws.getRange(2, col, formulas.length, 1);
     rng.setFormulas(formulas);
     rng.setNumberFormat("0.0%");
     filled = formulas.length;
   }
-  return { ok: true, header: NEW_HEADER, column: col, created: created, rows_filled: filled };
+  return { ok: true, header: NEW_HEADER, column: col, created: created, rows_filled: filled, statusCol: kL, costIlsCol: oL, valueIlsCol: qL };
 }
 
 function rowToMapByHeaders_(headers, row) {
@@ -1221,12 +1368,46 @@ function tradeFromAuditRow_(headers, row) {
     Commission: asMap.Commission || asMap["עמלה"] || 0,
     Status: asMap.Status || asMap["סטטוס"] || "פתוח",
     Sell_Date: asMap.Sell_Date || asMap["תאריך מכירה"] || "",
+    Sell_Price_Origin: asMap.Sell_Price_Origin || asMap["שער מכירה"] || "",
     Trade_ID: asMap.Trade_ID || asMap.trade_id || ""
   });
 }
 
+// Owner-identity gate for the sheet-trigger (onEdit/onFormSubmit) write path. These
+// triggers run OUTSIDE the token-guarded doPost API, so without this check any user
+// with spreadsheet Editor access (a co-editor, or a linked Google Form) could mutate
+// the portfolio by typing into the audit sheet. We only allow mutations initiated by
+// the spreadsheet owner. Fails CLOSED: if identity can't be resolved, deny.
+// (audit fix #82)
+function isSpreadsheetOwnerTrigger_() {
+  try {
+    const active = Session.getActiveUser().getEmail();
+    const effective = Session.getEffectiveUser().getEmail();
+    let owner = "";
+    try {
+      const o = SpreadsheetApp.getActiveSpreadsheet().getOwner();
+      owner = o ? o.getEmail() : "";
+    } catch (e) { owner = ""; }
+    if (!owner) {
+      // Owner not resolvable (shared drive). Fall back to: the acting user must
+      // equal the script's effective user (the deployer/owner).
+      return !!active && !!effective && active === effective;
+    }
+    return !!active && active === owner;
+  } catch (e) {
+    return false; // fail closed
+  }
+}
+
 function syncAuditRowToPortfolio_(sheet, rowNum) {
   if (!sheet || rowNum < 2) return;
+  // Sheet-trigger mutations must come from the spreadsheet owner. A co-editor (or a
+  // linked Google Form) typing into the audit sheet otherwise bypasses the token
+  // gate entirely. (audit fix #82)
+  if (!isSpreadsheetOwnerTrigger_()) {
+    try { appendAudit_("audit_sheet_denied", String(rowNum), "DENIED", "non-owner sheet trigger blocked"); } catch (e) {}
+    return;
+  }
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(cleanText);
   const row = sheet.getRange(rowNum, 1, 1, headers.length).getValues()[0];
   const map = rowToMapByHeaders_(headers, row);
@@ -1335,6 +1516,11 @@ function upsertTrade_(action, trade) {
     row[ix.currency] = trade.Origin_Currency;
     row[ix.fee] = trade.Commission;
     row[ix.status] = trade.Status;
+    // Persist the stored sale price (שער מכירה) when provided — it drives the
+    // closed-trade yield formulas. (audit fix #72)
+    if (ix.sellPrice >= 0 && trade.Sell_Price_Origin !== undefined && trade.Sell_Price_Origin !== "") {
+      row[ix.sellPrice] = parseNum(trade.Sell_Price_Origin);
+    }
     if (ix.sellDate >= 0) row[ix.sellDate] = isClosed ? toSheetDateOrText_(sellDateVal || new Date()) : "עדיין פתוח";
     row[ix.tradeId] = trade.Trade_ID;
     ws.getRange(target, 1, 1, width).setValues([row]);
@@ -1375,12 +1561,23 @@ function upsertTrade_(action, trade) {
       existing[ix.sellDate] = "עדיין פתוח";
     }
   }
+  // Persist the stored sale price (שער מכירה) on edit when supplied, so marking a
+  // trade closed via the API also records the price the closed-yield formulas need.
+  // (audit fix #72)
+  let sellPriceWritten = false;
+  if (ix.sellPrice >= 0 && trade.Sell_Price_Origin !== undefined && trade.Sell_Price_Origin !== "") {
+    existing[ix.sellPrice] = parseNum(trade.Sell_Price_Origin);
+    sellPriceWritten = true;
+  }
   existing[ix.tradeId] = trade.Trade_ID;
 
   // Preserve formula-based calculated cells during edit so yields stay alive.
+  // ix.sellPrice is protected ONLY when we just wrote a value to it — otherwise it
+  // keeps whatever it had (including a previously-stored value). (audit fix #72)
   const protectedIx = {};
   [ix.location, ix.platform, ix.type, ix.ticker, ix.purchaseDate, ix.quantity, ix.buyPrice, ix.cost, ix.currency, ix.fee, ix.status, ix.sellDate, ix.tradeId]
     .forEach(function (v) { if (v >= 0) protectedIx[v] = true; });
+  if (sellPriceWritten && ix.sellPrice >= 0) protectedIx[ix.sellPrice] = true;
   for (let c = 0; c < width; c++) {
     if (protectedIx[c]) continue;
     if (existingFormulas[c]) {
@@ -1608,14 +1805,19 @@ function InstallSystem() {
     const r = i + 2;
     const hRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", E" + r + "-1), 2, 2), $AA$1)), $AA$1)";
     const sRate = "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:USDILS\", \"price\", V" + r + "-1), 2, 2), $AA$1)), $AA$1)";
+    // Currency-aware ILS-per-unit-of-origin rate on the buy date. (audit #7/#97)
+    const fxBuy = fxIlsPerUnitExpr_("E" + r, "$I" + r);
     pricingFormulas.push([
-      '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(C' + r + '="שוק ההון", GOOGLEFINANCE(D' + r + ', "price"), 0)))',
-      '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) / IF($I' + r + '="USD", 1, ' + hRate + '))',
-      '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * IF($I' + r + '="ILS", 1, ' + hRate + '))',
+      // spotUsd: crypto via CURRENCY pair; stocks AND ETFs (שוק ההון / ETF / קרן סל)
+      // via direct price quote. Previously ETF/קרן סל fell to the 0 branch → valueIls=0
+      // for every ETF-typed row. (audit fix #95)
+      '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(OR(C' + r + '="שוק ההון",C' + r + '="ETF",C' + r + '="קרן סל"), GOOGLEFINANCE(D' + r + ', "price"), 0)))',
+      '=IF(H' + r + '="","", ((H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + ')) / ' + hRate + ')',
+      '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + '))',
       '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
       '=IF(P' + r + '="","", P' + r + ' * IF(K' + r + '="סגור", ' + sRate + ', $AA$1))',
-      '=IF(G' + r + '="","", IF($I' + r + '="USD", $G' + r + ', $G' + r + ' / ' + hRate + '))',
-      '=IF(G' + r + '="","", IF($I' + r + '="ILS", $G' + r + ', $G' + r + ' * ' + hRate + '))',
+      '=IF(G' + r + '="","", ($G' + r + ' * (' + fxBuy + ')) / ' + hRate + ')',
+      '=IF(G' + r + '="","", $G' + r + ' * (' + fxBuy + '))',
       '=IF(M' + r + '="","", M' + r + ' * $AA$1)'
     ]);
     yieldFormulas.push([
@@ -1627,6 +1829,23 @@ function InstallSystem() {
   if (numRows > 0) {
     mainSheet.getRange(2, 13, numRows, 8).setFormulas(pricingFormulas); // M:T (U=שער מכירה is stored data)
     mainSheet.getRange(2, 23, numRows, 3).setFormulas(yieldFormulas);   // W:Y
+
+    // Re-install the "תשואה במכירה (₪)" (AC) formula too, resolved dynamically by
+    // header. fixSnapshotSheet_ writes the sheet back via setValues which freezes
+    // this column's formula into a static number; without this re-install it would
+    // stay frozen after every SystemDoctor run. (audit fix #74 / #16 follow-through)
+    const liveHdr = mainSheet.getRange(1, 1, 1, mainSheet.getLastColumn()).getValues()[0].map(cleanText);
+    const liveMap = buildSnapshotHeaderIndexMap_(liveHdr);
+    const acIx = liveMap.yieldAtSaleIls;
+    const kL = colLetter_(liveMap.status), oL = colLetter_(liveMap.costIls), qL = colLetter_(liveMap.valueIls), uL = colLetter_(liveMap.sellPrice);
+    if (acIx >= 0 && kL && oL && qL && uL) {
+      const ilsYieldFormulas = [];
+      for (let i = 0; i < numRows; i++) {
+        const rr = i + 2;
+        ilsYieldFormulas.push(['=IF(OR(' + kL + rr + '<>"סגור", ' + uL + rr + '="", ' + oL + rr + '="", ' + oL + rr + '=0, ' + qL + rr + '=""), "", (' + qL + rr + '-' + oL + rr + ')/' + oL + rr + ')']);
+      }
+      mainSheet.getRange(2, acIx + 1, numRows, 1).setFormulas(ilsYieldFormulas).setNumberFormat("0.00%");
+    }
   }
 
   // Normalize numeric formats to avoid mixed text/currency exports in CSV.
@@ -1757,7 +1976,7 @@ function buildDashboardV2() {
   const open = all.filter(function (r) { return !isClosed(r); });
   const closed = all.filter(isClosed);
 
-  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1, "MSTR": 1 };
+  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1 }; // MSTR=stock (crypto-share parity)
   let totCost = 0, totVal = 0, totFeeIls = 0, usdVal = 0, firstDate = null;
   const byTicker = {}, byPlat = {};
   open.forEach(function (r) {
@@ -1765,8 +1984,9 @@ function buildDashboardV2() {
     const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
     const tp = cleanText(rowVal_(r, map, "type")), cur = cleanText(rowVal_(r, map, "currency"));
     const qty = parseNum(rowVal_(r, map, "quantity")), fee = parseNum(rowVal_(r, map, "fee"));
+    const co = parseNum(rowVal_(r, map, "costOrigin"));
     totCost += ci; totVal += vi;
-    totFeeIls += (cur === "USD" ? fee * rate : fee);
+    totFeeIls += feeToIls_(fee, cur, co, ci, rate);
     if (cur === "USD") usdVal += vi;
     if (!byTicker[t]) byTicker[t] = { qty: 0, cost: 0, val: 0, type: tp, cur: cur };
     byTicker[t].qty += qty; byTicker[t].cost += ci; byTicker[t].val += vi;
@@ -1782,8 +2002,9 @@ function buildDashboardV2() {
     const t = cleanText(rowVal_(r, map, "ticker"));
     const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
     const cur = cleanText(rowVal_(r, map, "currency")), fee = parseNum(rowVal_(r, map, "fee"));
+    const co = parseNum(rowVal_(r, map, "costOrigin"));
     realized += (vi - ci);
-    totFeeIls += (cur === "USD" ? fee * rate : fee);
+    totFeeIls += feeToIls_(fee, cur, co, ci, rate);
     if (!closedAgg[t]) closedAgg[t] = { cost: 0, val: 0 };
     closedAgg[t].cost += ci; closedAgg[t].val += vi;
   });
@@ -2178,6 +2399,26 @@ function tgHelp_() {
     "אני עובד 24/7 גם כשהמחשב כבוי ☁️";
 }
 
+// Convert a per-row commission (in the row's Origin_Currency) to ILS without making
+// any extra GOOGLEFINANCE calls. costIls already equals (costOrigin+fee)*fxRate, so
+// the row's true ILS-per-origin-unit rate is costIls/(costOrigin+fee) — we reuse that
+// derived rate for ANY currency (EUR/GBP/GBX/ILA), instead of the old code that
+// treated every non-USD fee as if it were already ILS (1:1). Falls back to: ILS=>1,
+// USD=>USDILS, else the derived ratio, else USDILS. (audit fix bug-gas #5)
+function feeToIls_(fee, cur, costOrigin, costIls, usdIlsRate) {
+  const f = parseNum(fee);
+  if (!f) return 0;
+  const c = cleanText(cur).toUpperCase();
+  if (c === "ILS") return f;
+  if (c === "USD") return f * (usdIlsRate || 1);
+  const co = parseNum(costOrigin), ci = parseNum(costIls);
+  if (co + f > 0 && ci > 0) {
+    const derived = ci / (co + f); // ILS per 1 unit of origin currency
+    if (isFinite(derived) && derived > 0) return f * derived;
+  }
+  return f * (usdIlsRate || 1); // last-ditch: USDILS, never silent 1:1
+}
+
 function computePortfolioStats_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const main = ss.getSheetByName("תמונת מצב");
@@ -2189,7 +2430,7 @@ function computePortfolioStats_() {
   const isClosed = function (r) { return cleanText(rowVal_(r, map, "status")) === "סגור"; };
   const open = all.filter(function (r) { return !isClosed(r); });
   const closed = all.filter(isClosed);
-  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1, "MSTR": 1 };
+  const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1 }; // MSTR=stock (crypto-share parity)
   let totCost = 0, totVal = 0, totFeeIls = 0, usdVal = 0, firstDate = null;
   const byTicker = {}, byPlat = {};
   open.forEach(function (r) {
@@ -2197,7 +2438,8 @@ function computePortfolioStats_() {
     const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
     const tp = cleanText(rowVal_(r, map, "type")), cur = cleanText(rowVal_(r, map, "currency"));
     const qty = parseNum(rowVal_(r, map, "quantity")), fee = parseNum(rowVal_(r, map, "fee"));
-    totCost += ci; totVal += vi; totFeeIls += (cur === "USD" ? fee * rate : fee);
+    const co = parseNum(rowVal_(r, map, "costOrigin"));
+    totCost += ci; totVal += vi; totFeeIls += feeToIls_(fee, cur, co, ci, rate);
     if (cur === "USD") usdVal += vi;
     if (!byTicker[t]) byTicker[t] = { qty: 0, cost: 0, val: 0, type: tp };
     byTicker[t].qty += qty; byTicker[t].cost += ci; byTicker[t].val += vi;
@@ -2211,7 +2453,8 @@ function computePortfolioStats_() {
     const t = cleanText(rowVal_(r, map, "ticker"));
     const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
     const cur = cleanText(rowVal_(r, map, "currency")), fee = parseNum(rowVal_(r, map, "fee"));
-    realized += (vi - ci); totFeeIls += (cur === "USD" ? fee * rate : fee);
+    const co = parseNum(rowVal_(r, map, "costOrigin"));
+    realized += (vi - ci); totFeeIls += feeToIls_(fee, cur, co, ci, rate);
     if (!closedAgg[t]) closedAgg[t] = { cost: 0, val: 0 };
     closedAgg[t].cost += ci; closedAgg[t].val += vi;
   });
@@ -2517,7 +2760,11 @@ function buildDashboard() {
   try { (readManualDeposits_("live").rows || []).forEach(function (dr) { totalDeposits += parseNum(dr.Manual_Deposit_ILS); }); } catch (e) {}
   const netPL = totalValILS - totalCostILS;
   const totalYield = totalCostILS ? netPL / totalCostILS : 0;
-  const cashEst = totalDeposits - totalCostILS;
+  // Guard like computePortfolioStats_ / buildDashboardV2: if deposits are missing
+  // (sheet deleted, new install, demo mismatch) totalDeposits=0 and an unguarded
+  // (0 - totalCostILS) would show a large NEGATIVE cash and a bogus account value.
+  // (audit fix #73)
+  const cashEst = totalDeposits > 0 ? (totalDeposits - totalCostILS) : 0;
   const totalAccount = totalValILS + cashEst;
   const nis = function (v) { return "₪" + Math.round(v).toLocaleString("en-US"); };
 
@@ -2674,7 +2921,7 @@ function renderReport(reportName, homeSheet) {
     if (!tickerSummary[ticker]) tickerSummary[ticker] = { cost: 0, val: 0, costOrig: 0, valOrig: 0 };
     tickerSummary[ticker].cost += costILS; tickerSummary[ticker].val += valILS;
     tickerSummary[ticker].costOrig += costOrig; tickerSummary[ticker].valOrig += valOrig;
-    if (type === "קריפטו" || CRYPTO_ETFS.indexOf(ticker) >= 0) cryptoVal += valILS;
+    if (type === "קריפטו" || CRYPTO_SHARE_TICKERS.indexOf(ticker) >= 0) cryptoVal += valILS; // MSTR=stock (crypto-share parity)
     if (ticker === "BTC") { btcVal += valILS; assetData.BTC.realQty += qty; assetData.BTC.realVal += valILS; }
     if (ticker === "IBIT") { btcVal += valILS; assetData.BTC.etfQty += qty; assetData.BTC.etfVal += valILS; }
     if (ticker === "ETH") { assetData.ETH.realQty += qty; assetData.ETH.realVal += valILS; }
