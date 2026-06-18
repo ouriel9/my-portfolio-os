@@ -2807,6 +2807,13 @@ def inject_dark_dropdown_fix(is_dark: bool) -> None:
     the portal.  This function uses a tiny JS snippet to plant a <style>
     tag directly in the parent document <head> with high-specificity rules.
     """
+    try:
+        _key = ("_dark_dropdown_fix", bool(is_dark))
+        if st.session_state.get("_dark_dropdown_key") == _key:
+            return
+        st.session_state["_dark_dropdown_key"] = _key
+    except Exception:
+        pass
     if not is_dark:
         # In light mode, remove any leftover dark style tags, timers, and forced inline styles.
         components.html(
@@ -3109,6 +3116,12 @@ section[data-testid="stSidebar"],
 
 
 def inject_client_fixes() -> None:
+    try:
+        if st.session_state.get("_client_fixes_done"):
+            return
+        st.session_state["_client_fixes_done"] = True
+    except Exception:
+        pass
     # Small runtime fixes for mobile UX and branding noise.
     components.html(
         """
@@ -3768,13 +3781,16 @@ def _tradingview_symbol(ticker: object) -> str:
     t = _clean(ticker).upper()
     if not t:
         return ""
-    if ":" in t:
-        return t
     if t in {"BTC", "ETH", "SOL"}:
         return f"BINANCE:{t}USDT"
+    # Allow only safe exchange:symbol format (no injection vectors)
+    if ":" in t:
+        if re.match(r"^[A-Z0-9._-]+:[A-Z0-9._-]+$", t):
+            return t
+        return ""
     if re.match(r"^[A-Z0-9._-]+$", t):
         return f"NASDAQ:{t}"
-    return t
+    return ""
 
 
 def _parse_followed_symbols(raw: object) -> List[str]:
@@ -3882,7 +3898,7 @@ def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "
         "autosize": true,
         "width": "100%",
         "height": "{height}",
-        "symbol": {json.dumps(symbol)},
+        "symbol": {json.dumps(symbol).replace('</', '<\\/')},
         "interval": "D",
         "timezone": "Etc/UTC",
         "theme": "{tv_theme}",
@@ -4006,6 +4022,8 @@ def _parse_dates_flexible(series: pd.Series) -> pd.Series:
     raw = series.copy()
     clean_vals = raw.map(_clean)
     parsed = pd.Series(pd.NaT, index=raw.index, dtype="datetime64[ns]")
+    if raw.empty:
+        return parsed
 
     # Year-first ISO stays year-first.
     iso_mask = clean_vals.str.match(r"^\d{4}-\d{2}-\d{2}$")
@@ -4182,7 +4200,7 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
     df["Event_Type"] = df["Event_Type"].replace("", "TRADE")
     df["Action"] = df.apply(
         lambda r: "SELL"
-        if _clean(r.get("Action")) == "SELL" or _clean(r.get("Status")) == "סגור"
+        if _clean(r.get("Action")) == "SELL" or _is_closed_status(r.get("Status"))
         else ("BUY" if _clean(r.get("Action")) in {"", "BUY"} else _clean(r.get("Action"))),
         axis=1,
     )
@@ -4717,7 +4735,8 @@ def _fmt_cell(v, f) -> str:
 
 
 def _esc(s: str) -> str:
-    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    import html as _html
+    return _html.escape(str(s), quote=True)
 
 
 def _render_df_mobile_cards(df, fmt_map=None, signed_cols=()) -> None:
@@ -6437,7 +6456,7 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
     return False, str(parsed.get("error") or parsed)
 
 
-@st.cache_data(ttl=300, show_spinner=False, hash_funcs={pd.DataFrame: lambda d: (len(d), tuple(d.columns), str(pd.util.hash_pandas_object(d.head(50)).sum() if len(d) else 0))})
+@st.cache_data(ttl=300, show_spinner=False, hash_funcs={pd.DataFrame: lambda d: (len(d), tuple(d.columns), str(pd.util.hash_pandas_object(d).sum() if len(d) else 0))})
 def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     trades = df[(df["Record_Source"] == "STATE_SNAPSHOT") & (df["Event_Type"] == "TRADE")].copy() if "Record_Source" in df.columns else df.copy()
     if "Status" not in trades.columns:
@@ -6477,7 +6496,7 @@ def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     }
 
 
-@st.cache_data(ttl=120, show_spinner=False, hash_funcs={pd.DataFrame: lambda d: (len(d), tuple(d.columns), str(pd.util.hash_pandas_object(d.head(50)).sum() if len(d) else 0))})
+@st.cache_data(ttl=120, show_spinner=False, hash_funcs={pd.DataFrame: lambda d: (len(d), tuple(d.columns), str(pd.util.hash_pandas_object(d).sum() if len(d) else 0))})
 def _enrich_compute(open_trades: pd.DataFrame, live_prices: Mapping[str, float], usd_ils: float) -> pd.DataFrame:
     """Pure (no session_state) per-row live-price enrichment. Cached on
     (data, live_prices, rate) so repeated dashboard reruns reuse the result
@@ -11283,7 +11302,7 @@ def main() -> None:
             horizontal=True,
             label_visibility="collapsed",
             index=active_mobile_index,
-            key=f"mobile_page_nav_radio_{active_page_id}",
+            key="mobile_page_nav_radio",
         )
         _chosen_id = mobile_label_to_id.get(page_choice) if page_choice else None
         if _chosen_id and _chosen_id != active_page_id:
@@ -12014,7 +12033,7 @@ def main() -> None:
         # If completely empty with no Google connection configured, show first-run wizard
         if source_mode == "empty":
             _current_page_for_empty = st.session_state.get("active_page_id", "dashboard")
-            if _current_page_for_empty != "trades":
+            if _current_page_for_empty != "manage":
                 st.info(tr(
                     "📭 No portfolio data found. Go to **Trade Management** in the sidebar to add your first trade "
                     "(no Google Sheets needed).",
@@ -12063,7 +12082,7 @@ def main() -> None:
 
     if df.empty:
         _current_page_for_df = st.session_state.get("active_page_id", "dashboard")
-        if _current_page_for_df != "trades":
+        if _current_page_for_df != "manage":
             st.warning(tr("No portfolio rows found.", "לא נמצאו עסקאות בתיק."))
             st.stop()
 
@@ -12333,7 +12352,7 @@ def main() -> None:
                     return tr("Stocks", "מניות")
                 if (type_text == "קריפטו") or (type_upper == "CRYPTO") or (ticker in CHART_CRYPTO_TICKERS):
                     return tr("Crypto", "קריפטו")
-                if "ETF" in type_upper or ticker in CHART_FORCED_ETF_TICKERS:
+                if "ETF" in type_upper or type_text == "קרן סל" or ticker in CHART_FORCED_ETF_TICKERS:
                     return tr("ETF", "ETF")
                 return tr("Stocks", "מניות")
 

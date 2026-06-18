@@ -93,6 +93,13 @@ function cleanText(val) {
   return String(val).replace(new RegExp("[\\u200e\\u200f]", "g"), "").trim();
 }
 
+// Canonical closed-status synonyms — mirrors engine.js CLOSED_STATUS_SET and app.py CLOSED_STATUS.
+const CLOSED_STATUS_VALUES_ = ["סגור", "closed", "close", "sold", "נמכר"];
+function isClosedStatus_(val) {
+  return CLOSED_STATUS_VALUES_.indexOf(cleanText(val).toLowerCase()) !== -1 ||
+    cleanText(val) === "סגור";
+}
+
 // Defense-in-depth against spreadsheet formula injection. A token-authorized
 // writer must never be able to store text that Sheets evaluates as a formula
 // (leading =, +, -, @, or a tab/CR). Prefix such values with an apostrophe —
@@ -1015,22 +1022,8 @@ function doGet() {
 function doPost(e) {
   try {
     const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
-    // Telegram webhook updates carry no api token. The OLD heuristic (any of
-    // update_id/message/edited_message present) was trivially bypassable: an attacker
-    // who knows the Web App URL could attach those keys to an API payload to skip
-    // validateToken_ entirely. Tighten it: a genuine Telegram update has a POSITIVE
-    // INTEGER update_id AND carries NO action/token fields. Anything else falls
-    // through to validateToken_ as a normal API request. (audit fix #83)
-    const looksTelegram = payload &&
-      typeof payload.update_id === "number" &&
-      isFinite(payload.update_id) && payload.update_id > 0 &&
-      Math.floor(payload.update_id) === payload.update_id &&
-      payload.action === undefined && payload.Action === undefined &&
-      payload.token === undefined;
-    if (looksTelegram) {
-      try { handleTelegramUpdate_(payload); } catch (tgErr) { try { appendAudit_("telegram_error", "TG", "ERROR", String(tgErr)); } catch (e2) {} }
-      return ContentService.createTextOutput("ok");
-    }
+    // The system uses getUpdates polling — Telegram never POSTs here.
+    // Removed the webhook shortcut that bypassed validateToken_ entirely.
     validateToken_(payload.token);
 
     const rawAction = cleanText(payload.action || payload.Action || "");
@@ -1219,7 +1212,10 @@ function doPost(e) {
     appendAudit_(action, trade.Trade_ID, result.ok ? "OK" : "ERROR", JSON.stringify(result));
     return jsonResponse_(result);
   } catch (err) {
-    appendAudit_("error", "SYSTEM", "ERROR", String(err));
+    // Don't log to the sheet for auth failures — avoids unauthenticated write-amplification.
+    if (!/Unauthorized/i.test(String(err))) {
+      appendAudit_("error", "SYSTEM", "ERROR", String(err));
+    }
     return jsonResponse_({ ok: false, error: String(err) });
   }
 }
@@ -2107,7 +2103,7 @@ function buildDashboardV2() {
   const all = data.slice(1).filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) !== ""; });
   let rate = 0; try { rate = parseNum(main.getRange("AA1").getValue()); } catch (e) {}
   if (!rate) rate = 1;
-  const isClosed = function (r) { return cleanText(rowVal_(r, map, "status")) === "סגור"; };
+  const isClosed = function (r) { return isClosedStatus_(rowVal_(r, map, "status")); };
   const open = all.filter(function (r) { return !isClosed(r); });
   const closed = all.filter(isClosed);
 
@@ -2562,7 +2558,7 @@ function computePortfolioStats_() {
   const all = data.slice(1).filter(function (r) { return cleanText(rowVal_(r, map, "ticker")) !== ""; });
   let rate = 0; try { rate = parseNum(main.getRange("AA1").getValue()); } catch (e) {}
   if (!rate) rate = 1;
-  const isClosed = function (r) { return cleanText(rowVal_(r, map, "status")) === "סגור"; };
+  const isClosed = function (r) { return isClosedStatus_(rowVal_(r, map, "status")); };
   const open = all.filter(function (r) { return !isClosed(r); });
   const closed = all.filter(isClosed);
   const cryptoTk = { "IBIT": 1, "ETHA": 1, "BSOL": 1 }; // MSTR=stock (crypto-share parity)
