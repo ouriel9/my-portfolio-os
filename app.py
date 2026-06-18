@@ -4596,9 +4596,12 @@ def _usdils_on(date_str: str) -> float:
         win_end = (start + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
         data = yf.download("USDILS=X", start=win_start, end=win_end,
                            progress=False, auto_adjust=False)
-        if data is None or data.empty or "Close" in data.columns is False:
+        if data is None or data.empty or "Close" not in data.columns:
             return 0.0
-        close = pd.to_numeric(data["Close"].squeeze(), errors="coerce").dropna()
+        # Robust to a single-trading-day window (.squeeze() would return a bare scalar with
+        # no .dropna() -> AttributeError -> silent fallback to today's spot) and to a
+        # multi-column Close frame: flatten to a 1-D numeric series and take the last. (audit)
+        close = pd.to_numeric(pd.Series(np.ravel(data["Close"].to_numpy())), errors="coerce").dropna()
         if close.empty:
             return 0.0
         return float(close.iloc[-1])
@@ -9740,7 +9743,7 @@ def _chat_data_context(df) -> str:
             if c not in d.columns:
                 d[c] = 0.0
             d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
-        closed_mask = d["Status"].astype(str).str.strip().isin(["סגור", "closed", "sold", "נמכר"])
+        closed_mask = d["Status"].map(_is_closed_status)  # canonical (incl. "close", case-insensitive) — was an inline list missing "close" (audit)
         o = d[~closed_mask]
         tv = float(o["Current_Value_ILS"].sum()); tc = float(o["Cost_ILS"].sum())
         L = ["LIVE PORTFOLIO (ILS ₪):",
