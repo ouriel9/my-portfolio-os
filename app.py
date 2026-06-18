@@ -3734,9 +3734,15 @@ def _normalize_currency_code(value: object) -> str:
 
 def _infer_display_currency(ticker: str, origin_currency: object) -> str:
     base = _normalize_currency_code(origin_currency)
+    # Honour the stored origin currency when present — ILS-origin crypto (e.g. BTC
+    # bought on Bit2C in shekels) must display its average buy price in ILS, not USD
+    # (otherwise the break-even reference is off by the FX factor and in the wrong
+    # symbol). Only default crypto to USD when no origin currency is recorded. (audit #11)
+    if base:
+        return base
     if ticker in {"BTC", "ETH", "SOL"}:
         return "USD"
-    return base or "ILS"
+    return "ILS"
 
 
 def _format_currency_value(value: float, currency: str) -> str:
@@ -4420,19 +4426,42 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict[str, float]] = []
     usd_ils_rate = _usd_ils_rate()
 
-    for ticker, tdf in trades.sort_values("Purchase_Date").groupby("Ticker"):
+    # FIFO must consume lots in true chronological order. Sort on a CANONICAL date
+    # key (handles DD/MM/YYYY, serials, non-zero-padded dates — a lexical sort on the
+    # raw string mis-orders these) with a same-date BUY-before-SELL tie-break so a
+    # same-day buy is always an available lot before its sell consumes it. Mirrors
+    # engine.js fifoByTicker. (audit fin-streamlit #3, edge-extreme same-day)
+    work = trades.copy()
+    if "Purchase_Date" in work.columns:
+        _fifo_dt = _parse_dates_flexible(work["Purchase_Date"])
+    else:
+        _fifo_dt = pd.Series(pd.NaT, index=work.index, dtype="datetime64[ns]")
+    # NaT dates sort last (they have no usable order); BUY (0) before SELL (1) on ties.
+    work["__fifo_date_key__"] = _fifo_dt.astype("int64")
+    work.loc[_fifo_dt.isna(), "__fifo_date_key__"] = np.iinfo("int64").max
+    work["__fifo_action_key__"] = work["Action"].map(lambda a: 1 if _clean(a).upper() == "SELL" else 0) if "Action" in work.columns else 0
+    work = work.sort_values(["__fifo_date_key__", "__fifo_action_key__"], kind="stable")
+
+    for ticker, tdf in work.groupby("Ticker", sort=False):
         lots: List[FifoLot] = []
         realized = 0.0
         for _, row in tdf.iterrows():
             qty = float(row["Quantity"])
             origin_currency = _normalize_currency_code(row.get("Origin_Currency", ""))
-            if _num(row["Cost_ILS"]) != 0:
-                cost_ils = float(row["Cost_ILS"])
+            stored_cost_ils = _num(row["Cost_ILS"])
+            fallback_cost = float(_num(row["Cost_Origin"]))
+            if stored_cost_ils != 0:
+                cost_ils = float(stored_cost_ils)
             else:
-                # Fall back to Cost_Origin, converting to ILS when it's USD-denominated
-                # (otherwise a USD cost was silently treated as ILS, ~3.6x understated).
-                fallback_cost = float(_num(row["Cost_Origin"]))
-                cost_ils = fallback_cost * usd_ils_rate if origin_currency == "USD" else fallback_cost
+                # No stored Cost_ILS (e.g. a legacy/un-synced row): fall back to
+                # Cost_Origin converted at the BUY-DATE FX for USD (NOT today's spot,
+                # which made realized P&L drift with the live rate). (audit fin-streamlit #1/#2)
+                cost_ils = fallback_cost * _buy_date_fx(origin_currency, row.get("Purchase_Date", "")) if origin_currency == "USD" else fallback_cost
+            # A row is "self-contained" (carries its own round-trip cost basis) when it
+            # has a positive own cost — stored Cost_ILS OR a positive Cost_Origin — NOT
+            # merely Cost_ILS != 0. App-created sells used to store Cost_ILS=0, defeating
+            # this guard and creating phantom open qty. (audit fin-streamlit #3)
+            has_own_cost = (stored_cost_ils != 0) or (fallback_cost > 0)
             unit_cost = abs(cost_ils / qty) if qty else 0.0
             display_currency = _infer_display_currency(ticker, origin_currency)
             cost_origin = float(row.get("Cost_Origin", 0.0) or 0.0)
@@ -4465,14 +4494,15 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 # price is 0, not the buy price — otherwise the realized loss vanishes. (audit C3)
                 sell_price = abs(float(_num(row["Current_Value_ILS"]))) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else 0.0
                 # A closed position is stored as a SINGLE self-contained row carrying
-                # BOTH its own buy cost (Cost_ILS) and sale proceeds (Current_Value_ILS)
-                # — it is a complete round-trip, NOT a market sell against the running
-                # lot inventory. Realize it against its OWN cost basis and leave open
-                # BUY lots untouched; otherwise a closed row would cannibalise an
-                # unrelated still-open lot of the same ticker (understating open qty
-                # AND pricing realized P/L off the wrong cost basis) the moment a
-                # ticker has both an open lot and a closed row.
-                if _num(row["Cost_ILS"]) != 0:
+                # BOTH its own buy cost (Cost_ILS / Cost_Origin) and sale proceeds
+                # (Current_Value_ILS) — it is a complete round-trip, NOT a market sell
+                # against the running lot inventory. Realize it against its OWN cost
+                # basis and leave open BUY lots untouched; otherwise a closed row would
+                # cannibalise an unrelated still-open lot of the same ticker (understating
+                # open qty AND pricing realized P/L off the wrong cost basis) the moment a
+                # ticker has both an open lot and a closed row. Key on a positive OWN cost
+                # basis (not Cost_ILS != 0) so app-created sells are detected. (audit #3)
+                if has_own_cost:
                     realized += sell_qty * (sell_price - unit_cost)
                 else:
                     # True-ledger sell with no own cost basis → consume oldest open
@@ -4609,6 +4639,52 @@ def _usdils_on(date_str: str) -> float:
         return 0.0
 
 
+def _buy_date_fx(currency: object, purchase_date: object) -> float:
+    """ILS-per-unit-of-origin on the BUY date, for freezing a deterministic
+    Cost_ILS on a sell row. USD → the historical USD/ILS close on the purchase
+    date (live spot only as a last resort); ILS/blank → 1.0. Mirrors the GAS
+    cost-basis convention costIls = (Cost_Origin+Commission) * buy-date FX, so a
+    closed row's realized P&L never drifts with TODAY's spot rate. (audit fin-streamlit #1/#2)"""
+    cur = _normalize_currency_code(currency)
+    if cur != "USD":
+        return 1.0
+    hist = _usdils_on(_clean(purchase_date))
+    return hist if hist and hist > 0 else _usd_ils_rate()
+
+
+def _frozen_cost_ils_for_sell(cost_origin: float, commission: float,
+                              currency: object, purchase_date: object) -> float:
+    """Frozen ILS cost basis to store on a sell row: (allocated Cost_Origin +
+    allocated Commission) converted at the BUY-date FX. Commission is part of the
+    cost basis, so it belongs in the ILS basis too. Used so fifo_metrics / the
+    realized-ILS column never fall back to today's spot. (audit fin-streamlit #1)"""
+    return (float(cost_origin) + float(commission)) * _buy_date_fx(currency, purchase_date)
+
+
+def _commission_ils_series(df: pd.DataFrame, fx: float) -> pd.Series:
+    """Per-row buy commission converted to ILS (Commission is stored in origin
+    currency). USD commission is converted at the row's BUY-date FX when a purchase
+    date is available (consistent with the frozen Cost_ILS basis), else at `fx`.
+    Lets Yield_ILS use a commission-inclusive denominator (Cost_ILS_With_Fee) so it
+    matches the commission-inclusive Yield_Origin (Cost_Origin_With_Fee). (audit #10)"""
+    if "Commission" not in df.columns:
+        return pd.Series(0.0, index=df.index)
+    comm = df["Commission"].map(_num)
+    if "Origin_Currency" not in df.columns:
+        return comm
+    cur = df["Origin_Currency"].map(_normalize_currency_code)
+    has_date = "Purchase_Date" in df.columns
+
+    def _row_comm(idx: object) -> float:
+        c = float(_num(df.at[idx, "Commission"]))
+        if cur.at[idx] != "USD" or c == 0:
+            return c
+        rate = _buy_date_fx("USD", df.at[idx, "Purchase_Date"]) if has_date else float(fx)
+        return c * rate
+
+    return pd.Series([_row_comm(i) for i in df.index], index=df.index)
+
+
 def _smart_qty(v) -> str:
     """Format a quantity sensibly: whole counts show no decimals; fractional
     (crypto) shows up to 6 decimals with trailing zeros trimmed. Replaces the
@@ -4724,6 +4800,9 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     fx = usd_ils if usd_ils and usd_ils > 0 else _usd_ils_rate()
 
     work["Cost_Origin_With_Fee"] = work["Cost_Origin"] + work["Commission"]
+    # Commission belongs in the ILS basis too (matches Cost_Origin_With_Fee), so the
+    # winner/loser ranking uses one consistent commission-inclusive yield. (audit #10/#12)
+    work["Cost_ILS_With_Fee"] = work["Cost_ILS"] + _commission_ils_series(work, fx)
     work["Value_Origin_Est"] = np.where(
         work["Origin_Currency"].str.upper() == "USD",
         work["Current_Value_ILS"] / fx,
@@ -4738,6 +4817,7 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
 
     summary = work.groupby("Ticker", as_index=False).agg(
         Cost_ILS=("Cost_ILS", "sum"),
+        Cost_ILS_With_Fee=("Cost_ILS_With_Fee", "sum"),
         Value_ILS=("Current_Value_ILS", "sum"),
         # Commission is part of the cost basis: include it in the origin-yield
         # denominator (Cost_Origin + Commission) to match GAS yieldOrigin and
@@ -4750,8 +4830,8 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         winner_loser = pd.DataFrame(columns=["Category", "Ticker", "Yield"])
     else:
         summary["Yield_ILS"] = np.where(
-            summary["Cost_ILS"] > 0,
-            (summary["Value_ILS"] - summary["Cost_ILS"]) / summary["Cost_ILS"],
+            summary["Cost_ILS_With_Fee"] > 0,
+            (summary["Value_ILS"] - summary["Cost_ILS_With_Fee"]) / summary["Cost_ILS_With_Fee"],
             0.0,
         )
         _rpt_origin_raw = np.where(
@@ -9933,6 +10013,8 @@ def _ai_add_args_to_row(args: Mapping[str, object]) -> Dict[str, object]:
     cur = _clean(args.get("currency", "")).upper()
     cur = cur if cur in ("ILS", "USD") else "ILS"
     date = _clean(args.get("date", "")) or datetime.now().strftime("%Y-%m-%d")
+    commission = float(_num(args.get("commission", 0)))
+    cost_origin = qty * price
     return {
         "Current_Location": "",
         "Platform": _clean(args.get("platform", "")),
@@ -9941,14 +10023,17 @@ def _ai_add_args_to_row(args: Mapping[str, object]) -> Dict[str, object]:
         "Origin_Currency": cur,
         "Quantity": qty,
         "Origin_Buy_Price": price,
-        "Cost_Origin": qty * price,
-        "Commission": float(_num(args.get("commission", 0))),
+        "Cost_Origin": cost_origin,
+        "Commission": commission,
         "Action": "BUY",
         "Event_Type": "TRADE",
         "Status": "פתוח",
         "Sell_Date": "",
         "Current_Value_ILS": 0.0,
-        "Cost_ILS": 0.0,
+        # Freeze a real ILS cost basis at the buy-date FX immediately (mirrors web/mobile
+        # BUY) so local FIFO/aggregates are commission- & FX-correct before any reload
+        # repopulates it from Google. (audit fin-commission staged-buy)
+        "Cost_ILS": _frozen_cost_ils_for_sell(cost_origin, commission, cur, date),
         "Purchase_Date": date,
     }
 
@@ -10000,28 +10085,40 @@ def _ai_build_sell(df, args: Mapping[str, object]) -> Optional[Dict[str, object]
     src_comm = float(_num(src.get("Commission", 0)))
     ratio = sell_qty / src_qty if src_qty else 0.0
     alloc_cost, alloc_comm = src_cost * ratio, src_comm * ratio
+    src_purchase = _clean(src.get("Purchase_Date", ""))
+    # Freeze a real ILS cost basis at the BUY-date FX (NOT today's, NOT the sell-date
+    # FX) so realized P&L is deterministic and the FIFO/realized-ILS column never falls
+    # back to today's spot. (audit fin-streamlit #1/#2)
+    alloc_cost_ils = _frozen_cost_ils_for_sell(alloc_cost, alloc_comm, cur, src_purchase)
     ticker = _clean(src.get("Ticker", "")).upper()
     sell_row = {
         "Current_Location": _clean(src.get("Current_Location", "")),
         "Platform": _clean(src.get("Platform", "")), "Type": _clean(src.get("Type", "")),
         "Ticker": ticker, "Origin_Currency": cur,
-        "Purchase_Date": _clean(src.get("Purchase_Date", "")),
+        "Purchase_Date": src_purchase,
         "Quantity": sell_qty, "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0))),
         "Cost_Origin": alloc_cost, "Commission": alloc_comm,
         "Status": "סגור", "Action": "SELL", "Event_Type": "TRADE",
         "Sell_Date": sell_date, "Sell_Price_Origin": sell_price,
-        "Current_Value_ILS": sell_qty * sell_price * fx, "Cost_ILS": 0.0,
+        "Current_Value_ILS": sell_qty * sell_price * fx, "Cost_ILS": alloc_cost_ils,
     }
-    # Realized P&L must net out the full acquisition cost: allocated cost basis
-    # PLUS the allocated buy commission (a real cost of acquiring the lot). Omitting
-    # the commission overstated realized gains vs the GAS dashboard (audit #11).
-    realized = sell_qty * sell_price * fx - (alloc_cost + alloc_comm) * (fx if cur == "USD" else 1.0)
+    # Realized P&L = proceeds (at the SELL-date FX) − the frozen acquisition cost
+    # basis (allocated Cost_Origin + buy commission, converted at the BUY-date FX).
+    # Using the buy-date FX on the cost side keeps realized deterministic and in
+    # agreement with fifo_metrics + GAS. (audit fin-streamlit #2, fin-commission)
+    realized = sell_qty * sell_price * fx - alloc_cost_ils
     label = "%s · %g @ %s%.2f" % (ticker, sell_qty, ("$" if cur == "USD" else "₪"), sell_price)
     if (src_qty - sell_qty) > 1e-9:  # partial
+        rem_cost = max(0.0, src_cost - alloc_cost)
+        rem_comm = max(0.0, src_comm - alloc_comm)
         source_update = dict(src)
         source_update.update({"Quantity": src_qty - sell_qty,
-                              "Cost_Origin": max(0.0, src_cost - alloc_cost),
-                              "Commission": max(0.0, src_comm - alloc_comm),
+                              "Cost_Origin": rem_cost,
+                              "Commission": rem_comm,
+                              # Freeze the surviving open lot's ILS cost basis at the
+                              # buy-date FX too, so the residual position is priced and
+                              # yielded off a real basis (not Cost_Origin*today). (audit)
+                              "Cost_ILS": _frozen_cost_ils_for_sell(rem_cost, rem_comm, cur, src_purchase),
                               "Status": "פתוח", "Sell_Date": "", "Action": "BUY"})
         return {"op": "sell_partial", "sell_row": sell_row, "source_update": source_update,
                 "label": label, "realized": realized}
@@ -12026,6 +12123,9 @@ def main() -> None:
             fx = _usd_ils_rate()
         dashboard_df = enrich_open_trades_with_prices(open_trades)
         dashboard_df["Cost_Origin_With_Fee"] = dashboard_df["Cost_Origin"] + dashboard_df["Commission"]
+        # Commission belongs in the ILS basis too (matches Cost_Origin_With_Fee), so
+        # Yield_ILS and Yield_Origin share a commission-inclusive denominator. (audit #10)
+        dashboard_df["Cost_ILS_With_Fee"] = dashboard_df["Cost_ILS"].map(_num) + _commission_ils_series(dashboard_df, fx)
         dashboard_df["Value_Origin_Est"] = np.where(
             dashboard_df["Origin_Currency"].str.upper() == "USD",
             dashboard_df["Current_Value_ILS"] / fx,
@@ -12042,13 +12142,14 @@ def main() -> None:
             Current_Price=("מחיר שוק", "max"),
             Open_Qty=("Quantity", "sum"),
             Cost_ILS=("Cost_ILS", "sum"),
+            Cost_ILS_With_Fee=("Cost_ILS_With_Fee", "sum"),  # incl. commission (denom)
             Value_ILS=("Current_Value_ILS", "sum"),
             Cost_Origin=("Cost_Origin", "sum"),      # plain cost, no commission
             Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),  # incl. commission (denom)
             Value_Origin=("Value_Origin_Est", "sum"),
         )
-        summary["Net_PnL_ILS"] = summary["Value_ILS"] - summary["Cost_ILS"]
-        summary["Yield_ILS"] = np.where(summary["Cost_ILS"] > 0, summary["Net_PnL_ILS"] / summary["Cost_ILS"], 0.0)
+        summary["Net_PnL_ILS"] = summary["Value_ILS"] - summary["Cost_ILS_With_Fee"]
+        summary["Yield_ILS"] = np.where(summary["Cost_ILS_With_Fee"] > 0, summary["Net_PnL_ILS"] / summary["Cost_ILS_With_Fee"], 0.0)
         # Detect ILS-only tickers (origin currency == ILS for every trade of that ticker)
         _dash_ticker_ils = (
             dashboard_df.groupby("Ticker")["Origin_Currency"]
@@ -12073,17 +12174,20 @@ def main() -> None:
             ),
         )
 
-        # Net P/L by asset — use dashboard_df (live-enriched) not raw open_trades
-        pnl_source = dashboard_df.copy() if not dashboard_df.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Current_Value_ILS"])
-        for col in ["Ticker", "Cost_ILS", "Current_Value_ILS"]:
+        # Net P/L by asset — use dashboard_df (live-enriched) not raw open_trades.
+        # Net P/L nets out commission too (Cost_ILS_With_Fee), matching the summary
+        # Net_PnL_ILS so both P/L surfaces agree. (audit #10)
+        pnl_source = dashboard_df.copy() if not dashboard_df.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Cost_ILS_With_Fee", "Current_Value_ILS"])
+        for col in ["Ticker", "Cost_ILS", "Cost_ILS_With_Fee", "Current_Value_ILS"]:
             if col not in pnl_source.columns:
                 pnl_source[col] = 0.0 if col != "Ticker" else ""
         pnl_source["Ticker"] = pnl_source["Ticker"].map(_clean)
         pnl_source = pnl_source[pnl_source["Ticker"] != ""]
         pnl_source["Cost_ILS"] = pnl_source["Cost_ILS"].map(_num)
+        pnl_source["Cost_ILS_With_Fee"] = pnl_source["Cost_ILS_With_Fee"].map(_num)
         pnl_source["Current_Value_ILS"] = pnl_source["Current_Value_ILS"].map(_num)
         pnl_by_asset = pnl_source.groupby("Ticker", as_index=False).agg(
-            Cost_ILS=("Cost_ILS", "sum"),
+            Cost_ILS=("Cost_ILS_With_Fee", "sum"),
             Current_Value_ILS=("Current_Value_ILS", "sum"),
         ) if not pnl_source.empty else pd.DataFrame(columns=["Ticker", "Cost_ILS", "Current_Value_ILS"])
         if not pnl_by_asset.empty:
@@ -12374,6 +12478,7 @@ def main() -> None:
                     fx_local = _usd_ils_rate()
                 local_df = enrich_open_trades_with_prices(local_open_trades.copy())
                 local_df["Cost_Origin_With_Fee"] = local_df["Cost_Origin"] + local_df["Commission"]
+                local_df["Cost_ILS_With_Fee"] = local_df["Cost_ILS"].map(_num) + _commission_ils_series(local_df, fx_local)
                 local_df["Value_Origin_Est"] = np.where(
                     local_df["Origin_Currency"].str.upper() == "USD",
                     local_df["Current_Value_ILS"] / fx_local,
@@ -12391,13 +12496,14 @@ def main() -> None:
                     Current_Price=("מחיר שוק", "max"),
                     Open_Qty=("Quantity", "sum"),
                     Cost_ILS=("Cost_ILS", "sum"),
+                    Cost_ILS_With_Fee=("Cost_ILS_With_Fee", "sum"),
                     Value_ILS=("Current_Value_ILS", "sum"),
                     Cost_Origin=("Cost_Origin", "sum"),
                     Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                     Value_Origin=("Value_Origin_Est", "sum"),
                 )
-                out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS"]
-                out["Yield_ILS"] = np.where(out["Cost_ILS"] > 0, out["Net_PnL_ILS"] / out["Cost_ILS"], 0.0)
+                out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS_With_Fee"]
+                out["Yield_ILS"] = np.where(out["Cost_ILS_With_Fee"] > 0, out["Net_PnL_ILS"] / out["Cost_ILS_With_Fee"], 0.0)
                 # Yield_Origin: use origin-currency computation only for pure-single-currency
                 # tickers. For mixed-currency tickers (BTC/ETH with ILS+USD trades) use
                 # Yield_ILS (ILS-denominated) which is always unambiguous.
@@ -12616,6 +12722,7 @@ def main() -> None:
                                 _enriched.loc[_has, "Current_Value_ILS"] = _live_val[_has]
                                 # Build summary directly from enriched data (skip re-enrichment)
                                 _enriched["Cost_Origin_With_Fee"] = _enriched["Cost_Origin"] + _enriched["Commission"]
+                                _enriched["Cost_ILS_With_Fee"] = _enriched["Cost_ILS"].map(_num) + _commission_ils_series(_enriched, _fx)
                                 _enriched["Value_Origin_Est"] = np.where(
                                     _enriched["Origin_Currency"].str.upper() == "USD",
                                     _enriched["Current_Value_ILS"] / _fx,
@@ -12625,15 +12732,16 @@ def main() -> None:
                                     Current_Price=("מחיר שוק", "max"),
                                     Open_Qty=("Quantity", "sum"),
                                     Cost_ILS=("Cost_ILS", "sum"),
+                                    Cost_ILS_With_Fee=("Cost_ILS_With_Fee", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
                                     Cost_Origin=("Cost_Origin", "sum"),
                                     Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
-                                live_summary["Net_PnL_ILS"] = live_summary["Value_ILS"] - live_summary["Cost_ILS"]
+                                live_summary["Net_PnL_ILS"] = live_summary["Value_ILS"] - live_summary["Cost_ILS_With_Fee"]
                                 live_summary["Yield_ILS"] = np.where(
-                                    live_summary["Cost_ILS"] > 0,
-                                    live_summary["Net_PnL_ILS"] / live_summary["Cost_ILS"],
+                                    live_summary["Cost_ILS_With_Fee"] > 0,
+                                    live_summary["Net_PnL_ILS"] / live_summary["Cost_ILS_With_Fee"],
                                     0.0,
                                 )
                                 # Mixed-currency tickers (e.g. BTC with ILS+USD trades):
@@ -12794,6 +12902,7 @@ def main() -> None:
                                 _hov = _ov_e["מחיר שוק"] > 0
                                 _ov_e.loc[_hov, "Current_Value_ILS"] = _vov[_hov]
                                 _ov_e["Cost_Origin_With_Fee"] = _ov_e["Cost_Origin"] + _ov_e["Commission"]
+                                _ov_e["Cost_ILS_With_Fee"] = _ov_e["Cost_ILS"].map(_num) + _commission_ils_series(_ov_e, _fx_ov)
                                 _ov_e["Value_Origin_Est"] = np.where(
                                     _ov_e["Origin_Currency"].str.upper() == "USD",
                                     _ov_e["Current_Value_ILS"] / _fx_ov,
@@ -12803,15 +12912,16 @@ def main() -> None:
                                     Current_Price=("מחיר שוק", "max"),
                                     Open_Qty=("Quantity", "sum"),
                                     Cost_ILS=("Cost_ILS", "sum"),
+                                    Cost_ILS_With_Fee=("Cost_ILS_With_Fee", "sum"),
                                     Value_ILS=("Current_Value_ILS", "sum"),
                                     Cost_Origin=("Cost_Origin", "sum"),
                                     Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                                     Value_Origin=("Value_Origin_Est", "sum"),
                                 )
-                                _ov_summary["Net_PnL_ILS"] = _ov_summary["Value_ILS"] - _ov_summary["Cost_ILS"]
+                                _ov_summary["Net_PnL_ILS"] = _ov_summary["Value_ILS"] - _ov_summary["Cost_ILS_With_Fee"]
                                 _ov_summary["Yield_ILS"] = np.where(
-                                    _ov_summary["Cost_ILS"] > 0,
-                                    _ov_summary["Net_PnL_ILS"] / _ov_summary["Cost_ILS"],
+                                    _ov_summary["Cost_ILS_With_Fee"] > 0,
+                                    _ov_summary["Net_PnL_ILS"] / _ov_summary["Cost_ILS_With_Fee"],
                                     0.0,
                                 )
                                 # Mixed-currency tickers (BTC/ETH with ILS+USD trades):
@@ -13226,6 +13336,19 @@ def main() -> None:
                     _sale_sp = tx_view["Sell_Price_Origin"].map(_num) if "Sell_Price_Origin" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
                     _sale_ci = tx_view["Cost_ILS"].map(_num) if "Cost_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
                     _sale_vi = tx_view["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
+                    # Effective COMMISSION-INCLUSIVE ILS cost basis: stored Cost_ILS (+commission)
+                    # when present, else the frozen basis (Cost_Origin+Commission at buy-date FX)
+                    # so the realized-ILS column populates even for legacy app-created sells whose
+                    # Cost_ILS is 0, and nets out commission. (audit fin-streamlit #1/#9/#10)
+                    _sale_comm_ils = _commission_ils_series(tx_view, _usd_ils_rate()) if not tx_view.empty else pd.Series(0.0, index=tx_view.index)
+                    _sale_ci_eff = tx_view.apply(
+                        lambda r: float(_num(r.get("Cost_ILS", 0.0)))
+                        if _num(r.get("Cost_ILS", 0.0)) != 0
+                        else _frozen_cost_ils_for_sell(_num(r.get("Cost_Origin", 0.0)), _num(r.get("Commission", 0.0)),
+                                                       r.get("Origin_Currency", ""), r.get("Purchase_Date", "")),
+                        axis=1,
+                    ) if not tx_view.empty else _sale_ci
+                    _sale_ci_eff = _sale_ci_eff + (_sale_comm_ils.where(_sale_ci != 0, 0.0))
                     # Origin-rate fallback requires a REAL sell price (sp>0); otherwise leave
                     # blank rather than emit a false -100% (e.g. CRK has no recorded sell price).
                     _sale_orig_fb = pd.Series(np.where((_sale_bp > 0) & (_sale_sp > 0), (_sale_sp - _sale_bp) / _sale_bp, np.nan), index=tx_view.index)
@@ -13236,7 +13359,7 @@ def main() -> None:
                         _sale_orig = _sale_orig_fb
                     tx_view = tx_view.drop(columns=[c for c in ["Yield_At_Sale", "תשואה במכירה"] if c in tx_view.columns], errors="ignore")
                     tx_view["תשואה במכירה (מקור)"] = np.where(_sale_clm, _sale_orig, np.nan)
-                    tx_view["תשואה במכירה (₪)"] = np.where(_sale_clm & (_sale_ci > 0), (_sale_vi - _sale_ci) / _sale_ci, np.nan)
+                    tx_view["תשואה במכירה (₪)"] = np.where(_sale_clm & (_sale_ci_eff > 0), (_sale_vi - _sale_ci_eff) / _sale_ci_eff, np.nan)
 
                 if is_open_only:
                     sale_related_cols = [
@@ -13456,7 +13579,15 @@ def main() -> None:
                             if qty > 1e-9 and val > 0:
                                 cur = _normalize_currency_code(row.get("Origin_Currency", ""))
                                 unit = val / qty
-                                return unit / _fx if cur == "USD" else unit
+                                # Back-derive the origin sell price from ILS proceeds at the
+                                # SELL-date FX (proceeds were frozen at sale time), NOT today's
+                                # spot — otherwise the derived price drifts with the live rate. (audit #14)
+                                if cur == "USD":
+                                    _sfx = _usdils_on(_clean(row.get("Sell_Date", "")))
+                                    if not (_sfx and _sfx > 0):
+                                        _sfx = _fx
+                                    return unit / _sfx
+                                return unit
                             return np.nan
 
                         _tx["Market_Price_Origin"] = _tx.apply(_mpo, axis=1)
@@ -13479,6 +13610,23 @@ def main() -> None:
 
                         _ci = _tx["Cost_ILS"].map(_num) if "Cost_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
                         _vi = _tx["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                        # Effective COMMISSION-INCLUSIVE ILS cost basis: (stored Cost_ILS +
+                        # commission_in_ILS) when Cost_ILS is present, else the frozen basis
+                        # (Cost_Origin+Commission at the buy-date FX) — so the realized-ILS column
+                        # and Yield_ILS both populate and net out commission even for legacy
+                        # app-created sells whose Cost_ILS is 0. (audit fin-streamlit #1/#9/#10)
+                        _comm_ils_tx = _commission_ils_series(_tx, _fx) if not _tx.empty else pd.Series(0.0, index=_tx.index)
+                        _ci_eff = _tx.apply(
+                            lambda r: float(_num(r.get("Cost_ILS", 0.0)))
+                            if _num(r.get("Cost_ILS", 0.0)) != 0
+                            else _frozen_cost_ils_for_sell(_num(r.get("Cost_Origin", 0.0)), _num(r.get("Commission", 0.0)),
+                                                           r.get("Origin_Currency", ""), r.get("Purchase_Date", "")),
+                            axis=1,
+                        ) if not _tx.empty else _ci
+                        # Add commission to the STORED-Cost_ILS rows only (the frozen-fallback
+                        # already baked it in): mask where Cost_ILS was non-zero.
+                        _stored_mask = (_ci != 0)
+                        _ci_eff = _ci_eff + (_comm_ils_tx.where(_stored_mask, 0.0))
                         # Dedicated closed-trade sale returns: origin-rate (from Yield_At_Sale)
                         # and ₪-rate (STORED sale proceeds vs cost — NOT live prices; the sale
                         # already happened). Blank for open rows. Mirrors the static path above.
@@ -13486,7 +13634,7 @@ def main() -> None:
                         if "Yield_At_Sale" in _tx.columns:
                             _tx["תשואה במכירה (מקור)"] = np.where(_clm_f, _tx["Yield_At_Sale"].map(_num_or_nan), np.nan)
                             _tx = _tx.drop(columns=["Yield_At_Sale"], errors="ignore")
-                        _tx["תשואה במכירה (₪)"] = np.where(_clm_f & (_ci > 0), (_vi - _ci) / _ci, np.nan)
+                        _tx["תשואה במכירה (₪)"] = np.where(_clm_f & (_ci_eff > 0), (_vi - _ci_eff) / _ci_eff, np.nan)
                         # ── Update Current_Value_ILS from live prices BEFORE computing yields ──
                         # Without this, _vi is the stale value from portfolio_data.json and
                         # the per-trade yield won't reflect real-time prices.
@@ -13507,13 +13655,13 @@ def main() -> None:
                             if _has_live_tx.any():
                                 _vi = _vi.copy()
                                 _vi[_has_live_tx] = _live_vi_tx[_has_live_tx]
-                        _yic = np.where(_ci > 0, (_vi - _ci) / _ci, np.nan)
                         _co = _tx["Cost_Origin"].map(_num) if "Cost_Origin" in _tx.columns else pd.Series(0.0, index=_tx.index)
                         _comm_tx = _tx["Commission"].map(_num) if "Commission" in _tx.columns else pd.Series(0.0, index=_tx.index)
-                        # Commission is part of the cost basis: include it in the origin-yield
-                        # denominator (Cost_Origin + Commission) to match GAS yieldOrigin and
-                        # engine.js. (audit #10)
+                        # Commission is part of the cost basis: include it in BOTH the origin-yield
+                        # denominator (Cost_Origin + Commission) AND the ILS-yield denominator
+                        # (_ci_eff is already commission-inclusive) so the two yields agree. (audit #10)
                         _cowf = _co + _comm_tx
+                        _yic = np.where(_ci_eff > 0, (_vi - _ci_eff) / _ci_eff, np.nan)
                         # Value in origin currency: for USD assets divide ILS value by FX rate;
                         # for ILS assets the value is already in ILS.
                         _is_usd_cur = _tx["Origin_Currency"].map(_normalize_currency_code) == "USD"
@@ -14108,13 +14256,20 @@ def main() -> None:
                         else:
                             fx_for_origin = 1.0
 
+                        _sell_cur = _normalize_currency_code(source_row.get("Origin_Currency", ""))
+                        # Freeze the closed slice's ILS cost basis at the BUY-date FX
+                        # (allocated Cost_Origin + buy commission) so realized P&L is
+                        # deterministic and the realized-ILS column populates. (audit fin-streamlit #1)
+                        _frozen_cost_ils = _frozen_cost_ils_for_sell(
+                            allocated_cost, allocated_commission, _sell_cur, src_purchase_txt
+                        )
                         new_row.update(
                             {
                                 "Current_Location": _clean(source_row.get("Current_Location", "")),
                                 "Platform": _clean(source_row.get("Platform", "")),
                                 "Type": _clean(source_row.get("Type", "")),
                                 "Ticker": _clean(source_row.get("Ticker", "")).upper(),
-                                "Origin_Currency": _normalize_currency_code(source_row.get("Origin_Currency", "")),
+                                "Origin_Currency": _sell_cur,
                                 "Purchase_Date": src_purchase_txt,
                                 "Quantity": float(sell_qty),
                                 "Origin_Buy_Price": src_buy_price,
@@ -14123,7 +14278,7 @@ def main() -> None:
                                 "Status": "סגור",
                                 "Sell_Date": sell_date_txt,
                                 "Current_Value_ILS": float(sell_qty * sell_price_origin * fx_for_origin),
-                                "Cost_ILS": 0.0,
+                                "Cost_ILS": _frozen_cost_ils,
                             }
                         )
 
@@ -14177,7 +14332,14 @@ def main() -> None:
                         else:
                             fx_for_origin = 1.0
                         new_row["Current_Value_ILS"] = float(new_row["Quantity"] * sell_price_origin * fx_for_origin)
-                        new_row["Cost_ILS"] = 0.0
+                        # Freeze the ILS cost basis at the BUY-date FX (Cost_Origin +
+                        # buy commission) so realized P&L is deterministic / the
+                        # realized-ILS column populates. (audit fin-streamlit #1)
+                        new_row["Cost_ILS"] = _frozen_cost_ils_for_sell(
+                            _sell_cost, _sell_comm,
+                            _normalize_currency_code(new_row.get("Origin_Currency", "")),
+                            _sell_buy_date,
+                        )
 
                     if float(_num(new_row.get("Cost_Origin", 0.0))) <= 0 and float(_num(new_row.get("Quantity", 0.0))) > 0 and float(_num(new_row.get("Origin_Buy_Price", 0.0))) > 0:
                         new_row["Cost_Origin"] = float(_num(new_row.get("Quantity", 0.0)) * _num(new_row.get("Origin_Buy_Price", 0.0)))
@@ -14207,6 +14369,14 @@ def main() -> None:
                     )
                     if float(_num(new_row.get("Cost_Origin", 0.0))) <= 0 and float(_num(new_row.get("Quantity", 0.0))) > 0 and float(_num(new_row.get("Origin_Buy_Price", 0.0))) > 0:
                         new_row["Cost_Origin"] = float(_num(new_row.get("Quantity", 0.0)) * _num(new_row.get("Origin_Buy_Price", 0.0)))
+                    # Freeze a real ILS cost basis at the buy-date FX immediately (mirrors
+                    # web/mobile BUY) so local FIFO/aggregates are commission- & FX-correct
+                    # before any reload repopulates it from Google. (audit staged-buy)
+                    new_row["Cost_ILS"] = _frozen_cost_ils_for_sell(
+                        float(_num(new_row.get("Cost_Origin", 0.0))), float(_num(_buy_comm)),
+                        _normalize_currency_code(new_row.get("Origin_Currency", "")),
+                        _buy_date,
+                    )
 
                 new_row["Trade_ID"] = _to_trade_id(pd.Series(new_row))
                 submitted = st.form_submit_button(tr("💾 Save trade", "💾 שמור עסקה"), type="primary", use_container_width=True)
@@ -14252,6 +14422,9 @@ def main() -> None:
                     if partial_sell_meta and bool(partial_sell_meta.get("is_partial", False)):
                         src = dict(partial_sell_meta.get("source_row", {}))
                         src_trade_id = _clean(partial_sell_meta.get("source_trade_id", ""))
+                        _rem_cost = float(_num(partial_sell_meta.get("remaining_cost", 0.0)))
+                        _rem_comm = float(_num(partial_sell_meta.get("remaining_commission", 0.0)))
+                        _rem_cur = _normalize_currency_code(src.get("Origin_Currency", ""))
                         source_update = {
                             "Trade_ID": src_trade_id,
                             "Current_Location": _clean(src.get("Current_Location", "")),
@@ -14261,12 +14434,17 @@ def main() -> None:
                             "Purchase_Date": _clean(src.get("Purchase_Date", "")),
                             "Quantity": float(_num(partial_sell_meta.get("remaining_qty", 0.0))),
                             "Origin_Buy_Price": float(_num(src.get("Origin_Buy_Price", 0.0))),
-                            "Cost_Origin": float(_num(partial_sell_meta.get("remaining_cost", 0.0))),
-                            "Origin_Currency": _normalize_currency_code(src.get("Origin_Currency", "")),
-                            "Commission": float(_num(partial_sell_meta.get("remaining_commission", 0.0))),
+                            "Cost_Origin": _rem_cost,
+                            "Origin_Currency": _rem_cur,
+                            "Commission": _rem_comm,
                             "Status": "פתוח",
                             "Sell_Date": "",
-                            "Cost_ILS": 0.0,
+                            # Freeze the surviving open lot's ILS basis at the buy-date FX
+                            # too, so the residual position is priced/yielded off a real
+                            # basis rather than Cost_Origin*today. (audit fin-streamlit #1)
+                            "Cost_ILS": _frozen_cost_ils_for_sell(
+                                _rem_cost, _rem_comm, _rem_cur, _clean(src.get("Purchase_Date", ""))
+                            ),
                             "Current_Value_ILS": 0.0,
                             "Action": "BUY",
                             "Event_Type": "TRADE",
