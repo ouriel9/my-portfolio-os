@@ -87,6 +87,9 @@ snapshot_cache.csv
 # === MISC SCRATCH / QA ARTIFACTS ===
 _*.png
 _*.py
+# Keep the runtime-visual QA harness tracked (core methodology tool); ignore its output shots.
+!_visual_check.py
+_visual_shots/
 chk.py
 s.py
 search_app.py

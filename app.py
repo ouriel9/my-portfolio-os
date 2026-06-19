@@ -77,9 +77,12 @@ _auto_detect_proxy()
 CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
 CRYPTO_SHARE_TICKERS = {"IBIT", "ETHA", "BSOL"}  # MSTR is a stock — keep crypto-share KPI consistent with the allocation pie (audit)
 BTC_SHARE_TICKERS = {"BTC", "IBIT"}
-CHART_CRYPTO_TICKERS = {"IBIT", "ETHA", "BSOL", "BTC", "ETH", "SOL", "XRP"}
+# The crypto-proxy ETFs (IBIT/ETHA/BSOL) are ETFs for the ALLOCATION pie — match
+# engine.js assetClass() which returns "etf" for them — while still counting in the
+# separate crypto-SHARE KPI via CRYPTO_SHARE_TICKERS. (audit sync-defs assetClass drift)
+CHART_CRYPTO_TICKERS = {"BTC", "ETH", "SOL", "XRP"}
 CHART_STOCK_TICKERS = {"MSTR"}
-CHART_FORCED_ETF_TICKERS = {"QQQ", "VOO"}
+CHART_FORCED_ETF_TICKERS = {"QQQ", "VOO", "IBIT", "ETHA", "BSOL"}
 _BRAND_PALETTE = [
     "#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
     "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
@@ -3742,6 +3745,13 @@ def _normalize_currency_code(value: object) -> str:
         return "ILS"
     if raw in {"USD", "$"}:
         return "USD"
+    # Yahoo returns "GBp" (lowercase p) for LSE pennies — that is pence (GBX), NOT
+    # pounds; detect on the un-uppercased value so GBp→GBP doesn't fold pence into
+    # full pounds (100× error). (audit fin-fx) — _clean(value) keeps original case.
+    if _clean(value).strip() == "GBp":
+        return "GBX"
+    if raw in {"GBX", "ILS-AGOROT"}:
+        return raw if raw == "GBX" else "ILA"
     return raw
 
 
@@ -3963,7 +3973,10 @@ def _num(value: object) -> float:
     if s in {"#VALUE!", "נמכר"}:
         return 0.0
     try:
-        return float(s)
+        v = float(s)
+        # Reject non-finite ('inf'/'Infinity'/'nan' that slip past float()) so a corrupt
+        # cell can't poison total_value/total_cost/Yield sums with inf/NaN. (audit bug-st)
+        return v if (v == v and v not in (float("inf"), float("-inf"))) else 0.0
     except ValueError:
         return 0.0
 
@@ -4077,9 +4090,15 @@ def _to_trade_id(row: pd.Series) -> str:
     cost_origin = _num(row.get("Cost_Origin", 0))
     currency = _normalize_currency_code(row.get("Origin_Currency", ""))
     commission = _num(row.get("Commission", 0))
+    # Include a status/role discriminator + Sell_Date so an OPEN lot and a separately
+    # recorded fully-closed lot with identical buy parameters don't collide to the same
+    # Trade_ID (which would let edit/delete-by-id target the wrong row). (audit bug-st)
+    role = "SELL" if _is_closed_status(row.get("Status", "")) else "BUY"
+    sell_date = _clean(row.get("Sell_Date", ""))
     raw = (
         f"{platform}|{location}|{asset_type}|{ticker}|{purchase_date}|"
-        f"{qty:.12f}|{buy_price:.12f}|{cost_origin:.12f}|{currency}|{commission:.12f}"
+        f"{qty:.12f}|{buy_price:.12f}|{cost_origin:.12f}|{currency}|{commission:.12f}|"
+        f"{role}|{sell_date}"
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -4207,9 +4226,13 @@ def load_verified_data(path_str: str) -> pd.DataFrame:
     return df
 
 
+# Crypto spot tickers that yfinance quotes as "<COIN>-USD" (mirrors engine.js CRYPTO_SPOT).
+_CRYPTO_SPOT = frozenset({"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "MATIC"})
+
+
 def _market_symbol(ticker: str) -> str:
     t = _clean(ticker).upper()
-    if t in {"BTC", "ETH", "SOL"}:
+    if t in _CRYPTO_SPOT:
         return f"{t}-USD"
     return t
 
@@ -4218,17 +4241,85 @@ def _yf_price_currency(ticker: str) -> str:
     """Return the quote currency that yfinance uses for this ticker's price.
 
     BTC/ETH/SOL map to BTC-USD / ETH-USD / SOL-USD → price is always in USD.
-    Israeli stocks use a .TA suffix from TASE → price is in ILS.
+    Israeli stocks use a .TA suffix from TASE → price is in ILS (or ILA agorot).
+    London .L/.LON symbols quote in GBp pence → currency GBX.
     All other tickers (US stocks, ETFs, crypto pairs) are USD-quoted.
 
     This is intentionally separate from Origin_Currency: a user can buy BTC on
     Bit2C (Origin_Currency=ILS) but yfinance still returns a USD price, so we
     must always apply the USD→ILS FX rate when computing Current_Value_ILS.
     """
-    sym = _market_symbol(ticker)
-    if sym.upper().endswith(".TA"):
+    sym = _market_symbol(ticker).upper()
+    if sym.endswith(".TA"):
         return "ILS"
+    if sym.endswith(".L") or sym.endswith(".LON"):
+        return "GBX"
     return "USD"
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fx_pair_rate(pair: str) -> float:
+    """Live ILS-per-unit for a Yahoo FX pair (e.g. GBPILS=X, EURILS=X). Cached."""
+    return float(_safe_quote(pair))
+
+
+def _ils_per_native_unit(quote_currency: object, usd_ils: float) -> float:
+    """ILS per ONE unit of the yfinance quote currency — the Python equivalent of
+    engine.js toIls() per unit. Mirrors it byte-for-byte: ILS/NIS=1, ILA=÷100,
+    GBX=÷100×GBPILS, GBP=×GBPILS, EUR=×EURILS, USD=×USDILS. Unknown → 0.0 so the
+    caller keeps the stored value (no silent wrong-rate substitution). (audit fin-fx)"""
+    c = _normalize_currency_code(quote_currency)
+    if c in {"ILS", ""}:
+        return 1.0
+    if c == "ILA":
+        return 0.01
+    if c == "USD":
+        return float(usd_ils) if usd_ils and usd_ils > 0 else 0.0
+    if c in {"GBX", "GBP"}:
+        gbp = _fx_pair_rate("GBPILS=X")
+        if not (gbp and gbp > 0):
+            return 0.0
+        return gbp / 100.0 if c == "GBX" else gbp
+    if c == "EUR":
+        eur = _fx_pair_rate("EURILS=X")
+        return float(eur) if eur and eur > 0 else 0.0
+    r = _fx_pair_rate(f"{c}ILS=X")
+    return float(r) if r and r > 0 else 0.0
+
+
+def _ils_per_origin_parent_unit(origin_currency: object, usd_ils: float) -> float:
+    """ILS per ONE unit of the asset's PARENT origin currency — used to back out a
+    native-currency value from Current_Value_ILS for the origin-yield denominator.
+    Cost_Origin is stored in the parent unit (GBP not pence, ILS not agorot), so the
+    value must be expressed in the same parent unit: ILS/ILA→1 (parent ILS), USD→USDILS,
+    GBX/GBP→GBPILS, EUR→EURILS. Mirrors engine.js _mktNat (parent-unit). (audit fin-fx)"""
+    c = _normalize_currency_code(origin_currency)
+    if c in {"ILS", "ILA", ""}:
+        return 1.0
+    if c == "USD":
+        return float(usd_ils) if usd_ils and usd_ils > 0 else 0.0
+    if c in {"GBX", "GBP"}:
+        gbp = _fx_pair_rate("GBPILS=X")
+        return float(gbp) if gbp and gbp > 0 else 0.0
+    if c == "EUR":
+        eur = _fx_pair_rate("EURILS=X")
+        return float(eur) if eur and eur > 0 else 0.0
+    r = _fx_pair_rate(f"{c}ILS=X")
+    return float(r) if r and r > 0 else 0.0
+
+
+def _value_origin_series(df: pd.DataFrame, usd_ils: float) -> pd.Series:
+    """Per-row Current_Value_ILS expressed in the asset's PARENT origin currency, so
+    Yield_Origin compares like units against Cost_Origin (parent unit). Replaces the
+    binary `c=='USD' else pass-through-ILS` that leaked ILS into non-USD origin
+    values (100×/FX errors for GBX/ILA/EUR). (audit fin-fx)"""
+    vi = df["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in df.columns else pd.Series(0.0, index=df.index)
+    cur = df["Origin_Currency"] if "Origin_Currency" in df.columns else pd.Series("ILS", index=df.index)
+    rates = cur.map(lambda c: _ils_per_origin_parent_unit(c, usd_ils))
+    return pd.Series(
+        [v / r if (r and r > 0) else v for v, r in zip(vi.tolist(), rates.tolist())],
+        index=df.index,
+    )
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -4472,9 +4563,11 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 cost_ils = float(stored_cost_ils)
             else:
                 # No stored Cost_ILS (e.g. a legacy/un-synced row): fall back to
-                # Cost_Origin converted at the BUY-DATE FX for USD (NOT today's spot,
-                # which made realized P&L drift with the live rate). (audit fin-streamlit #1/#2)
-                cost_ils = fallback_cost * _buy_date_fx(origin_currency, row.get("Purchase_Date", "")) if origin_currency == "USD" else fallback_cost
+                # Cost_Origin converted at the BUY-DATE FX (NOT today's spot, which made
+                # realized P&L drift with the live rate). _buy_date_fx now handles every
+                # currency (USD/GBP/GBX/EUR=rate, ILS/ILA=1). (audit fin-streamlit #1/#2, fin-fx)
+                _bdfx = _buy_date_fx(origin_currency, row.get("Purchase_Date", ""))
+                cost_ils = fallback_cost * (_bdfx if _bdfx and _bdfx > 0 else 1.0)
             # A row is "self-contained" (carries its own round-trip cost basis) when it
             # has a positive own cost — stored Cost_ILS OR a positive Cost_Origin — NOT
             # merely Cost_ILS != 0. App-created sells used to store Cost_ILS=0, defeating
@@ -4533,7 +4626,11 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                         sell_qty -= used
                         if lot.qty <= 1e-9:
                             lots.pop(0)
-                    if sell_qty > 1e-9:
+                    # Residual after consuming all open lots: only realize it when this
+                    # row actually carries a cost basis (unit_cost>0). With no own cost
+                    # (unit_cost==0) booking the residual = phantom zero-cost profit on a
+                    # negative-inventory oversell — skip it rather than inflate realized. (audit fin-fifo #4)
+                    if sell_qty > 1e-9 and unit_cost > 0:
                         realized += sell_qty * (sell_price - unit_cost)
 
         open_qty = sum(lot.qty for lot in lots)
@@ -4624,15 +4721,13 @@ def _usd_ils_rate(default: float = 3.3) -> float:
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _usdils_on(date_str: str) -> float:
-    """USD/ILS close on a specific (past) date, for converting backdated-sale
-    proceeds at the actual sell-date rate rather than today's spot.
-
-    Returns the close on `date_str` (or the most recent trading day on/before it
-    within a short window). Returns 0.0 on any failure so callers can fall back
-    to the live rate. NOTE: must NOT touch st.session_state (cached fn)."""
+def _fx_pair_on(pair: str, date_str: str) -> float:
+    """Historical close for a Yahoo FX pair (e.g. USDILS=X, GBPILS=X, EURILS=X) on a
+    specific (past) date — the most recent trading day on/before it within a short
+    window. Returns 0.0 on any failure. NOTE: must NOT touch st.session_state (cached)."""
     d = _clean(date_str)
-    if not d:
+    p = _clean(pair).upper()
+    if not d or not p:
         return 0.0
     try:
         start = pd.to_datetime(d, errors="coerce")
@@ -4642,7 +4737,7 @@ def _usdils_on(date_str: str) -> float:
         # target date (or the prior trading day if it was a weekend/holiday) is included.
         win_start = (start - pd.Timedelta(days=6)).strftime("%Y-%m-%d")
         win_end = (start + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-        data = yf.download("USDILS=X", start=win_start, end=win_end,
+        data = yf.download(p, start=win_start, end=win_end,
                            progress=False, auto_adjust=False)
         if data is None or data.empty or "Close" not in data.columns:
             return 0.0
@@ -4657,17 +4752,29 @@ def _usdils_on(date_str: str) -> float:
         return 0.0
 
 
+def _usdils_on(date_str: str) -> float:
+    """USD/ILS close on a specific (past) date, for converting backdated-sale
+    proceeds at the actual sell-date rate rather than today's spot. Returns 0.0 on
+    any failure so callers can fall back to the live rate."""
+    return _fx_pair_on("USDILS=X", date_str)
+
+
 def _buy_date_fx(currency: object, purchase_date: object) -> float:
-    """ILS-per-unit-of-origin on the BUY date, for freezing a deterministic
-    Cost_ILS on a sell row. USD → the historical USD/ILS close on the purchase
-    date (live spot only as a last resort); ILS/blank → 1.0. Mirrors the GAS
-    cost-basis convention costIls = (Cost_Origin+Commission) * buy-date FX, so a
-    closed row's realized P&L never drifts with TODAY's spot rate. (audit fin-streamlit #1/#2)"""
+    """ILS-per-unit-of-origin (PARENT unit) on the BUY date, for freezing a
+    deterministic Cost_ILS on a sell row. USD → historical USD/ILS close; GBX/GBP →
+    historical GBP/ILS; EUR → historical EUR/ILS; ILA/ILS/blank → 1.0 (parent is ILS).
+    Live pair rate only as a last resort. Mirrors the GAS cost-basis convention
+    costIls = (Cost_Origin+Commission) * buy-date FX, so a closed row's realized P&L
+    never drifts with TODAY's spot rate. (audit fin-streamlit #1/#2, fin-fx)"""
     cur = _normalize_currency_code(currency)
-    if cur != "USD":
+    if cur in {"ILS", "ILA", ""}:
         return 1.0
-    hist = _usdils_on(_clean(purchase_date))
-    return hist if hist and hist > 0 else _usd_ils_rate()
+    pair = {"USD": "USDILS=X", "GBX": "GBPILS=X", "GBP": "GBPILS=X", "EUR": "EURILS=X"}.get(cur, f"{cur}ILS=X")
+    hist = _fx_pair_on(pair, _clean(purchase_date))
+    if hist and hist > 0:
+        return hist
+    live = _fx_pair_rate(pair) if pair != "USDILS=X" else _usd_ils_rate()
+    return float(live) if live and live > 0 else 0.0
 
 
 def _frozen_cost_ils_for_sell(cost_origin: float, commission: float,
@@ -4695,10 +4802,13 @@ def _commission_ils_series(df: pd.DataFrame, fx: float) -> pd.Series:
 
     def _row_comm(idx: object) -> float:
         c = float(_num(df.at[idx, "Commission"]))
-        if cur.at[idx] != "USD" or c == 0:
+        ccy = cur.at[idx]
+        # Commission is stored in the PARENT origin currency. ILS/ILA/blank are already
+        # in shekels (parent ILS) — no FX. USD/GBP/GBX/EUR convert at the buy-date rate.
+        if ccy in {"ILS", "ILA", ""} or c == 0:
             return c
-        rate = _buy_date_fx("USD", df.at[idx, "Purchase_Date"]) if has_date else float(fx)
-        return c * rate
+        rate = _buy_date_fx(ccy, df.at[idx, "Purchase_Date"]) if has_date else float(fx)
+        return c * rate if (rate and rate > 0) else c
 
     return pd.Series([_row_comm(i) for i in df.index], index=df.index)
 
@@ -4819,14 +4929,8 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     fx = usd_ils if usd_ils and usd_ils > 0 else _usd_ils_rate()
 
     work["Cost_Origin_With_Fee"] = work["Cost_Origin"] + work["Commission"]
-    # Commission belongs in the ILS basis too (matches Cost_Origin_With_Fee), so the
-    # winner/loser ranking uses one consistent commission-inclusive yield. (audit #10/#12)
-    work["Cost_ILS_With_Fee"] = work["Cost_ILS"] + _commission_ils_series(work, fx)
-    work["Value_Origin_Est"] = np.where(
-        work["Origin_Currency"].str.upper() == "USD",
-        work["Current_Value_ILS"] / fx,
-        work["Current_Value_ILS"],
-    )
+    work["Cost_ILS_With_Fee"] = work["Cost_ILS"]
+    work["Value_Origin_Est"] = _value_origin_series(work, fx)
     # Detect tickers with mixed currencies — summing ILS+USD costs is invalid.
     _rpt_ticker_pure = (
         work.groupby("Ticker")["Origin_Currency"]
@@ -6467,15 +6571,17 @@ def prepare_core_views(df: pd.DataFrame) -> Dict[str, object]:
     open_trades = trades[~closed_mask].copy()
     closed_trades = trades[closed_mask].copy()
 
-    # Safety fallback: if status labels are malformed and everything appears closed,
-    # infer open trades by positive position/value so top-level totals are not zeroed.
-    if open_trades.empty and not trades.empty and "Current_Value_ILS" in trades.columns:
-        value_mask = trades["Current_Value_ILS"].map(_num) > 0
-        qty_mask = trades["Quantity"].map(_num) > 0 if "Quantity" in trades.columns else False
-        inferred_open_mask = value_mask | qty_mask
-        if inferred_open_mask.any():
-            open_trades = trades[inferred_open_mask].copy()
-            closed_trades = trades[~inferred_open_mask].copy()
+    # Safety fallback: rescue ONLY rows whose Status is UNRECOGNIZED (neither a known
+    # closed label nor a SELL action) — a closed/sold row ALWAYS has positive proceeds
+    # in Current_Value_ILS, so the old value/qty heuristic reclassified a genuinely
+    # all-sold book as OPEN, fabricating phantom Total Value / Open P&L and zeroing the
+    # closed count. A truly all-closed portfolio must stay closed. (audit bug-st #3)
+    if open_trades.empty and not trades.empty:
+        action_norm = trades["Action"].map(_clean).str.upper() if "Action" in trades.columns else pd.Series("", index=trades.index)
+        unknown_mask = (~closed_mask) & action_norm.ne("SELL")
+        if unknown_mask.any():
+            open_trades = trades[unknown_mask].copy()
+            closed_trades = trades[~unknown_mask].copy()
 
     total_cost = float(open_trades["Cost_ILS"].sum()) if "Cost_ILS" in open_trades.columns else 0.0
     total_value = float(open_trades["Current_Value_ILS"].sum()) if "Current_Value_ILS" in open_trades.columns else 0.0
@@ -6514,9 +6620,12 @@ def _enrich_compute(open_trades: pd.DataFrame, live_prices: Mapping[str, float],
         price_cur_series = out["Ticker"].map(lambda t: _yf_price_currency(_clean(t).upper()))
     else:
         price_cur_series = pd.Series(["USD"] * len(out), index=out.index)
-    live_value_ils = qty_series * out["מחיר שוק"] * price_cur_series.map(lambda c: usd_ils if c == "USD" else 1.0)
-    # Only override where we actually got a live price (>0)
-    has_live = out["מחיר שוק"] > 0
+    _fxm = price_cur_series.map(lambda c: _ils_per_native_unit(c, usd_ils))
+    live_value_ils = qty_series * out["מחיר שוק"] * _fxm
+    # Only override where we got a live price (>0) AND a usable ILS multiplier (>0);
+    # a 0 multiplier means an unknown/unavailable rate → keep the stored value
+    # rather than zero it out (mirrors engine.js toIls NaN → keep stored). (audit fin-fx)
+    has_live = (out["מחיר שוק"] > 0) & (_fxm > 0)
     out.loc[has_live, "Current_Value_ILS"] = live_value_ils[has_live]
     return out
 
@@ -6585,7 +6694,9 @@ def refresh_open_trade_values(df: pd.DataFrame) -> pd.DataFrame:
         # BTC on Bit2C has Origin_Currency=ILS but yfinance returns a USD price (BTC-USD),
         # so we must always apply the USD→ILS rate for crypto / USD-quoted assets.
         yf_cur = _yf_price_currency(ticker.upper())
-        fx = usd_ils if yf_cur == "USD" else 1.0
+        fx = _ils_per_native_unit(yf_cur, usd_ils)
+        if fx <= 0:
+            continue
         out.at[idx, "Current_Value_ILS"] = qty * price * fx
 
     return out
@@ -6889,13 +7000,11 @@ def _pp_inject_help_shim() -> None:
 
 
 def _pp_inject_premium_css(is_dark: bool, is_mobile: bool) -> None:
-    try:
-        _key = ("_pp_premium_css", bool(is_dark), bool(is_mobile))
-        if st.session_state.get("_pp_premium_css_key") == _key:
-            return
-        st.session_state["_pp_premium_css_key"] = _key
-    except Exception:
-        pass
+    # NO idempotency guard: this emits its <style> via st.markdown, which lives in
+    # Streamlit's element tree. Streamlit rebuilds that tree on EVERY rerun, so a
+    # session_state guard that returns early after run #1 deletes the <style> on the
+    # next interaction — the header/animations/mobile sizing vanish mid-session.
+    # st.markdown re-emit is cheap; it MUST run every rerun. (regression fix)
     accent = "#6366f1"
     accent_2 = "#06b6d4"
     bg_soft = "rgba(148,163,184,0.10)" if is_dark else "rgba(99,102,241,0.06)"
@@ -7082,13 +7191,9 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
     components and never hide or change layout semantics. Safe on desktop
     (no-ops inside media queries where appropriate).
     """
-    try:
-        _key = ("_pp_mobile_polish", bool(is_dark), bool(is_mobile))
-        if st.session_state.get("_pp_mobile_polish_key") == _key:
-            return
-        st.session_state["_pp_mobile_polish_key"] = _key
-    except Exception:
-        pass
+    # NO idempotency guard: emitted via st.markdown (Streamlit element tree, rebuilt
+    # every rerun). A session_state early-return deletes this <style> on the next
+    # interaction, killing the mobile polish + animations. Must re-emit every run. (regression fix)
     bg_base = "#0b1220" if is_dark else "#f7f8fb"
     surface = "rgba(30,41,59,0.62)" if is_dark else "rgba(255,255,255,0.72)"
     surface_strong = "rgba(15,23,42,0.88)" if is_dark else "rgba(255,255,255,0.94)"
@@ -7940,6 +8045,10 @@ def pp_calmar_ratio(returns, periods: int = 252) -> float:
     mdd = abs(pp_max_drawdown(cum))
     if mdd == 0:
         return 0.0
+    # A non-positive cumulative (total wipeout from a daily return < -1) has no
+    # meaningful CAGR and raising it to a fractional power yields NaN. (audit bug-st)
+    if cum[-1] <= 0:
+        return 0.0
     cagr = cum[-1] ** (periods / arr.size) - 1
     return float(cagr / mdd)
 
@@ -8004,7 +8113,7 @@ def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
             data=df.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{label_prefix}_{ts}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width="stretch",
         )
     with c2:
         st.download_button(
@@ -8012,7 +8121,7 @@ def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
             data=df.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
             file_name=f"{label_prefix}_{ts}.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
         )
     with c3:
         xls = pp_dataframe_to_excel_bytes(df, sheet_name=label_prefix)
@@ -8022,7 +8131,7 @@ def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
                 data=xls,
                 file_name=f"{label_prefix}_{ts}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                width="stretch",
             )
 # ── Advanced Analytics Suite (professional-grade risk & performance) ────
 def pp_portfolio_health_score(metrics: Dict[str, float],
@@ -8190,7 +8299,7 @@ def render_advanced_analytics(
             "ציון בריאות התיק: ציון מרוכב 0-100 המסכם שישה עמודי-תווך למספר אחד: (1) שארפ — תשואה מתואמת סיכון · (2) משיכה מקסימלית — הכאב ההיסטורי החריף · (3) תנודתיות שנתית — עוצמת התנודות היומיות · (4) CAGR — צמיחה שנתית מורכבת · (5) HHI — ריכוזיות ופיזור · (6) VaR 95% — ההפסד היומי הפוטנציאלי. כל עמוד מנורמל 0-100 אל מול סף בריא, וממוצע משוקלל לפי דגש סיכון. טווחים: 75+ = מצוין · 55-75 = בריא · 40-55 = מאוזן, יש מקום לשיפור · <40 = יש לבחון הקצאה, פיזור או בקרת משיכה. זהו סיכום חינוכי — תמיד להצליב מול המדדים הבודדים לפני פעולה.",
             language,
         )
-        st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(gauge_fig, is_dark, is_mobile), theme="streamlit", width="stretch")
     with gc2:
         kpi_row = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
         kpi_row[0].metric(
@@ -8271,7 +8380,7 @@ def render_advanced_analytics(
             margin=dict(l=10, r=10, t=50, b=30),
             hovermode="x unified",
         )
-        st.plotly_chart(_apply_plotly_theme(dd_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(dd_fig, is_dark, is_mobile), theme="streamlit", width="stretch")
 
     # Returns distribution with VaR / CVaR markers
     with row_a[1]:
@@ -8296,7 +8405,7 @@ def render_advanced_analytics(
             margin=dict(l=10, r=10, t=50, b=30),
             showlegend=False, bargap=0.04,
         )
-        st.plotly_chart(_apply_plotly_theme(hist_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(hist_fig, is_dark, is_mobile), theme="streamlit", width="stretch")
 
     # Rolling 30-day annualized volatility
     st.divider()
@@ -8322,7 +8431,7 @@ def render_advanced_analytics(
                 yaxis_title="%", xaxis_title=tr("Date", "תאריך"),
                 margin=dict(l=10, r=10, t=50, b=30), hovermode="x unified",
             )
-            st.plotly_chart(_apply_plotly_theme(vol_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(vol_fig, is_dark, is_mobile), theme="streamlit", width="stretch")
         else:
             st.info(tr("Not enough data for rolling volatility.", "אין מספיק נתונים לתנודתיות מתגלגלת."))
 
@@ -8349,7 +8458,7 @@ def render_advanced_analytics(
                     margin=dict(l=10, r=10, t=50, b=30), hovermode="x unified",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
                 )
-                st.plotly_chart(_apply_plotly_theme(bm_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(bm_fig, is_dark, is_mobile), theme="streamlit", width="stretch")
             else:
                 st.info(tr("Benchmark history unavailable.", "אין מספיק היסטוריית בנצ'מרק."))
         else:
@@ -8429,7 +8538,7 @@ def render_advanced_analytics(
                         with hm_col:
                             st.plotly_chart(
                                 _apply_plotly_theme(heat_fig, is_dark, is_mobile),
-                                use_container_width=True,
+                                width="stretch",
                                 theme="streamlit",
                             )
                     else:
@@ -8446,7 +8555,7 @@ def render_advanced_analytics(
                         )
                         st.plotly_chart(
                             _apply_plotly_theme(heat_fig, is_dark, is_mobile),
-                            use_container_width=False,
+                            width="content",
                             theme="streamlit",
                         )
                         st.markdown("</div>", unsafe_allow_html=True)
@@ -8490,7 +8599,7 @@ def render_advanced_analytics(
             hovermode="x unified",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         )
-        st.plotly_chart(_apply_plotly_theme(mc_fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(mc_fig, is_dark, is_mobile), theme="streamlit", width="stretch")
 
         final_row = mc.iloc[-1]
         mc_cols = st.columns(3) if not is_mobile else [st.container(), st.container(), st.container()]
@@ -8734,17 +8843,37 @@ def _real_capital_gains_tax(
     previous version indexed the entire basis by the full horizon, overstating
     the indexed basis and under-charging tax for contribution-heavy plans.
     Tax = 25% × max(0, nominal − indexed_basis). Always >= 0."""
+    # Sanitize every numeric arg to a finite float so NaN/garbage degrades to 0
+    # identically to engine.js (which guards the same way) instead of NaN/crash. (audit fin-tax)
+    def _fin(x: object) -> float:
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return 0.0
+        return v if (v == v and v not in (float("inf"), float("-inf"))) else 0.0
+    final_nominal = _fin(final_nominal)
+    initial = _fin(initial)
+    monthly = _fin(monthly)
+    lump = _fin(lump)
+    inflation_pct = _fin(inflation_pct)
+    years = _fin(years)
     if final_nominal <= 0 or years <= 0:
         return 0.0
     i = max(0.0, inflation_pct) / 100.0
-    months = max(0, int(months))
-    indexed_basis = max(0.0, float(initial)) * (1.0 + i) ** float(years)
+    months = max(0, int(_fin(months)))
+    # months=0 with a monthly stream: derive the horizon from years so a documented
+    # months=0 caller matches engine.js (which does months = round(years*12)). (audit fin-tax)
+    if monthly and months == 0 and years > 0:
+        months = int(round(years * 12))
+    # Index the initial term over the SAME month-based horizon the projection uses
+    # (months/12), not the float `years`, so every basis term references one horizon. (audit fin-tax)
+    indexed_basis = max(0.0, float(initial)) * (1.0 + i) ** (months / 12.0)
     if monthly and months > 0:
         # deposit m (1..months): (months-m)/12 yrs of indexing → exact geometric sum
         exps = np.arange(months - 1, -1, -1, dtype=float) / 12.0
         indexed_basis += float(monthly) * float(np.sum((1.0 + i) ** exps))
     if lump:
-        lm = max(0, min(int(lump_month), months))
+        lm = max(0, min(int(_fin(lump_month)), months))
         indexed_basis += max(0.0, float(lump)) * (1.0 + i) ** ((months - lm) / 12.0)
     real_gain = max(0.0, final_nominal - indexed_basis)
     return ISRAELI_CAPITAL_GAINS_TAX * real_gain
@@ -9600,7 +9729,7 @@ def render_simulator_page(
             })
         st.caption(tr("How much to save per month, by the age you want FI:",
                       "כמה להפריש בחודש, לפי הגיל שבו תרצה עצמאות כלכלית:"))
-        st.dataframe(pd.DataFrame(_rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch")
 
     # ── Per-bucket breakdown ───────────────────────────────────────────
     with st.expander(tr("📊 Per-bucket breakdown", "📊 פירוט לפי קופה"), expanded=False):
@@ -9693,7 +9822,7 @@ def render_simulator_page(
     )
     st.plotly_chart(
         _apply_plotly_theme(fig, is_dark, is_mobile),
-        theme="streamlit", use_container_width=True,
+        theme="streamlit", width="stretch",
     )
 
     # ── Yearly breakdown (regular bucket) ──────────────────────────────
@@ -9710,14 +9839,14 @@ def render_simulator_page(
             "BalanceNoLump": tr("Balance no lump (₪)", "יתרה ללא חד-פעמית (₪)"),
             "BalanceWithLump": tr("Balance with lump (₪)", "יתרה עם חד-פעמית (₪)"),
         })
-        st.dataframe(yearly, use_container_width=True, hide_index=True)
+        st.dataframe(yearly, width="stretch", hide_index=True)
         csv = yearly.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             label=tr("⬇ Download yearly breakdown (CSV)", "⬇ הורדת הפירוט השנתי (CSV)"),
             data=csv,
             file_name="simulator_yearly.csv",
             mime="text/csv",
-            use_container_width=is_mobile,
+            width="stretch" if is_mobile else "content",
         )
 
     st.caption(tr(
@@ -9731,7 +9860,7 @@ def render_simulator_page(
         if st.button(
             tr("🔄 Reset inputs (this mode)", "🔄 איפוס קלטים (מצב זה)"),
             key=f"sim_reset_prefs_{mode_id}",
-            use_container_width=True,
+            width="stretch",
             help=tr(
                 "Clear saved values for THIS mode only — the other mode's data is preserved.",
                 "איפוס הערכים השמורים של המצב הנוכחי בלבד — נתוני המצב השני נשמרים.",
@@ -10098,7 +10227,11 @@ def _ai_build_sell(df, args: Mapping[str, object]) -> Optional[Dict[str, object]
         return None
     src_qty = float(_num(src.get("Quantity", 0)))
     sell_price = float(_num(args.get("sell_price", 0)))
-    if src_qty <= 0 or sell_price <= 0:
+    # Allow sell_price == 0 only when the caller explicitly marks a TOTAL LOSS
+    # (write-off). FIFO supports zero-proceeds total loss; rejecting it omitted a
+    # real realized loss from the closed record. (audit fin-tax total-loss)
+    _total_loss = bool(args.get("total_loss")) and str(args.get("total_loss")).strip().lower() not in {"false", "0", "no", ""}
+    if src_qty <= 0 or sell_price < 0 or (sell_price == 0 and not _total_loss):
         return None
     sell_qty = float(_num(args.get("sell_quantity", 0))) or src_qty
     sell_qty = min(sell_qty, src_qty)
@@ -10108,12 +10241,17 @@ def _ai_build_sell(df, args: Mapping[str, object]) -> Optional[Dict[str, object]
     sell_date = _clean(args.get("sell_date", "")) or datetime.now().strftime("%Y-%m-%d")
     # Backdated sale: convert proceeds at the sell-DATE FX rate (matching GAS's
     # sRate), not today's spot. Fall back to today's live rate if the historical
-    # lookup fails. (audit #9)
-    if cur == "USD":
-        _hist_fx = _usdils_on(sell_date)
-        fx = _hist_fx if _hist_fx > 0 else _usd_ils_rate()
-    else:
+    # lookup fails. Handles every currency (USD/GBP/GBX/EUR), ILS/ILA→1. (audit #9, fin-fx)
+    if cur in {"ILS", "ILA", ""}:
         fx = 1.0
+    else:
+        _pair = {"USD": "USDILS=X", "GBX": "GBPILS=X", "GBP": "GBPILS=X", "EUR": "EURILS=X"}.get(cur, f"{cur}ILS=X")
+        _hist_fx = _fx_pair_on(_pair, sell_date)
+        if _hist_fx and _hist_fx > 0:
+            fx = _hist_fx
+        else:
+            _live = _fx_pair_rate(_pair) if _pair != "USDILS=X" else _usd_ils_rate()
+            fx = float(_live) if _live and _live > 0 else 1.0
     src_cost = float(_num(src.get("Cost_Origin", 0)))
     src_comm = float(_num(src.get("Commission", 0)))
     ratio = sell_qty / src_qty if src_qty else 0.0
@@ -10280,7 +10418,7 @@ def _render_ai_pending_trade(tr, web_app_url, token) -> None:
             st.markdown(tr("Delete trade", "מחיקת עסקה") + f" `{_clean(pending.get('trade_id',''))}`"
                         + (f" — {_clean(pending.get('label',''))}" if pending.get("label") else ""))
         ca, cc = st.columns(2)
-        if ca.button(tr("✅ Approve & save", "✅ אשר ושמור"), key="_ai_trade_ok", type="primary", use_container_width=True):
+        if ca.button(tr("✅ Approve & save", "✅ אשר ושמור"), key="_ai_trade_ok", type="primary", width="stretch"):
             ok, msg = _ai_execute_trade(pending, web_app_url, token)
             st.session_state.pop("_ai_pending_trade", None)
             if ok:
@@ -10298,7 +10436,7 @@ def _render_ai_pending_trade(tr, web_app_url, token) -> None:
                 st.session_state.setdefault("ai_chat_history", []).append(
                     {"role": "assistant", "text": tr("❌ Save failed", "❌ השמירה נכשלה") + f": {msg}"})
             st.rerun()
-        if cc.button(tr("✖ Cancel", "✖ ביטול"), key="_ai_trade_cancel", use_container_width=True):
+        if cc.button(tr("✖ Cancel", "✖ ביטול"), key="_ai_trade_cancel", width="stretch"):
             st.session_state.pop("_ai_pending_trade", None)
             st.rerun()
 
@@ -10383,7 +10521,7 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
         prov_label = st.radio(tr("Engine", "מנוע"), providers, horizontal=True,
                               key="ai_chat_provider")
     with cc2:
-        if st.button(tr("Clear", "נקה"), icon=":material/delete:", use_container_width=True):
+        if st.button(tr("Clear", "נקה"), icon=":material/delete:", width="stretch"):
             st.session_state["ai_chat_history"] = []
             st.rerun()
     provider = pmap.get(prov_label, "gemini")
@@ -10702,7 +10840,7 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                             (_t("Buy", "קנה") if delta > 0 else _t("Sell", "מכור")) + " " + _iso(f"₪{abs(delta):,.0f}")
                         ) if abs(delta) > total_val * 0.005 else _t("On target", "מאוזן"),
                     })
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         except Exception as exc:
             st.caption(_t("Rebalancing unavailable.", "איזון לא זמין.") + f" ({str(exc)[:60]})")
 
@@ -10729,7 +10867,7 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 m2.metric(_t("This year (2026)", "השנה (2026)"), f"₪{this_year:,.0f}")
                 by_t = ddf.groupby("ticker", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
                 st.dataframe(by_t.rename(columns={"ticker": _t("Ticker", "טיקר"), "amount": _t("Total (₪)", "סה\"כ (₪)")}),
-                             use_container_width=True, hide_index=True)
+                             width="stretch", hide_index=True)
             else:
                 st.info(_t("No dividends recorded yet. Add one above.", "עדיין לא נרשמו דיבידנדים. הוסף למעלה."))
         except Exception as exc:
@@ -11316,7 +11454,12 @@ def main() -> None:
             horizontal=True,
             label_visibility="collapsed",
             index=active_mobile_index,
-            key="mobile_page_nav_radio",
+            # The key MUST embed active_page_id: a Streamlit keyed widget's stored
+            # session_state value overrides index= on rerun, so a static key freezes
+            # the selection and (when navigating to a non-pill page, index=None) the
+            # stale value forces st.rerun() back to the old pill — making page nav
+            # impossible. Re-keying per page remounts the widget so index is honored. (regression fix)
+            key=f"mobile_page_nav_radio_{active_page_id}",
         )
         _chosen_id = mobile_label_to_id.get(page_choice) if page_choice else None
         if _chosen_id and _chosen_id != active_page_id:
@@ -11809,7 +11952,7 @@ def main() -> None:
         if st.sidebar.button(
             tr("Data", "נתונים") + ("  ✓" if _data_btn_primary else ""),
             icon=":material/database:",
-            use_container_width=True,
+            width="stretch",
             type=("primary" if _data_btn_primary else "secondary"),
             help=tr("Open the Data / Data Quality page.",
                     "פתיחת דף הנתונים (בקרת איכות נתונים)."),
@@ -11874,7 +12017,7 @@ def main() -> None:
         )
         if st.button(
             tr("↓ Pull from Google Sheets", "↓ שלוף מגוגל שיט"),
-            use_container_width=True,
+            width="stretch",
             disabled=not has_google_connection,
             help=tr(
                 "Download the latest trades AND manual deposits from Google Sheets and update your local store.",
@@ -11981,7 +12124,7 @@ def main() -> None:
         if st.sidebar.button(
             tr("AGENT AI", "סוכן AI") + ("  ✓" if _chat_active else ""),
             icon=":material/smart_toy:",
-            use_container_width=True,
+            width="stretch",
             # Always secondary so the button keeps a consistent colour with the rest of
             # the nav; the "✓" marks the active state instead of the accent-gradient
             # primary style that made it suddenly stand out. (fix)
@@ -12156,14 +12299,8 @@ def main() -> None:
             fx = _usd_ils_rate()
         dashboard_df = enrich_open_trades_with_prices(open_trades)
         dashboard_df["Cost_Origin_With_Fee"] = dashboard_df["Cost_Origin"] + dashboard_df["Commission"]
-        # Commission belongs in the ILS basis too (matches Cost_Origin_With_Fee), so
-        # Yield_ILS and Yield_Origin share a commission-inclusive denominator. (audit #10)
-        dashboard_df["Cost_ILS_With_Fee"] = dashboard_df["Cost_ILS"].map(_num) + _commission_ils_series(dashboard_df, fx)
-        dashboard_df["Value_Origin_Est"] = np.where(
-            dashboard_df["Origin_Currency"].str.upper() == "USD",
-            dashboard_df["Current_Value_ILS"] / fx,
-            dashboard_df["Current_Value_ILS"],
-        )
+        dashboard_df["Cost_ILS_With_Fee"] = dashboard_df["Cost_ILS"].map(_num)
+        dashboard_df["Value_Origin_Est"] = _value_origin_series(dashboard_df, fx)
         # Detect mixed-currency tickers (e.g. BTC bought on both Bit2C/ILS and Excellence/USD)
         _dash_ticker_pure = (
             dashboard_df.groupby("Ticker")["Origin_Currency"]
@@ -12251,10 +12388,9 @@ def main() -> None:
                             _price_cur_k = _enriched_kpi["Ticker"].map(
                                 lambda t: _yf_price_currency(_clean(t).upper())
                             )
-                            _vk = _qty_k * _enriched_kpi["מחיר שוק"] * _price_cur_k.map(
-                                lambda c: _ufx if c == "USD" else 1.0
-                            )
-                            _has_k = _enriched_kpi["מחיר שוק"] > 0
+                            _fxm_k = _price_cur_k.map(lambda c: _ils_per_native_unit(c, _ufx))
+                            _vk = _qty_k * _enriched_kpi["מחיר שוק"] * _fxm_k
+                            _has_k = (_enriched_kpi["מחיר שוק"] > 0) & (_fxm_k > 0)
                             _enriched_kpi.loc[_has_k, "Current_Value_ILS"] = _vk[_has_k]
                             _tv = float(_enriched_kpi["Current_Value_ILS"].map(_num).sum())
                             if "Cost_ILS" in _enriched_kpi.columns:
@@ -12262,11 +12398,7 @@ def main() -> None:
                             _tp = _tv - _tc_val
                             # Rebuild summary for top-holding display
                             _enriched_kpi["Cost_Origin_With_Fee"] = _enriched_kpi["Cost_Origin"] + _enriched_kpi["Commission"]
-                            _enriched_kpi["Value_Origin_Est"] = np.where(
-                                _enriched_kpi["Origin_Currency"].str.upper() == "USD",
-                                _enriched_kpi["Current_Value_ILS"] / _ufx,
-                                _enriched_kpi["Current_Value_ILS"],
-                            )
+                            _enriched_kpi["Value_Origin_Est"] = _value_origin_series(_enriched_kpi, _ufx)
                             _live_sum = _enriched_kpi.groupby("Ticker", as_index=False).agg(
                                 Value_ILS=("Current_Value_ILS", "sum"),
                             )
@@ -12364,9 +12496,14 @@ def main() -> None:
                 type_upper = type_text.upper()
                 if ticker in CHART_STOCK_TICKERS:
                     return tr("Stocks", "מניות")
+                # Forced-ETF (incl. the crypto-proxy ETFs IBIT/ETHA/BSOL) wins over a
+                # crypto Type label so the allocation pie matches engine.js assetClass(),
+                # which returns "etf" for these. (audit sync-defs assetClass drift)
+                if ticker in CHART_FORCED_ETF_TICKERS:
+                    return tr("ETF", "ETF")
                 if (type_text == "קריפטו") or (type_upper == "CRYPTO") or (ticker in CHART_CRYPTO_TICKERS):
                     return tr("Crypto", "קריפטו")
-                if "ETF" in type_upper or type_text == "קרן סל" or ticker in CHART_FORCED_ETF_TICKERS:
+                if "ETF" in type_upper or type_text == "קרן סל":
                     return tr("ETF", "ETF")
                 return tr("Stocks", "מניות")
 
@@ -12413,8 +12550,14 @@ def main() -> None:
         with _alloc_charts_slot:
             col_a, col_b = st.columns(2)
             with col_a:
+                # Plotly pies cannot represent negative magnitudes — a holding whose ILS
+                # value went negative would be silently dropped/distorted while still
+                # counted in the KPI total. Filter to positive slices and note any
+                # exclusions so the pie reconciles with the totals. (audit bug-st)
+                _pie_src = summary[summary["Value_ILS"].map(_num) > 0] if "Value_ILS" in summary.columns else summary
+                _pie_excluded = len(summary) - len(_pie_src)
                 fig_pie = px.pie(
-                    summary,
+                    _pie_src,
                     names="Ticker",
                     values="Value_ILS",
                     title=tr("Portfolio Allocation by Asset", "חלוקת תיק לפי נכס"),
@@ -12430,7 +12573,10 @@ def main() -> None:
                     hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
                     textinfo="percent+label",
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), theme="streamlit", width="stretch")
+                if _pie_excluded > 0:
+                    st.caption(tr(f"{_pie_excluded} holding(s) with non-positive value excluded from the pie.",
+                                  f"{_pie_excluded} אחזקות עם שווי לא חיובי הוחרגו מהתרשים."))
             with col_b:
                 bar_df = pnl_by_asset if not pnl_by_asset.empty else summary[["Ticker", "Net_PnL_ILS"]].copy()
                 _bar_src = bar_df.sort_values("Net_PnL_ILS", ascending=False).copy()
@@ -12454,7 +12600,7 @@ def main() -> None:
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True), theme="streamlit", use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True), theme="streamlit", width="stretch")
 
             # ── Treemap: at-a-glance allocation + P/L color overlay ──
             if not summary.empty and float(summary["Value_ILS"].sum()) > 0:
@@ -12499,7 +12645,7 @@ def main() -> None:
                         margin=tree_margin,
                         coloraxis_colorbar=tree_colorbar,
                     )
-                    st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+                    st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
                 except Exception:
                     pass
 
@@ -12511,12 +12657,8 @@ def main() -> None:
                     fx_local = _usd_ils_rate()
                 local_df = enrich_open_trades_with_prices(local_open_trades.copy())
                 local_df["Cost_Origin_With_Fee"] = local_df["Cost_Origin"] + local_df["Commission"]
-                local_df["Cost_ILS_With_Fee"] = local_df["Cost_ILS"].map(_num) + _commission_ils_series(local_df, fx_local)
-                local_df["Value_Origin_Est"] = np.where(
-                    local_df["Origin_Currency"].str.upper() == "USD",
-                    local_df["Current_Value_ILS"] / fx_local,
-                    local_df["Current_Value_ILS"],
-                )
+                local_df["Cost_ILS_With_Fee"] = local_df["Cost_ILS"].map(_num)
+                local_df["Value_Origin_Est"] = _value_origin_series(local_df, fx_local)
                 # Detect tickers with mixed Origin_Currency (e.g. BTC bought on both
                 # Bit2C/ILS and Excellence/USD). Summing ILS costs with USD costs is
                 # arithmetically undefined — fall back to Yield_ILS for those tickers.
@@ -12621,10 +12763,10 @@ def main() -> None:
                         # natively via the Arrow grid (a real component, not sanitized HTML),
                         # so it ALWAYS shows. The old mobile path (st.table → markdown-HTML)
                         # left only the "טבלת חשיפה" title with no rows.
-                        st.dataframe(exposure_styled, use_container_width=True, hide_index=True)
+                        st.dataframe(exposure_styled, width="stretch", hide_index=True)
                     except Exception:
                         # Last-ditch: plain frame so the table can never silently vanish.
-                        st.dataframe(exposure_view, use_container_width=True, hide_index=True)
+                        st.dataframe(exposure_view, width="stretch", hide_index=True)
 
                 watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
                 category_labels = {
@@ -12671,7 +12813,7 @@ def main() -> None:
                                 _cols = st.columns(_wl_ncol)
                                 for _ci, row in enumerate(_chunk):
                                     with _cols[_ci]:
-                                        if st.button(row.Ticker, help=row.Title, use_container_width=True,
+                                        if st.button(row.Ticker, help=row.Title, width="stretch",
                                                      key=f"{widget_prefix}_watch_{catkey}_{_base + _ci}_{row.Symbol}"):
                                             st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
                                             st.session_state["tv_chart_open"] = True
@@ -12694,7 +12836,7 @@ def main() -> None:
                         tr("✕ Close", "✕ סגור"),
                         key=f"{widget_prefix}_tv_inline_close",
                         type="primary",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         st.session_state["tv_chart_open"] = False
                         st.session_state.pop("tv_chart_ticker", None)
@@ -12748,19 +12890,14 @@ def main() -> None:
                                 _price_cur = _enriched["Ticker"].map(
                                     lambda t: _yf_price_currency(_clean(t).upper())
                                 )
-                                _live_val = _qty * _enriched["מחיר שוק"] * _price_cur.map(
-                                    lambda c: _fx if c == "USD" else 1.0
-                                )
-                                _has = _enriched["מחיר שוק"] > 0
+                                _fxm = _price_cur.map(lambda c: _ils_per_native_unit(c, _fx))
+                                _live_val = _qty * _enriched["מחיר שוק"] * _fxm
+                                _has = (_enriched["מחיר שוק"] > 0) & (_fxm > 0)
                                 _enriched.loc[_has, "Current_Value_ILS"] = _live_val[_has]
                                 # Build summary directly from enriched data (skip re-enrichment)
                                 _enriched["Cost_Origin_With_Fee"] = _enriched["Cost_Origin"] + _enriched["Commission"]
-                                _enriched["Cost_ILS_With_Fee"] = _enriched["Cost_ILS"].map(_num) + _commission_ils_series(_enriched, _fx)
-                                _enriched["Value_Origin_Est"] = np.where(
-                                    _enriched["Origin_Currency"].str.upper() == "USD",
-                                    _enriched["Current_Value_ILS"] / _fx,
-                                    _enriched["Current_Value_ILS"],
-                                )
+                                _enriched["Cost_ILS_With_Fee"] = _enriched["Cost_ILS"].map(_num)
+                                _enriched["Value_Origin_Est"] = _value_origin_series(_enriched, _fx)
                                 live_summary = _enriched.groupby("Ticker", as_index=False).agg(
                                     Current_Price=("מחיר שוק", "max"),
                                     Open_Qty=("Quantity", "sum"),
@@ -12819,14 +12956,14 @@ def main() -> None:
                 with ov_col_a:
                     st.plotly_chart(
                         _apply_plotly_theme(fig_pie, is_dark, is_mobile),
-                        use_container_width=True,
+                        width="stretch",
                         theme="streamlit",
                         key="ov_mirror_pie",
                     )
                 with ov_col_b:
                     st.plotly_chart(
                         _apply_plotly_theme(fig_bar, is_dark, is_mobile, is_bar=True),
-                        use_container_width=True,
+                        width="stretch",
                         theme="streamlit",
                         key="ov_mirror_bar",
                     )
@@ -12903,7 +13040,7 @@ def main() -> None:
                             # Taller, more prominent on desktop; keep compact on mobile.
                             height=320 if is_mobile else 460,
                         )
-                        st.plotly_chart(_fig_track, theme=None, use_container_width=True)
+                        st.plotly_chart(_fig_track, theme=None, width="stretch")
                 except Exception:
                     pass
 
@@ -12929,18 +13066,13 @@ def main() -> None:
                                 _price_cur_ov = _ov_e["Ticker"].map(
                                     lambda t: _yf_price_currency(_clean(t).upper())
                                 )
-                                _vov = _qty_ov * _ov_e["מחיר שוק"] * _price_cur_ov.map(
-                                    lambda c: _fx_ov if c == "USD" else 1.0
-                                )
-                                _hov = _ov_e["מחיר שוק"] > 0
+                                _fxm_ov = _price_cur_ov.map(lambda c: _ils_per_native_unit(c, _fx_ov))
+                                _vov = _qty_ov * _ov_e["מחיר שוק"] * _fxm_ov
+                                _hov = (_ov_e["מחיר שוק"] > 0) & (_fxm_ov > 0)
                                 _ov_e.loc[_hov, "Current_Value_ILS"] = _vov[_hov]
                                 _ov_e["Cost_Origin_With_Fee"] = _ov_e["Cost_Origin"] + _ov_e["Commission"]
-                                _ov_e["Cost_ILS_With_Fee"] = _ov_e["Cost_ILS"].map(_num) + _commission_ils_series(_ov_e, _fx_ov)
-                                _ov_e["Value_Origin_Est"] = np.where(
-                                    _ov_e["Origin_Currency"].str.upper() == "USD",
-                                    _ov_e["Current_Value_ILS"] / _fx_ov,
-                                    _ov_e["Current_Value_ILS"],
-                                )
+                                _ov_e["Cost_ILS_With_Fee"] = _ov_e["Cost_ILS"].map(_num)
+                                _ov_e["Value_Origin_Est"] = _value_origin_series(_ov_e, _fx_ov)
                                 _ov_summary = _ov_e.groupby("Ticker", as_index=False).agg(
                                     Current_Price=("מחיר שוק", "max"),
                                     Open_Qty=("Quantity", "sum"),
@@ -13044,7 +13176,7 @@ def main() -> None:
                     )
                     st.plotly_chart(
                         _apply_plotly_theme(class_pie_fig, is_dark, is_mobile),
-                        use_container_width=True,
+                        width="stretch",
                         theme="streamlit",
                         key="alloc_class_pie",
                     )
@@ -13072,7 +13204,7 @@ def main() -> None:
                     )
                     st.plotly_chart(
                         _apply_plotly_theme(type_fig, is_dark, is_mobile),
-                        use_container_width=True,
+                        width="stretch",
                         theme="streamlit",
                         key="alloc_class_treemap",
                     )
@@ -13155,7 +13287,7 @@ def main() -> None:
                     else:
                         if signed_cols:
                             report_styled = _apply_signed_color(report_styled, signed_cols)
-                        _render_dataframe_adaptive(report_styled, is_mobile, use_container_width=True, hide_index=True)
+                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
@@ -13187,7 +13319,7 @@ def main() -> None:
                         if _rates:
                             _rdf = pd.DataFrame([{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in _rates.items()])
                             _rs = _rdf.style.format({tr("Rate", "שער"): "{:,.2f}"})
-                            _render_dataframe_adaptive(_rs, _mob_r, use_container_width=True, hide_index=True)
+                            _render_dataframe_adaptive(_rs, _mob_r, width="stretch", hide_index=True)
                         else:
                             st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
                     except Exception:
@@ -13201,7 +13333,7 @@ def main() -> None:
                     rates_df = pd.DataFrame(
                         [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
                     )
-                    _render_dataframe_adaptive(rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}), is_mobile, use_container_width=True, hide_index=True)
+                    _render_dataframe_adaptive(rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}), is_mobile, width="stretch", hide_index=True)
             st.divider()
 
         with tab_deposits:
@@ -13253,7 +13385,7 @@ def main() -> None:
 
             edited_df = st.data_editor(
                 edit_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 num_rows="dynamic",
                 key=f"manual_deposits_editor_{deposit_mode}",
@@ -13369,11 +13501,10 @@ def main() -> None:
                     _sale_sp = tx_view["Sell_Price_Origin"].map(_num) if "Sell_Price_Origin" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
                     _sale_ci = tx_view["Cost_ILS"].map(_num) if "Cost_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
                     _sale_vi = tx_view["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in tx_view.columns else pd.Series(0.0, index=tx_view.index)
-                    # Effective COMMISSION-INCLUSIVE ILS cost basis: stored Cost_ILS (+commission)
+                    # Effective ILS cost basis: stored Cost_ILS (already commission-inclusive)
                     # when present, else the frozen basis (Cost_Origin+Commission at buy-date FX)
                     # so the realized-ILS column populates even for legacy app-created sells whose
-                    # Cost_ILS is 0, and nets out commission. (audit fin-streamlit #1/#9/#10)
-                    _sale_comm_ils = _commission_ils_series(tx_view, _usd_ils_rate()) if not tx_view.empty else pd.Series(0.0, index=tx_view.index)
+                    # Cost_ILS is 0. (audit fin-streamlit #1/#9/#10)
                     _sale_ci_eff = tx_view.apply(
                         lambda r: float(_num(r.get("Cost_ILS", 0.0)))
                         if _num(r.get("Cost_ILS", 0.0)) != 0
@@ -13381,7 +13512,6 @@ def main() -> None:
                                                        r.get("Origin_Currency", ""), r.get("Purchase_Date", "")),
                         axis=1,
                     ) if not tx_view.empty else _sale_ci
-                    _sale_ci_eff = _sale_ci_eff + (_sale_comm_ils.where(_sale_ci != 0, 0.0))
                     # Origin-rate fallback requires a REAL sell price (sp>0); otherwise leave
                     # blank rather than emit a false -100% (e.g. CRK has no recorded sell price).
                     _sale_orig_fb = pd.Series(np.where((_sale_bp > 0) & (_sale_sp > 0), (_sale_sp - _sale_bp) / _sale_bp, np.nan), index=tx_view.index)
@@ -13539,7 +13669,7 @@ def main() -> None:
                 _styled2 = _dv.style
                 if _sfmt2: _styled2 = _styled2.format(_sfmt2, na_rep="")
                 if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
-                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, use_container_width=True, hide_index=True)
+                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True)
 
                 # ── Export bar — below the table ───────────────────────────
                 _is_he_tx = _lang.startswith("ע")
@@ -13552,7 +13682,7 @@ def main() -> None:
                         data=_dv.to_csv(index=False).encode("utf-8-sig"),
                         file_name=f"{_export_prefix}_{_ts_tx}.csv",
                         mime="text/csv",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"dl_csv_{_export_prefix}_{_ts_tx}",
                     )
                 with _ec2:
@@ -13561,7 +13691,7 @@ def main() -> None:
                         data=_dv.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
                         file_name=f"{_export_prefix}_{_ts_tx}.json",
                         mime="application/json",
-                        use_container_width=True,
+                        width="stretch",
                         key=f"dl_json_{_export_prefix}_{_ts_tx}",
                     )
                 with _ec3:
@@ -13572,7 +13702,7 @@ def main() -> None:
                             data=_xls_tx,
                             file_name=f"{_export_prefix}_{_ts_tx}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
+                            width="stretch",
                             key=f"dl_xlsx_{_export_prefix}_{_ts_tx}",
                         )
 
@@ -13643,12 +13773,10 @@ def main() -> None:
 
                         _ci = _tx["Cost_ILS"].map(_num) if "Cost_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
                         _vi = _tx["Current_Value_ILS"].map(_num) if "Current_Value_ILS" in _tx.columns else pd.Series(0.0, index=_tx.index)
-                        # Effective COMMISSION-INCLUSIVE ILS cost basis: (stored Cost_ILS +
-                        # commission_in_ILS) when Cost_ILS is present, else the frozen basis
-                        # (Cost_Origin+Commission at the buy-date FX) — so the realized-ILS column
-                        # and Yield_ILS both populate and net out commission even for legacy
-                        # app-created sells whose Cost_ILS is 0. (audit fin-streamlit #1/#9/#10)
-                        _comm_ils_tx = _commission_ils_series(_tx, _fx) if not _tx.empty else pd.Series(0.0, index=_tx.index)
+                        # Effective ILS cost basis: stored Cost_ILS (already commission-inclusive)
+                        # when present, else the frozen basis (Cost_Origin+Commission at the
+                        # buy-date FX) — so the realized-ILS column and Yield_ILS both populate
+                        # even for legacy app-created sells whose Cost_ILS is 0. (audit fin-streamlit #1/#9/#10)
                         _ci_eff = _tx.apply(
                             lambda r: float(_num(r.get("Cost_ILS", 0.0)))
                             if _num(r.get("Cost_ILS", 0.0)) != 0
@@ -13656,10 +13784,6 @@ def main() -> None:
                                                            r.get("Origin_Currency", ""), r.get("Purchase_Date", "")),
                             axis=1,
                         ) if not _tx.empty else _ci
-                        # Add commission to the STORED-Cost_ILS rows only (the frozen-fallback
-                        # already baked it in): mask where Cost_ILS was non-zero.
-                        _stored_mask = (_ci != 0)
-                        _ci_eff = _ci_eff + (_comm_ils_tx.where(_stored_mask, 0.0))
                         # Dedicated closed-trade sale returns: origin-rate (from Yield_At_Sale)
                         # and ₪-rate (STORED sale proceeds vs cost — NOT live prices; the sale
                         # already happened). Blank for open rows. Mirrors the static path above.
@@ -13678,13 +13802,13 @@ def main() -> None:
                             # FX multiplier must be based on yfinance quote currency, NOT Origin_Currency.
                             # BTC on Bit2C: Origin_Currency=ILS but price from yfinance is USD → must × FX.
                             _fxm_tx = _tx["Ticker"].map(
-                                lambda t: _fx if _yf_price_currency(_clean(t).upper()) == "USD" else 1.0
+                                lambda t: _ils_per_native_unit(_yf_price_currency(_clean(t).upper()), _fx)
                             ) if "Ticker" in _tx.columns else pd.Series(_fx, index=_tx.index)
                             _live_vi_tx = _qty_tx * _px_tx * _fxm_tx
                             # NEVER apply a live price to a CLOSED position — its value is frozen
                             # at the sale (proceeds × USD/ILS on the sell date). Overwriting it with
                             # today's market price would corrupt the realised ILS return.
-                            _has_live_tx = (_px_tx > 0) & (~_clm_f)
+                            _has_live_tx = (_px_tx > 0) & (_fxm_tx > 0) & (~_clm_f)
                             if _has_live_tx.any():
                                 _vi = _vi.copy()
                                 _vi[_has_live_tx] = _live_vi_tx[_has_live_tx]
@@ -13777,7 +13901,7 @@ def main() -> None:
                 "**FIFO = First-In-First-Out.** When you sell part of a position, the system assumes you are selling the OLDEST lots first. "
                 "This is the default accounting method for most tax jurisdictions (including Israel's מס רווחי הון) because it tends to produce the largest realised gain — and therefore the highest tax bill — when prices have risen. "
                 "\n\n**Why you care:**\n"
-                "1. **Realised P/L (רווח ממומש)** — the profit locked in on the lots you've already sold. This is what your tax liability is based on.\n"
+                "1. **Realised P/L (רווח ממומש)** — the profit locked in on the lots you've already sold. This is what your tax liability is based on. Note: this figure is NOMINAL and PRE-TAX — it is not inflation-indexed and the 25% Israeli capital-gains tax is not deducted here.\n"
                 "2. **Open Cost (עלות פתוחה)** — the remaining cost basis of lots you still hold. Compare it against current value to see unrealised P/L.\n"
                 "3. **Average Buy Price (מחיר קנייה ממוצע)** — weighted average of the still-open lots. Useful for quick break-even checks.\n"
                 "\n**Worked example:** you bought 10 BTC at ₪50K, later 10 more at ₪100K, then sold 10 BTC at ₪150K.\n"
@@ -13788,7 +13912,7 @@ def main() -> None:
                 "**FIFO = First-In-First-Out (ראשון-שנכנס-ראשון-שיוצא).** כאשר מוכרים חלק מפוזיציה, המערכת מניחה שהלוטים הוותיקים ביותר נמכרים קודם. "
                 "זוהי שיטת החשבונאות ברירת-המחדל ברוב מדינות העולם (כולל מס רווחי הון בישראל) כי היא נוטה לייצר את הרווח המוכר הגבוה ביותר — ובהתאם גם את חבות המס הגבוהה ביותר — כאשר המחירים עלו. "
                 "\n\n**למה חשוב לך:**\n"
-                "1. **רווח ממומש (Realized P/L)** — הרווח שכבר 'נעלת' על הלוטים שכבר מכרת. זהו הבסיס לחישוב המס.\n"
+                "1. **רווח ממומש (Realized P/L)** — הרווח שכבר 'נעלת' על הלוטים שכבר מכרת. זהו הבסיס לחישוב המס. שים לב: נתון זה הוא נומינלי ולפני מס — הוא אינו צמוד למדד ומס רווחי ההון (25%) אינו מנוכה כאן.\n"
                 "2. **עלות פתוחה (Open Cost)** — עלות הלוטים שעדיין מוחזקים. השוואה מול השווי הנוכחי נותנת רווח לא-ממומש.\n"
                 "3. **מחיר קנייה ממוצע** — ממוצע משוקלל של הלוטים הפתוחים. שימושי לבדיקה מהירה של נקודת איזון (break-even).\n"
                 "\n**דוגמה מעשית:** קנית 10 BTC ב-₪50K, ואז עוד 10 BTC ב-₪100K, ואז מכרת 10 BTC ב-₪150K.\n"
@@ -13848,7 +13972,7 @@ def main() -> None:
                     fifo_styled,
                     is_mobile,
                     force_same_render_path=True,
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -13910,7 +14034,7 @@ def main() -> None:
                 yaxis_tickformat=",.0f",
                 hovermode="x unified",
             )
-            st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", width="stretch")
 
         if total_value > 0:
             st.divider()
@@ -13939,7 +14063,7 @@ def main() -> None:
                 scenario_styled,
                 is_mobile,
                 force_same_render_path=True,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -14092,7 +14216,7 @@ def main() -> None:
             ).hexdigest()[:12]
             edited_manage_df = st.data_editor(
                 manage_select_view,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config=manage_date_cfg,
                 disabled=[c for c in manage_select_view.columns if c != select_col],
@@ -14276,18 +14400,32 @@ def main() -> None:
                             value=0.0,
                             help=field_help["Sell_Price_Origin"],
                         )
+                        _mark_total_loss = st.checkbox(
+                            tr("Mark as total loss (sold for nothing)", "סמן כהפסד מוחלט (נמכר ללא תמורה)"),
+                            value=False, key="add_sell_total_loss",
+                        )
                         new_row["Sell_Price_Origin"] = float(sell_price_origin)
 
                         ratio = (sell_qty / src_qty) if src_qty > 1e-12 else 0.0
                         allocated_cost = float(src_cost * ratio)
                         allocated_commission = float(src_commission * ratio)
-                        # Backdated sale: value proceeds at the sell-DATE FX (matching
-                        # GAS sRate), not today's spot; fall back to today's rate. (audit #9)
-                        if _normalize_currency_code(source_row.get("Origin_Currency", "")) == "USD":
-                            _sell_fx_hist = _usdils_on(sell_date_txt)
-                            fx_for_origin = _sell_fx_hist if _sell_fx_hist > 0 else manage_fx
-                        else:
+                        # Backdated sale: value proceeds at the sell-DATE FX (matching GAS
+                        # sRate), not today's spot. Generalized to every currency; warn the
+                        # user when the historical lookup fails so a spot-fallback isn't
+                        # silently frozen into the stored row. (audit #9, fin-fx)
+                        _sell_cur0 = _normalize_currency_code(source_row.get("Origin_Currency", ""))
+                        if _sell_cur0 in {"ILS", "ILA", ""}:
                             fx_for_origin = 1.0
+                        else:
+                            _pair0 = {"USD": "USDILS=X", "GBX": "GBPILS=X", "GBP": "GBPILS=X", "EUR": "EURILS=X"}.get(_sell_cur0, f"{_sell_cur0}ILS=X")
+                            _sell_fx_hist = _fx_pair_on(_pair0, sell_date_txt)
+                            if _sell_fx_hist and _sell_fx_hist > 0:
+                                fx_for_origin = _sell_fx_hist
+                            else:
+                                _live0 = _fx_pair_rate(_pair0) if _pair0 != "USDILS=X" else manage_fx
+                                fx_for_origin = float(_live0) if _live0 and _live0 > 0 else manage_fx
+                                st.warning(tr("Historical FX for the sell date was unavailable; using today's spot rate. Realized P&L may drift.",
+                                              "שער חליפין היסטורי לתאריך המכירה אינו זמין; נעשה שימוש בשער הנוכחי. הרווח הממומש עשוי לסטות."))
 
                         _sell_cur = _normalize_currency_code(source_row.get("Origin_Currency", ""))
                         # Freeze the closed slice's ILS cost basis at the BUY-date FX
@@ -14356,14 +14494,28 @@ def main() -> None:
                             }
                         )
                         sell_price_origin = st.number_input(tr("Sell price", "מחיר מכירה"), value=0.0, help=field_help["Sell_Price_Origin"])
+                        _mark_total_loss = st.checkbox(
+                            tr("Mark as total loss (sold for nothing)", "סמן כהפסד מוחלט (נמכר ללא תמורה)"),
+                            value=False, key="add_sell_total_loss_manual",
+                        )
                         new_row["Sell_Price_Origin"] = float(sell_price_origin)
-                        # Backdated sale: value proceeds at the sell-DATE FX (matching
-                        # GAS sRate), not today's spot; fall back to today's rate. (audit #9)
-                        if _normalize_currency_code(new_row.get("Origin_Currency", "")) == "USD":
-                            _sell_fx_hist_m = _usdils_on(_sell_date_manual)
-                            fx_for_origin = _sell_fx_hist_m if _sell_fx_hist_m > 0 else manage_fx
-                        else:
+                        # Backdated sale: value proceeds at the sell-DATE FX (matching GAS
+                        # sRate), not today's spot. Generalized to every currency; warn when
+                        # the historical lookup fails so a spot-fallback isn't silently
+                        # frozen into the stored row. (audit #9, fin-fx)
+                        _sell_cur_m = _normalize_currency_code(new_row.get("Origin_Currency", ""))
+                        if _sell_cur_m in {"ILS", "ILA", ""}:
                             fx_for_origin = 1.0
+                        else:
+                            _pair_m = {"USD": "USDILS=X", "GBX": "GBPILS=X", "GBP": "GBPILS=X", "EUR": "EURILS=X"}.get(_sell_cur_m, f"{_sell_cur_m}ILS=X")
+                            _sell_fx_hist_m = _fx_pair_on(_pair_m, _sell_date_manual)
+                            if _sell_fx_hist_m and _sell_fx_hist_m > 0:
+                                fx_for_origin = _sell_fx_hist_m
+                            else:
+                                _live_m = _fx_pair_rate(_pair_m) if _pair_m != "USDILS=X" else manage_fx
+                                fx_for_origin = float(_live_m) if _live_m and _live_m > 0 else manage_fx
+                                st.warning(tr("Historical FX for the sell date was unavailable; using today's spot rate. Realized P&L may drift.",
+                                              "שער חליפין היסטורי לתאריך המכירה אינו זמין; נעשה שימוש בשער הנוכחי. הרווח הממומש עשוי לסטות."))
                         new_row["Current_Value_ILS"] = float(new_row["Quantity"] * sell_price_origin * fx_for_origin)
                         # Freeze the ILS cost basis at the BUY-date FX (Cost_Origin +
                         # buy commission) so realized P&L is deterministic / the
@@ -14412,7 +14564,7 @@ def main() -> None:
                     )
 
                 new_row["Trade_ID"] = _to_trade_id(pd.Series(new_row))
-                submitted = st.form_submit_button(tr("💾 Save trade", "💾 שמור עסקה"), type="primary", use_container_width=True)
+                submitted = st.form_submit_button(tr("💾 Save trade", "💾 שמור עסקה"), type="primary", width="stretch")
 
             if submitted:
                 if not write_enabled:
@@ -14428,8 +14580,13 @@ def main() -> None:
                         s_dt = _parse_dates_flexible(pd.Series([new_row.get("Sell_Date", "")])).iloc[0]
                         if pd.notna(p_dt) and pd.notna(s_dt) and s_dt < p_dt:
                             add_errors.append(tr("Sell date cannot be earlier than purchase date.", "תאריך מכירה לא יכול להיות מוקדם מתאריך הקנייה."))
-                        if float(_num(new_row.get("Current_Value_ILS", 0.0))) <= 0:
-                            add_errors.append(tr("For SELL, sale price must produce a positive sale value.", "בעסקת מכירה, מחיר המכירה חייב להפיק שווי מכירה חיובי."))
+                        # Allow a zero-proceeds SELL only when explicitly marked a TOTAL LOSS
+                        # (write-off). FIFO books it as a realized loss; rejecting it omitted a
+                        # real loss from the closed record. (audit fin-tax total-loss)
+                        _is_total_loss = bool(st.session_state.get("add_sell_total_loss")) or bool(st.session_state.get("add_sell_total_loss_manual"))
+                        _sale_val = float(_num(new_row.get("Current_Value_ILS", 0.0)))
+                        if _sale_val < 0 or (_sale_val == 0 and not _is_total_loss):
+                            add_errors.append(tr("For SELL, sale price must produce a positive sale value (or tick 'Mark as total loss').", "בעסקת מכירה, מחיר המכירה חייב להפיק שווי מכירה חיובי (או סמן 'הפסד מוחלט')."))
 
                     if add_errors:
                         for e in add_errors:
@@ -14723,7 +14880,7 @@ def main() -> None:
                     # otherwise forces Streamlit's native (light) theme onto it.
                     title_font=dict(color="#f1f5f9" if is_dark else "#0f172a"),
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True), theme=None, use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(fig_cc, is_dark, is_mobile, is_bar=True), theme=None, width="stretch")
             except Exception:
                 pass
 
@@ -14780,7 +14937,7 @@ def main() -> None:
                 recent_styled,
                 is_mobile,
                 force_same_render_path=True,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
 
@@ -14795,7 +14952,7 @@ def main() -> None:
         status_counts_view = status_counts_view.rename(columns={"Status": SNAPSHOT_HEADERS["Status"][language], "count": tr("Count", "כמות")})
         st.dataframe(status_counts_view)
         fig = px.pie(status_counts, names="Status", values="count", title=tr("Trade Status Distribution", "פיזור סטטוסי עסקאות"), template=template)
-        st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", use_container_width=True)
+        st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", width="stretch")
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
         _render_recent_data_table(df)
