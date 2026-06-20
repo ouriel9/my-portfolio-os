@@ -367,7 +367,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r16"
+APP_BUILD = "2026-06-20 · r17"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1610,27 +1610,21 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             transition: none !important;
             animation: none !important;
         }}
-        [data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
-        [data-testid="stSidebar"][data-pp-collapsed="false"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarContent"],
-        [data-testid="stSidebar"][data-pp-collapsed="false"] [data-testid="stSidebarContent"] {{
-            border-left: 1px solid #eef2f7 !important;
-        }}
+        /* Collapsed cosmetics ONLY — rely on Streamlit's NATIVE off-screen collapse.
+           CRITICAL FIX (r17): the old rule keyed the content's `display:none` on a
+           JS-stamped `data-pp-collapsed` hook. On cold-start that hook raced AHEAD of
+           Streamlit's real `aria-expanded` and got stuck at "true" while the drawer was
+           visually OPEN (aria-expanded="true") → the content was display:none'd → a
+           dark, EMPTY sidebar until a refresh. PROVEN with _diag_emptysidebar.py
+           (aria=true + pp-collapsed=true → content display:none, width:0).
+           Now: visibility depends ONLY on Streamlit's reliable aria-expanded, and we
+           NEVER display:none / width:0 the content (no way to hide it while open). */
         [data-testid="stSidebar"][aria-expanded="false"] > div:first-child,
-        [data-testid="stSidebar"][data-pp-collapsed="true"] > div:first-child,
-        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"],
-        [data-testid="stSidebar"][data-pp-collapsed="true"] [data-testid="stSidebarContent"] {{
+        [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
             border: 0 !important;
             background: transparent !important;
             background-color: transparent !important;
             box-shadow: none !important;
-            display: none !important;
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            padding: 0 !important;
-            margin: 0 !important;
-            overflow: hidden !important;
         }}
         [data-testid="stSidebar"] *,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] * {{
@@ -3369,17 +3363,18 @@ def inject_client_fixes() -> None:
               return null;
             }
 
+            // Only block elements that OWN a horizontal gesture: form controls and
+            // horizontally-scrollable data tables. Charts (plotly donut/pie) and the
+            // (height:0) component iframes are NOT blocked — the user naturally swipes
+            // over the donut, and blocking it made the swipe feel "dead". (r17 swipe fix)
             const blockedSelector = [
               'input', 'textarea', 'select',
-              '.js-plotly-plot',
               '[data-testid="stDataFrame"]',
-              '[data-testid="stTable"]',
               '[data-testid="stDataEditor"]',
-              'iframe',
               '[data-no-swipe]'
             ].join(',');
 
-            let startX = 0, startY = 0, locked = false;
+            let startX = 0, startY = 0, startT = 0, locked = false;
 
             rootDoc.addEventListener('touchstart', (e) => {
               locked = false;
@@ -3389,8 +3384,30 @@ def inject_client_fixes() -> None:
               if (!getContentTabList()) return;
               startX = e.touches[0].clientX;
               startY = e.touches[0].clientY;
+              startT = (e.timeStamp || 0);
               locked = true;
             }, { passive: true, capture: true });
+
+            function doSwipe(dx, dy, dt) {
+              // Require a clear, reasonably-fast horizontal flick: >40px horizontal,
+              // horizontal dominates vertical, and not a slow drag (avoids fighting scroll).
+              if (Math.abs(dx) < 40) return;
+              if (Math.abs(dx) < Math.abs(dy) * 1.2) return;
+              if (dt && dt > 800) return;
+              const found = getContentTabList();
+              if (!found) return;
+              const { tabs } = found;
+              const activeIdx = tabs.findIndex(t => t.getAttribute('aria-selected') === 'true');
+              if (activeIdx < 0) return;
+              // In RTL (Hebrew) the visual tab order is mirrored, but the DOM tab order
+              // is NOT — keep index math in DOM order so left/right stay intuitive:
+              // swipe left (dx<0) = next tab; swipe right (dx>0) = previous tab.
+              const nextIdx = dx < 0 ? activeIdx + 1 : activeIdx - 1;
+              if (nextIdx >= 0 && nextIdx < tabs.length) {
+                tabs[nextIdx].click();
+                try { tabs[nextIdx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' }); } catch (e) {}
+              }
+            }
 
             rootDoc.addEventListener('touchend', (e) => {
               if (!locked) return;
@@ -3398,22 +3415,8 @@ def inject_client_fixes() -> None:
               if (!e.changedTouches || !e.changedTouches.length) return;
               const dx = e.changedTouches[0].clientX - startX;
               const dy = e.changedTouches[0].clientY - startY;
-              // Must be >45px horizontal and more horizontal than vertical
-              if (Math.abs(dx) < 45 || Math.abs(dy) > Math.abs(dx) * 0.65) return;
-
-              const found = getContentTabList();
-              if (!found) return;
-              const { tabs } = found;
-
-              const activeIdx = tabs.findIndex(t => t.getAttribute('aria-selected') === 'true');
-              if (activeIdx < 0) return;
-
-              // dx < 0 = swipe left = next tab; dx > 0 = swipe right = prev tab
-              const nextIdx = dx < 0 ? activeIdx + 1 : activeIdx - 1;
-              if (nextIdx >= 0 && nextIdx < tabs.length) {
-                tabs[nextIdx].click();
-                tabs[nextIdx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-              }
+              const dt = (e.timeStamp || 0) - startT;
+              doSwipe(dx, dy, dt);
             }, { passive: true, capture: true });
 
             rootWin.__pmSwipeBound = true;
@@ -3620,36 +3623,13 @@ def inject_client_fixes() -> None:
           // gives the CSS a reliable hook to fully hide the collapsed
           // sidebar (no leftover sliver/shadow). A dedicated observer below
           // re-syncs on every toggle.
-          function syncSidebarCollapsed() {
-            try {
-              rootDoc.querySelectorAll('section[data-testid="stSidebar"]').forEach(function(e){
-                var ae = e.getAttribute('aria-expanded');
-                if (ae !== null) {
-                  // Mirror Streamlit's aria-expanded into our stable data hook, but DO
-                  // NOT remove aria-expanded — Streamlit's own open/close (and the width
-                  // it sets) depend on it; stripping it left the mobile sidebar stuck at
-                  // width:0 ("menu button does nothing"). The a11y aria-allowed-attr note
-                  // is Streamlit's own markup; a working menu outranks that lint.
-                  e.setAttribute('data-pp-collapsed', ae === 'false' ? 'true' : 'false');
-                }
-              });
-            } catch(e){}
-          }
-          function watchSidebarToggle() {
-            if (rootDoc.__ppSbWatch) return;
-            var sb = rootDoc.querySelector('section[data-testid="stSidebar"]');
-            if (!sb) return;
-            rootDoc.__ppSbWatch = true;
-            try {
-              var mo = new MutationObserver(syncSidebarCollapsed);
-              // Watch the sidebar AND its parent (Streamlit sometimes carries
-              // the expanded flag on the container) for aria-expanded only —
-              // narrow filter, no loop (removing aria-expanded re-fires but
-              // reads null and no-ops).
-              mo.observe(sb, { attributes: true, attributeFilter: ['aria-expanded'] });
-              if (sb.parentElement) mo.observe(sb.parentElement, { attributes: true, attributeFilter: ['aria-expanded'], subtree: true });
-            } catch(e){}
-          }
+          // REMOVED (r17): the data-pp-collapsed mirror + its MutationObserver. It
+          // raced ahead of Streamlit's aria-expanded on cold-start and got stuck
+          // "true" while the drawer was open, which the CSS turned into an EMPTY
+          // sidebar (content display:none). The CSS now keys purely off Streamlit's
+          // native aria-expanded, so this JS hook is both unnecessary and harmful.
+          function syncSidebarCollapsed() { /* intentionally a no-op — see note above */ }
+          function watchSidebarToggle() { /* intentionally a no-op — see note above */ }
 
           function fixA11y() {
             try {
