@@ -1,5 +1,6 @@
 import hashlib
 import json
+import secrets as _secrets
 import os
 import re
 import socket
@@ -190,6 +191,25 @@ def _resolve_data_dir() -> Path:
 
 _DATA_DIR = _resolve_data_dir()
 LOCAL_SETTINGS_FILE = _DATA_DIR / "app_local_config.json"
+APP_LOCK_FILE = _DATA_DIR / "app_lock.json"  # passcode lock (hash+salt), per device
+
+
+def _lock_load() -> dict:
+    try:
+        return json.loads(APP_LOCK_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _lock_save(d: dict) -> None:
+    try:
+        APP_LOCK_FILE.write_text(json.dumps(d), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _lock_hash(pin: str, salt: str) -> str:
+    return hashlib.sha256((salt + str(pin)).encode("utf-8")).hexdigest()
 DEFAULT_SERVICE_ACCOUNT_FILE = _DATA_DIR / "clean-linker-492313-s3-770814e64205.json"
 DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7OQVPLflfN2rufBhAT5-fzmjy8iEVFMmNLZlK_CeI4MFvx1dijZF/exec"
@@ -298,7 +318,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r9"
+APP_BUILD = "2026-06-20 · r10"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1114,62 +1134,11 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         transition: transform 0.42s cubic-bezier(0.16, 1, 0.3, 1),
                     opacity  0.30s ease-out !important;
     }}
-    /* Collapsed: spring off-screen LEFT. The full hide (width/shadow/sliver)
-       is enforced by the [data-pp-collapsed="true"] rule below, which our JS
-       stamps reliably (aria-expanded is stripped for a11y). */
-    section[data-testid="stSidebar"][aria-expanded="false"],
-    section[data-testid="stSidebar"][data-pp-collapsed="true"] {{
-        /* Hide via width:0 + opacity + overflow (NOT transform): a translateX parent
-           becomes the containing block for the fixed-positioned expand button inside it,
-           pushing the button off-screen so the sidebar can never be reopened. No
-           visibility:hidden / pointer-events:none either — they kill the expand button. */
-        transform: none !important;
-        opacity: 0 !important;
-        width: 0 !important;
-        min-width: 0 !important;
-        max-width: 0 !important;
-        margin: 0 !important;
-        border: 0 !important;
-        box-shadow: none !important;
-        overflow: hidden !important;
-    }}
-    /* The expand/menu button must ALWAYS be visible, on-screen and clickable — even when
-       the sidebar is collapsed — otherwise once you close the sidebar you can never reopen
-       it (the reported Android bug). Pin it top-start, above everything. */
-    [data-testid="stExpandSidebarButton"] {{
-        position: fixed !important;
-        top: calc(0.45rem + env(safe-area-inset-top, 0px)) !important;
-        left: 0.45rem !important;
-        visibility: visible !important;
-        opacity: 1 !important;
-        pointer-events: auto !important;
-        transform: none !important;
-        width: auto !important;
-        height: auto !important;
-        overflow: visible !important;
-        z-index: 2147483646 !important;
-    }}
-    section[data-testid="stSidebar"][data-pp-collapsed="true"] > div:first-child,
-    section[data-testid="stSidebar"][data-pp-collapsed="true"] [data-testid="stSidebarContent"],
-    section[data-testid="stSidebar"][data-pp-collapsed="true"] > div {{
-        box-shadow: none !important;
-        border: 0 !important;
-        display: none !important;
-    }}
-    /* Expanded: spring into view. MUST restore width/min/max — the collapsed rule
-       forces them to 0 !important, and Streamlit does not always re-set an inline
-       width when opening on mobile, so without this the sidebar opens to 0px (the
-       "menu button does nothing" bug). */
-    section[data-testid="stSidebar"][aria-expanded="true"],
-    section[data-testid="stSidebar"][data-pp-collapsed="false"] {{
-        transform: translateX(0) !important;
-        opacity: 1 !important;
-        pointer-events: auto !important;
-        visibility: visible !important;
-        width: min(80vw, 22rem) !important;
-        min-width: 16rem !important;
-        max-width: 80vw !important;
-    }}
+    /* NATIVE SIDEBAR: all custom collapsed/expanded overrides removed. The data-pp-collapsed
+       machinery + width/transform/visibility/pointer-events hacks fought Streamlit's native
+       mobile open/close and scroll-lock and were the root of the menu-won't-reopen and
+       broken-vertical-scroll bugs on Android. Streamlit handles the sidebar open/close, width,
+       slide animation, backdrop and scroll-lock natively. (android sidebar: stop fighting Streamlit) */
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
     [data-testid="stSidebar"] .nav-link {{
@@ -1564,31 +1533,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             left: 0 !important;
             right: auto !important;
         }}
-        [data-testid="stSidebar"][aria-expanded="false"],
-        [data-testid="stSidebar"][data-pp-collapsed="true"] {{
-            /* MOBILE collapsed: hide via width:0 + opacity + overflow only.
-               NO transform:translateX(-100%) — it makes the collapsed <section> the
-               containing block for the fixed expand button inside it (pushing it off-screen
-               so the menu can never reopen) and is implicated in the broken vertical scroll
-               after opening the sidebar mid-load. NO visibility:hidden / pointer-events:none
-               either — they disable the expand button. (android reopen + scroll fix) */
-            width: 0 !important;
-            min-width: 0 !important;
-            max-width: 0 !important;
-            background: transparent !important;
-            background-color: transparent !important;
-            border: 0 !important;
-            box-shadow: none !important;
-            overflow: hidden !important;
-            opacity: 0 !important;
-        }}
-        [data-testid="stSidebar"][aria-expanded="true"],
-        [data-testid="stSidebar"][data-pp-collapsed="false"] {{
-            width: 280px !important;
-            min-width: 280px !important;
-            max-width: 82vw !important;
-            opacity: 1 !important;
-        }}
+        /* NATIVE: no custom collapsed/expanded width overrides on mobile — Streamlit's
+           native sidebar open/close + scroll-lock handle it. (android sidebar fix) */
         [data-testid="stSidebar"] > div:first-child,
         [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
             background: {sidebar_bg} !important;
@@ -3473,25 +3419,7 @@ def inject_client_fixes() -> None:
                 '  transition: transform 0.42s cubic-bezier(0.16,1,0.3,1),',
                 '              opacity 0.30s ease-out !important;',
                 '}',
-                'section[data-testid="stSidebar"][aria-expanded="false"],',
-                'section[data-testid="stSidebar"][data-pp-collapsed="true"],',
-                '[data-testid="stSidebar"][aria-expanded="false"],',
-                '[data-testid="stSidebar"][data-pp-collapsed="true"] {',
-                '  opacity: 0 !important;',
-                '  width: 0 !important; min-width: 0 !important; max-width: 0 !important;',
-                '  border: 0 !important; box-shadow: none !important;',
-                '  overflow: hidden !important;',
-                '}',
-                'section[data-testid="stSidebar"][aria-expanded="true"],',
-                'section[data-testid="stSidebar"][data-pp-collapsed="false"],',
-                '[data-testid="stSidebar"][aria-expanded="true"],',
-                '[data-testid="stSidebar"][data-pp-collapsed="false"] {',
-                '  transform: none !important;',
-                '  opacity: 1 !important;',
-                '  visibility: visible !important;',
-                '  pointer-events: auto !important;',
-                '  width: min(80vw, 22rem) !important; min-width: 16rem !important; max-width: 80vw !important;',
-                '}',
+                '/* native sidebar: collapsed/expanded overrides removed — Streamlit handles open/close + scroll-lock */',
               ].join('\\n');
               if (pmStyle.textContent !== css) pmStyle.textContent = css;
             } catch (e) { /* cross-origin iframe – skip */ }
@@ -11412,6 +11340,29 @@ def main() -> None:
 
     language = st.sidebar.selectbox("Language" if language_default == LANG_EN else "שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
     tr = (lambda en, he: he if language == LANG_HE else en)
+
+    # ── App lock (passcode gate): if a passcode is set, require it before the app renders ──
+    _lk = _lock_load()
+    if _lk.get("pin_hash") and not st.session_state.get("_app_unlocked"):
+        st.markdown(
+            "<div style='max-width:380px;margin:14vh auto 1rem;text-align:center'>"
+            "<div style='font-size:3rem;line-height:1'>🔒</div>"
+            f"<h2 style='margin:.4rem 0'>{tr('Locked', 'נעול')}</h2>"
+            f"<div style='opacity:.7'>{tr('Enter your passcode to continue', 'הזן את קוד הגישה כדי להמשיך')}</div></div>",
+            unsafe_allow_html=True,
+        )
+        _lc1, _lc2, _lc3 = st.columns([1, 2, 1])
+        with _lc2:
+            _pin = st.text_input(tr("Passcode", "קוד גישה"), type="password", key="_lock_pin_input",
+                                 label_visibility="collapsed", placeholder=tr("Passcode", "קוד גישה"))
+            if st.button(tr("Unlock", "פתיחה"), key="_lock_unlock_btn", use_container_width=True, type="primary"):
+                if _pin and _lock_hash(_pin, _lk.get("salt", "")) == _lk.get("pin_hash"):
+                    st.session_state["_app_unlocked"] = True
+                    st.rerun()
+                else:
+                    st.error(tr("Wrong passcode", "קוד שגוי"))
+        st.stop()
+
     theme_label_to_value = {
         tr("System", "מערכת"): THEME_SYSTEM,
         tr("Light", "בהיר"): THEME_LIGHT,
@@ -11426,6 +11377,28 @@ def main() -> None:
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
     st.sidebar.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
+
+    # ── App lock settings (set / change / remove passcode) ──
+    with st.sidebar.expander(tr("🔒 App lock", "🔒 נעילה")):
+        _lk_now = _lock_load()
+        if _lk_now.get("pin_hash"):
+            st.caption("🟢 " + tr("Lock is ON", "הנעילה פעילה"))
+            if st.button(tr("Remove lock", "הסר נעילה"), key="_lock_remove_btn", use_container_width=True):
+                _lock_save({})
+                st.session_state["_app_unlocked"] = True
+                st.rerun()
+            st.divider()
+        _newpin = st.text_input(tr("Set / change passcode (4+ chars)", "קבע / שנה קוד (4+ תווים)"),
+                                type="password", key="_lock_newpin")
+        if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", use_container_width=True):
+            if len(str(_newpin)) >= 4:
+                _salt = _secrets.token_hex(8)
+                _lock_save({"pin_hash": _lock_hash(_newpin, _salt), "salt": _salt})
+                st.session_state["_app_unlocked"] = True
+                st.success(tr("Passcode set — it will be required next time you open the app.",
+                              "הקוד נשמר — יידרש בפעם הבאה שתפתח את האפליקציה."))
+            else:
+                st.error(tr("At least 4 characters", "לפחות 4 תווים"))
 
     # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
     # share the same preference on next page load — writes to the shared server-side JSON.

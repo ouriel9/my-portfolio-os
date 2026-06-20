@@ -111,3 +111,6 @@ apk_streamlit/node_modules/
 apk_streamlit/android/
 _AUDIT_FIX_PLAN.md
 _FIX_WORKFLOW_OUTPUT.json
+
+# per-device passcode lock (hash) — never commit
+app_lock.json
