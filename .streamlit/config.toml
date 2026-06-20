@@ -31,6 +31,16 @@ secondaryBackgroundColor = "#1e293b"
 textColor = "#e2e8f0"
 borderColor = "#1e293b"
 
+# Belt-and-suspenders: if a session ever resolves to the LIGHT base (e.g. a stale
+# persisted "light" preference), the sidebar must STILL paint dark natively — the
+# app is dark-first and a white sidebar is the bug we are killing. So the light
+# base's sidebar token is dark too.
+[theme.light.sidebar]
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#e2e8f0"
+borderColor = "#1e293b"
+
 [server]
 runOnSave = true
 headless = true

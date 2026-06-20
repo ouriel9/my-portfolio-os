@@ -367,7 +367,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r15"
+APP_BUILD = "2026-06-20 · r16"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -640,19 +640,18 @@ def _normalize_theme_mode(theme_mode: str) -> str:
 
 
 def _resolve_theme_base(theme_mode: str) -> str:
-    # The Aurora (v2) design is inherently dark — force the whole app into dark
-    # mode so the base dark CSS (dropdowns, tooltips, inputs, tables) applies
-    # underneath the Aurora overlay, instead of light elements showing through.
-    import os as _os
-    if _os.environ.get("PP_DESIGN_V2"):
-        return THEME_DARK
-    mode = _normalize_theme_mode(theme_mode)
-    if mode == THEME_LIGHT:
-        return THEME_LIGHT
-    if mode == THEME_DARK:
-        return THEME_DARK
-    detected = (_clean(st.get_option("theme.base")) or THEME_LIGHT).lower()
-    return THEME_DARK if detected == THEME_DARK else THEME_LIGHT
+    # This product ships a SINGLE, polished dark design. Both premium overlays
+    # (the 2026 overlay and the Aurora v2 build) are inherently dark, and the
+    # static Streamlit theme (config.toml base = "dark") paints the native shell
+    # dark on first frame. A LIGHT app-theme on top of that dark native shell
+    # produced a broken MIXED UI — most visibly an all-WHITE sidebar drawer on
+    # mobile cold-start, where the app forced the sidebar to #ffffff over the dark
+    # canvas. There is no static config that can match a per-session light theme,
+    # so we align the app to the native base: always dark. This guarantees a
+    # consistent dark app (dark sidebar + dark widgets + light text) with no white
+    # flash and no light-on-light contrast. The Appearance selector is retained
+    # for forward-compat but the shipped design renders dark.
+    return THEME_DARK
 
 
 def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
@@ -665,7 +664,7 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     align = "right" if rtl else "left"
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
-    sidebar_bg = "#1E1E1E" if is_dark else "#f8f9fa"
+    sidebar_bg = "#1E1E1E" if is_dark else "#0f172a"  # dark sidebar in both themes (dark-first app; avoids white drawer)
     metric_bg = "#2B2B2B" if is_dark else "#ffffff"
     metric_border = "#3a3a3a" if is_dark else "#e8ecf3"
     metric_text = "#f8fafc" if is_dark else "#0f172a"
@@ -2627,7 +2626,7 @@ def _inject_design_overlay(is_dark: bool) -> None:
         val_col = "#0b1220"
         lab_col = "#5b6b85"
         accent_glow = "rgba(99,102,241,.34)"
-        sidebar_bg = "linear-gradient(180deg, #ffffff 0%, #eef2fb 100%)"
+        sidebar_bg = "linear-gradient(180deg, #0f1729 0%, #0a0f1c 100%)"  # dark sidebar even in light theme (dark-first app; avoids white drawer)
     st.markdown(f"""
     <style id="pp-design-2026">
     /* ===================== PP-DESIGN-2026 (premium overlay) ===================== */
@@ -11402,7 +11401,9 @@ def main() -> None:
     language_default = _clean(settings.get("language", DEFAULT_LANGUAGE)) or DEFAULT_LANGUAGE
     if language_default not in {LANG_EN, LANG_HE}:
         language_default = DEFAULT_LANGUAGE
-    theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_SYSTEM))
+    # Dark-first product: a fresh/unset install defaults to (and renders) Dark, so
+    # the Appearance control matches the actual dark render (see _resolve_theme_base).
+    theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_DARK))
 
     if "demo_mode_persist" not in st.session_state:
         st.session_state["demo_mode_persist"] = bool(settings.get("demo_mode", False))
@@ -11966,8 +11967,17 @@ def main() -> None:
         "html body .app-header-wrap .app-logo-icon svg{width:40px !important;height:40px !important;}"
         # #11 content not hidden behind the sticky nav
         ".main .block-container{scroll-margin-top:84px !important;}"
-        # #5 sidebar fully opaque so dashboard text doesn't bleed through the drawer
-        "[data-testid='stSidebar']{background:%s !important;backdrop-filter:none !important;}" % ("#0f172a" if is_dark else "#ffffff")
+        # #5 sidebar fully opaque so dashboard text doesn't bleed through the drawer.
+        # Dark in BOTH themes: this app is dark-first, and a light sidebar showed up
+        # as an all-WHITE drawer on mobile cold-start (the expanded overlay has no
+        # app-painted bg yet). A dark sidebar reads correctly over light OR dark content.
+        "[data-testid='stSidebar']{background:#0f172a !important;backdrop-filter:none !important;}"
+        # Sidebar is always dark now → force its text/labels light so a light-theme
+        # session doesn't render dark-on-dark (invisible) sidebar labels/captions.
+        "[data-testid='stSidebar'] label,[data-testid='stSidebar'] p,[data-testid='stSidebar'] span,"
+        "[data-testid='stSidebar'] h1,[data-testid='stSidebar'] h2,[data-testid='stSidebar'] h3,"
+        "[data-testid='stSidebar'] [data-testid='stWidgetLabel'],"
+        "[data-testid='stSidebar'] [data-testid='stMarkdownContainer']{color:#e2e8f0 !important;}"
     )
     if is_mobile:
         # dim the page behind the open mobile drawer
