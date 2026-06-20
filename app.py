@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r5"
+APP_BUILD = "2026-06-20 · r6"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1119,9 +1119,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
        stamps reliably (aria-expanded is stripped for a11y). */
     section[data-testid="stSidebar"][aria-expanded="false"],
     section[data-testid="stSidebar"][data-pp-collapsed="true"] {{
-        transform: translateX(-100%) !important;
+        /* Hide via width:0 + opacity + overflow (NOT transform): a translateX parent
+           becomes the containing block for the fixed-positioned expand button inside it,
+           pushing the button off-screen so the sidebar can never be reopened. No
+           visibility:hidden / pointer-events:none either — they kill the expand button. */
+        transform: none !important;
         opacity: 0 !important;
-        pointer-events: none !important;
         width: 0 !important;
         min-width: 0 !important;
         max-width: 0 !important;
@@ -1129,7 +1132,22 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         border: 0 !important;
         box-shadow: none !important;
         overflow: hidden !important;
-        visibility: hidden !important;
+    }}
+    /* The expand/menu button must ALWAYS be visible, on-screen and clickable — even when
+       the sidebar is collapsed — otherwise once you close the sidebar you can never reopen
+       it (the reported Android bug). Pin it top-start, above everything. */
+    [data-testid="stExpandSidebarButton"] {{
+        position: fixed !important;
+        top: calc(0.45rem + env(safe-area-inset-top, 0px)) !important;
+        left: 0.45rem !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        transform: none !important;
+        width: auto !important;
+        height: auto !important;
+        overflow: visible !important;
+        z-index: 2147483646 !important;
     }}
     section[data-testid="stSidebar"][data-pp-collapsed="true"] > div:first-child,
     section[data-testid="stSidebar"][data-pp-collapsed="true"] [data-testid="stSidebarContent"],
