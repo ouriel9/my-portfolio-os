@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r7"
+APP_BUILD = "2026-06-20 · r8"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1566,6 +1566,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         }}
         [data-testid="stSidebar"][aria-expanded="false"],
         [data-testid="stSidebar"][data-pp-collapsed="true"] {{
+            /* MOBILE collapsed: hide via width:0 + opacity + overflow only.
+               NO transform:translateX(-100%) — it makes the collapsed <section> the
+               containing block for the fixed expand button inside it (pushing it off-screen
+               so the menu can never reopen) and is implicated in the broken vertical scroll
+               after opening the sidebar mid-load. NO visibility:hidden / pointer-events:none
+               either — they disable the expand button. (android reopen + scroll fix) */
             width: 0 !important;
             min-width: 0 !important;
             max-width: 0 !important;
@@ -1575,9 +1581,6 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             box-shadow: none !important;
             overflow: hidden !important;
             opacity: 0 !important;
-            transform: translateX(-100%) !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"],
         [data-testid="stSidebar"][data-pp-collapsed="false"] {{
@@ -3474,20 +3477,20 @@ def inject_client_fixes() -> None:
                 'section[data-testid="stSidebar"][data-pp-collapsed="true"],',
                 '[data-testid="stSidebar"][aria-expanded="false"],',
                 '[data-testid="stSidebar"][data-pp-collapsed="true"] {',
-                '  transform: translateX(-100%) !important;',
                 '  opacity: 0 !important;',
                 '  width: 0 !important; min-width: 0 !important; max-width: 0 !important;',
                 '  border: 0 !important; box-shadow: none !important;',
-                '  overflow: hidden !important; visibility: hidden !important;',
-                '  pointer-events: none !important;',
+                '  overflow: hidden !important;',
                 '}',
                 'section[data-testid="stSidebar"][aria-expanded="true"],',
                 'section[data-testid="stSidebar"][data-pp-collapsed="false"],',
                 '[data-testid="stSidebar"][aria-expanded="true"],',
                 '[data-testid="stSidebar"][data-pp-collapsed="false"] {',
-                '  transform: translateX(0) !important;',
+                '  transform: none !important;',
                 '  opacity: 1 !important;',
                 '  visibility: visible !important;',
+                '  pointer-events: auto !important;',
+                '  width: min(80vw, 22rem) !important; min-width: 16rem !important; max-width: 80vw !important;',
                 '}',
               ].join('\\n');
               if (pmStyle.textContent !== css) pmStyle.textContent = css;
