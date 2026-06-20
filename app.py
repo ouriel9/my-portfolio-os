@@ -230,7 +230,7 @@ def _bio_register_html(label: str) -> str:
       pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
       authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
     var raw=new Uint8Array(cred.rawId); W.localStorage.setItem('pos_bio_cred', btoa(String.fromCharCode.apply(null,raw)));
-    var u=new URL(W.location.href); u.searchParams.set('_bioreg','ok'); W.location.href=u.toString();
+    m.style.color='#16a34a'; m.textContent='✓ נרשם / registered';
   }catch(e){ m.textContent='✗ '+((e&&e.message)||e); } };
 })();</script>
 """.replace("__LABEL__", label)
@@ -252,7 +252,10 @@ def _bio_unlock_html(label: str, fail_msg: str, none_msg: str) -> str:
     var nav=(W.navigator&&W.navigator.credentials)?W.navigator:navigator;
     await nav.credentials.get({publicKey:{challenge:new Uint8Array(32),
       allowCredentials:[{type:'public-key',id:id}],userVerification:'required',timeout:60000}});
-    var u=new URL(W.location.href); u.searchParams.set('_bio','ok'); W.location.href=u.toString();
+    // The iframe cannot navigate the parent, but it CAN click a hidden Streamlit button there.
+    var bs=W.document.querySelectorAll('button'); var ok=null;
+    for(var i=0;i<bs.length;i++){ if((bs[i].textContent||'').trim()==='biounlock_bridge'){ ok=bs[i]; break; } }
+    if(ok){ ok.click(); } else { m.textContent='bridge missing — reload once'; }
   }catch(e){ m.textContent='__FAIL__: '+((e&&e.message)||e); } };
 })();</script>
 """.replace("__LABEL__", label).replace("__NONE__", none_msg).replace("__FAIL__", fail_msg)
@@ -364,7 +367,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r11"
+APP_BUILD = "2026-06-20 · r12"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -11445,6 +11448,11 @@ def main() -> None:
                     tr("Unlock with fingerprint", "פתיחה עם טביעת אצבע"),
                     tr("Fingerprint failed", "טביעת אצבע נכשלה"),
                     tr("No fingerprint enrolled", "לא נרשמה טביעת אצבע")), height=96)
+                # Hidden bridge: WebAuthn JS clicks this (it cannot navigate the parent iframe).
+                st.markdown("<style>.st-key-_bio_bridge_btn{display:none !important;}</style>", unsafe_allow_html=True)
+                if st.button("biounlock_bridge", key="_bio_bridge_btn"):
+                    st.session_state["_app_unlocked"] = True
+                    st.rerun()
         st.stop()
 
     theme_label_to_value = {
@@ -11495,8 +11503,13 @@ def main() -> None:
                 _lk_now["bio_enabled"] = False
                 _lock_save(_lk_now)
                 st.rerun()
+            st.caption(tr("Register your fingerprint on this device:", "רשום את טביעת האצבע במכשיר הזה:"))
+            components.html(_bio_register_html(tr("Register fingerprint", "רשום טביעת אצבע")), height=84)
         else:
-            components.html(_bio_register_html(tr("Enable fingerprint", "הפעל טביעת אצבע")), height=80)
+            if st.button(tr("Enable fingerprint", "הפעל טביעת אצבע"), key="_bio_enable_btn", use_container_width=True):
+                _lk_now["bio_enabled"] = True
+                _lock_save(_lk_now)
+                st.rerun()
 
     # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
     # share the same preference on next page load — writes to the shared server-side JSON.
