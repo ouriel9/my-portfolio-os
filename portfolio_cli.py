@@ -18,9 +18,13 @@ Trade JSON fields (Hebrew sheet contract, see Code.gs sanitizeTrade_):
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
+import math
+import re
 import sys
 import urllib.request
+import uuid
 from pathlib import Path
 
 # Windows consoles default to cp1252 and crash when printing Hebrew ticker/status
@@ -55,7 +59,7 @@ def call(action: str, extra: dict | None = None) -> dict:
         payload.update(extra)
     req = urllib.request.Request(
         cfg["web_app_url"].rstrip("/"),
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        data=json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8"),
         headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
@@ -65,6 +69,10 @@ def call(action: str, extra: dict | None = None) -> dict:
     except urllib.error.HTTPError as e:
         sys.exit(f"HTTP {e.code}: {e.reason}")
     except (urllib.error.URLError, socket.timeout) as e:
+        if action in ("add", "edit", "delete"):
+            sys.exit(f"Network error during {action}: {e}\n"
+                     "Write may or may not have completed (no auto-retry, no server idempotency). "
+                     "Run `snapshot` to check BEFORE retrying to avoid a duplicate.")
         sys.exit(f"Network error: {e}")
     try:
         out = json.loads(body)
@@ -75,29 +83,83 @@ def call(action: str, extra: dict | None = None) -> dict:
     return out
 
 
+def _valid_date(s: str) -> bool:
+    try:
+        datetime.date.fromisoformat(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _confirm_write(args, action: str, summary: str, payload: dict) -> None:
+    """Echo a human-readable summary and require --yes (or --dry-run) before any write."""
+    print(f"{action}: {summary}", file=sys.stderr)
+    if getattr(args, "dry_run", False):
+        print(json.dumps({"dry_run": True, "action": action, "payload": payload}, ensure_ascii=False, indent=2))
+        sys.exit(0)
+    if getattr(args, "yes", False):
+        return
+    if not sys.stdin.isatty():
+        sys.exit(f"refusing to {action} without --yes (non-interactive); re-run with --yes or --dry-run")
+    try:
+        ans = input(f"Proceed with {action}? [y/N] ").strip().lower()
+    except EOFError:
+        sys.exit(f"refusing to {action} without --yes (no input available); re-run with --yes or --dry-run")
+    if ans not in ("y", "yes"):
+        sys.exit("aborted")
+
+
+SNAPSHOT_FIELD_ALIASES = {
+    "ticker": ("טיקר", "Ticker"),
+    "platform": ("פלטפורמה", "Platform"),
+    "qty": ("כמות", "Quantity"),
+    "status": ("סטטוס", "Status"),
+    "trade_id": ("Trade_ID",),
+}
+
+
 def cmd_snapshot(_args) -> None:
-    data = call("read_snapshot")["data"]
+    data = call("read_snapshot").get("data")
+    if not isinstance(data, dict) or "headers" not in data or "rows" not in data:
+        sys.exit("Malformed snapshot response from server")
     headers, rows = data["headers"], data["rows"]
+    if not isinstance(headers, list) or not isinstance(rows, list):
+        sys.exit("Malformed snapshot response: headers/rows must be lists")
     ix = {h: i for i, h in enumerate(headers)}
+    def col(field):
+        for alias in SNAPSHOT_FIELD_ALIASES[field]:
+            if alias in ix:
+                return ix[alias]
+        return None
+    if col("trade_id") is None:
+        print("warning: snapshot has no Trade_ID column; Trade_ID values will be blank", file=sys.stderr)
     closed_set = {"סגור", "closed", "close", "sold", "נמכר"}
     n_open = n_closed = 0
-    print(f"{'Ticker':8s} {'Platform':14s} {'Qty':>12s} {'Status':8s} {'Trade_ID':16s}")
+    print(f"{'Ticker'[:8]:8s} {'Platform'[:14]:14s} {'Qty'[:12]:>12s} {'Status'[:8]:8s} {'Trade_ID'[:16]:16s}")
     for r in rows:
-        get = lambda k: str(r[ix[k]]).strip() if k in ix and ix[k] < len(r) else ""
-        status = get("סטטוס")
+        if not isinstance(r, list):
+            sys.exit("Malformed snapshot response: each row must be a list")
+        def get(field):
+            i = col(field)
+            return str(r[i]).strip() if i is not None and i < len(r) else ""
+        status = get("status")
         closed = status.lower() in closed_set
         n_closed += closed
         n_open += not closed
-        print(f"{get('טיקר'):8s} {get('פלטפורמה'):14s} {get('כמות'):>12s} {status:8s} {get('Trade_ID'):16s}")
+        print(f"{get('ticker')[:8]:8s} {get('platform')[:14]:14s} {get('qty')[:12]:>12s} {status[:8]:8s} {get('trade_id')[:16]:16s}")
     print(f"\n{len(rows)} rows | {n_open} open | {n_closed} closed")
 
 
 def _parse_trade_json(raw: str) -> dict:
     if not raw or not raw.strip():
         sys.exit("--json must not be empty")
+    def _no_const(c):
+        raise ValueError(f"non-finite number not allowed: {c}")
     try:
-        trade = json.loads(raw)
+        trade = json.loads(raw, parse_constant=_no_const)
     except json.JSONDecodeError as e:
+        sys.exit(f"--json is not valid JSON: {e}")
+    except ValueError as e:
         sys.exit(f"--json is not valid JSON: {e}")
     if not isinstance(trade, dict):
         sys.exit("--json must be a JSON object {…}, not a list or primitive")
@@ -106,30 +168,70 @@ def _parse_trade_json(raw: str) -> dict:
 
 def cmd_add(args) -> None:
     trade = _parse_trade_json(args.json)
-    out = call("add", {"trade": trade})
+    ticker = str(trade.get("Ticker", "")).strip()
+    if not ticker:
+        sys.exit("add requires a non-empty Ticker")
+    qty_raw = trade.get("Quantity")
+    if isinstance(qty_raw, bool) or not isinstance(qty_raw, (int, float)):
+        sys.exit("add requires a numeric Quantity (number, not bool/string)")
+    qty = float(qty_raw)
+    if not math.isfinite(qty) or qty <= 0:
+        sys.exit("add requires a finite Quantity greater than 0")
+    pdate = str(trade.get("Purchase_Date", "")).strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", pdate) or not _valid_date(pdate):
+        sys.exit("add requires a valid calendar Purchase_Date in YYYY-MM-DD format")
+    sdate = str(trade.get("Sell_Date", "")).strip()
+    if sdate and (not re.match(r"^\d{4}-\d{2}-\d{2}$", sdate) or not _valid_date(sdate)):
+        sys.exit("add requires a valid calendar Sell_Date in YYYY-MM-DD format")
+    if "Origin_Currency" in trade:
+        cur = str(trade.get("Origin_Currency", "")).strip().upper()
+        if cur and cur not in ("ILS", "USD"):
+            sys.exit("add requires Origin_Currency in {ILS, USD}")
+
+    def _num(k):
+        v = trade.get(k)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+    cost = _num("Cost_Origin")
+    price = _num("Origin_Buy_Price")
+    if not (cost > 0 or (qty > 0 and price > 0)):
+        sys.exit("add requires Cost_Origin>0 or (Quantity>0 and Origin_Buy_Price>0)")
+    _confirm_write(args, "add", f"{ticker} qty={qty} date={pdate}", {"trade": trade})
+    out = call("add", {"trade": trade, "client_op_id": uuid.uuid4().hex})
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
 def cmd_edit(args) -> None:
     trade = _parse_trade_json(args.json)
-    if not str(trade.get("Trade_ID", "")).strip():
+    tid = str(trade.get("Trade_ID", "")).strip()
+    if not tid:
         sys.exit("edit requires a non-empty Trade_ID in the JSON")
+    changed = [k for k in trade if k != "Trade_ID" and str(trade.get(k, "")).strip() != ""]
+    if not changed:
+        sys.exit("edit requires at least one field to change besides Trade_ID "
+                 "(a Trade_ID-only payload would zero Quantity/Cost_Origin/Ticker server-side)")
+    _confirm_write(args, "edit", f"Trade_ID={tid} fields={','.join(changed)}", {"trade": trade})
     out = call("edit", {"trade": trade})
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
 def cmd_delete(args) -> None:
-    out = call("delete", {"trade": {"Trade_ID": args.id}})
+    tid = str(args.id).strip()
+    if not tid:
+        sys.exit("delete requires a non-empty Trade_ID")
+    _confirm_write(args, "delete", f"Trade_ID={tid}", {"trade": {"Trade_ID": tid}})
+    out = call("delete", {"trade": {"Trade_ID": tid}})
     print(json.dumps(out, ensure_ascii=False, indent=2))
+    print("note: verify the server response above identifies the intended row "
+          "(row/ticker/qty); a by-id delete that missed may have matched a zeroed row.", file=sys.stderr)
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("snapshot").set_defaults(fn=cmd_snapshot)
-    a = sub.add_parser("add"); a.add_argument("--json", required=True); a.set_defaults(fn=cmd_add)
-    e = sub.add_parser("edit"); e.add_argument("--json", required=True); e.set_defaults(fn=cmd_edit)
-    d = sub.add_parser("delete"); d.add_argument("--id", required=True); d.set_defaults(fn=cmd_delete)
+    a = sub.add_parser("add", allow_abbrev=False); a.add_argument("--json", required=True); a.add_argument("--yes", action="store_true"); a.add_argument("--dry-run", action="store_true"); a.set_defaults(fn=cmd_add)
+    e = sub.add_parser("edit", allow_abbrev=False); e.add_argument("--json", required=True); e.add_argument("--yes", action="store_true"); e.add_argument("--dry-run", action="store_true"); e.set_defaults(fn=cmd_edit)
+    d = sub.add_parser("delete", allow_abbrev=False); d.add_argument("--id", required=True); d.add_argument("--yes", action="store_true"); d.add_argument("--dry-run", action="store_true"); d.set_defaults(fn=cmd_delete)
     args = p.parse_args()
     args.fn(args)
 

@@ -74,7 +74,6 @@ def _auto_detect_proxy() -> None:
 
 _auto_detect_proxy()
 
-CRYPTO_ETFS = {"IBIT", "ETHA", "BSOL", "MSTR"}
 CRYPTO_SHARE_TICKERS = {"IBIT", "ETHA", "BSOL"}  # MSTR is a stock — keep crypto-share KPI consistent with the allocation pie (audit)
 BTC_SHARE_TICKERS = {"BTC", "IBIT"}
 # The crypto-proxy ETFs (IBIT/ETHA/BSOL) are ETFs for the ALLOCATION pie — match
@@ -83,6 +82,55 @@ BTC_SHARE_TICKERS = {"BTC", "IBIT"}
 CHART_CRYPTO_TICKERS = {"BTC", "ETH", "SOL", "XRP"}
 CHART_STOCK_TICKERS = {"MSTR"}
 CHART_FORCED_ETF_TICKERS = {"QQQ", "VOO", "IBIT", "ETHA", "BSOL"}
+# Broad offline classifier sets — mirror engine.js KNOWN_COINS / KNOWN_ETFS so a
+# blank-Type / English-CRYPTO / new-coin row classes identically in app.py and the
+# native app (allocation pie + crypto-share KPI). (audit sync-defs assetClass drift)
+KNOWN_COINS = {
+    "BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "MATIC", "BNB",
+    "LTC", "BCH", "TRX", "SHIB", "UNI", "ATOM", "XLM", "NEAR", "APT", "ARB", "OP",
+    "FIL", "ICP", "HBAR", "VET", "ALGO", "SAND", "MANA", "AAVE", "GRT", "SUI", "PEPE",
+    "TON", "TIA", "BONK", "JUP", "WIF", "RENDER", "FET", "INJ", "SEI", "STX", "RUNE",
+}
+KNOWN_ETFS = {
+    "SPY", "VOO", "VTI", "QQQ", "QQQM", "IVV", "VEA", "VWO", "BND", "AGG", "VUG", "VTV",
+    "IWM", "IJR", "IJH", "VIG", "SCHD", "VYM", "VGT", "XLK", "XLF", "XLE", "XLV", "XLY",
+    "XLP", "XLI", "XLU", "XLB", "XLRE", "XLC", "ARKK", "ARKG", "DIA", "EFA", "EEM", "GLD",
+    "SLV", "TLT", "LQD", "HYG", "VXUS", "IXUS", "ITOT", "SPLG", "RSP", "SMH", "SOXX",
+    "IBIT", "ETHA", "BSOL", "FBTC", "GBTC", "IEFA", "IEMG", "VT", "MGK", "SPYG", "SCHG",
+    "JEPI", "JEPQ", "DGRO", "SCHB", "SCHX", "VOOG", "VONG", "SPLV", "USMV", "MOAT", "QUAL",
+}
+
+
+def _is_crypto_ticker(ticker: object) -> bool:
+    """Mirror engine.js isCryptoTicker: `-USD`/`-USDT`/`USDT` spot suffixes or a base
+    in KNOWN_COINS. (audit sync-defs)"""
+    t = _clean(ticker).upper()
+    if re.search(r"-USD$|-USDT$|USDT$", t):
+        return True
+    base = re.sub(r"-?USD[T]?$", "", t)
+    return base in KNOWN_COINS
+
+
+def _asset_class_label(ticker: object, type_text: object) -> str:
+    """Label-free asset-class classifier returning 'crypto'/'etf'/'stocks'. Shared by the
+    allocation pie and the crypto-share KPI so app.py and the native app agree on blank-Type
+    / English-CRYPTO / new-coin rows. Precedence (canonical, audit sync-defs): MSTR→stocks,
+    then the forced/crypto-proxy ETFs (IBIT/ETHA/BSOL/QQQ/VOO)→etf BEFORE the crypto test so a
+    crypto-proxy ETF tagged 'קריפטו' still buckets as ETF for the pie, then crypto (broad
+    KNOWN_COINS/-USD heuristic mirroring engine.js isCryptoTicker), then remaining ETFs."""
+    t = _clean(ticker).upper()
+    type_clean = _clean(type_text)
+    type_upper = type_clean.upper()
+    if t in CHART_STOCK_TICKERS:  # MSTR — leveraged equity proxy overrides crypto sets
+        return "stocks"
+    # Forced/crypto-proxy ETFs win over a crypto Type label (canonical ordering).
+    if t in CHART_FORCED_ETF_TICKERS:
+        return "etf"
+    if (type_clean == "קריפטו") or (type_upper == "CRYPTO") or (t in CHART_CRYPTO_TICKERS) or _is_crypto_ticker(t):
+        return "crypto"
+    if ("ETF" in type_upper) or (type_clean == "קרן סל") or (t in KNOWN_ETFS):
+        return "etf"
+    return "stocks"
 _BRAND_PALETTE = [
     "#4f46e5", "#06b6d4", "#10b981", "#f59e0b", "#ef4444",
     "#8b5cf6", "#ec4899", "#14b8a6", "#f97316", "#6366f1",
@@ -4241,7 +4289,8 @@ def _yf_price_currency(ticker: str) -> str:
     """Return the quote currency that yfinance uses for this ticker's price.
 
     BTC/ETH/SOL map to BTC-USD / ETH-USD / SOL-USD → price is always in USD.
-    Israeli stocks use a .TA suffix from TASE → price is in ILS (or ILA agorot).
+    Israeli stocks use a .TA suffix from TASE → Yahoo quotes them in ILA agorot
+    (1/100 ILS); _ils_per_native_unit("ILA")=÷100 then yields the true ILS value.
     London .L/.LON symbols quote in GBp pence → currency GBX.
     All other tickers (US stocks, ETFs, crypto pairs) are USD-quoted.
 
@@ -4251,7 +4300,7 @@ def _yf_price_currency(ticker: str) -> str:
     """
     sym = _market_symbol(ticker).upper()
     if sym.endswith(".TA"):
-        return "ILS"
+        return "ILA"
     if sym.endswith(".L") or sym.endswith(".LON"):
         return "GBX"
     return "USD"
@@ -4548,14 +4597,20 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
     # NaT dates sort last (they have no usable order); BUY (0) before SELL (1) on ties.
     work["__fifo_date_key__"] = _fifo_dt.astype("int64")
     work.loc[_fifo_dt.isna(), "__fifo_date_key__"] = np.iinfo("int64").max
-    work["__fifo_action_key__"] = work["Action"].map(lambda a: 1 if _clean(a).upper() == "SELL" else 0) if "Action" in work.columns else 0
+    # Dispatch off Status (closed/open) like engine.js fifoByTicker/_cmpFifo, NOT the
+    # Action field — Action is display-only and can drift out of sync with Status. A
+    # CLOSED row sorts after (1) an OPEN row (0) on same-date ties so a same-day buy is
+    # an available lot before its sell consumes it. (audit fin-fifo dispatch parity)
+    work["__fifo_action_key__"] = work["Status"].map(lambda s: 1 if _is_closed_status(s) else 0) if "Status" in work.columns else 0
     work = work.sort_values(["__fifo_date_key__", "__fifo_action_key__"], kind="stable")
 
     for ticker, tdf in work.groupby("Ticker", sort=False):
         lots: List[FifoLot] = []
         realized = 0.0
         for _, row in tdf.iterrows():
-            qty = float(row["Quantity"])
+            # _num safely coerces a blank/garbage Quantity cell to 0.0 instead of
+            # raising ValueError and crashing the whole Risk page. (audit fifo robustness)
+            qty = float(_num(row["Quantity"]))
             origin_currency = _normalize_currency_code(row.get("Origin_Currency", ""))
             stored_cost_ils = _num(row["Cost_ILS"])
             fallback_cost = float(_num(row["Cost_Origin"]))
@@ -4590,7 +4645,8 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                 display_unit_cost = abs(cost_origin / qty) if qty else 0.0
             else:
                 display_unit_cost = unit_cost
-            if row["Action"] == "BUY" and qty > 0:
+            _row_closed = _is_closed_status(row.get("Status", ""))
+            if (not _row_closed) and qty > 0:
                 lots.append(
                     FifoLot(
                         qty=qty,
@@ -4599,7 +4655,7 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                         display_currency=display_currency,
                     )
                 )
-            elif row["Action"] == "SELL" and qty != 0:
+            elif _row_closed and qty != 0:
                 sell_qty = abs(qty)
                 # Zero proceeds on a closed row = TOTAL LOSS (sold for nothing), so sell
                 # price is 0, not the buy price — otherwise the realized loss vanishes. (audit C3)
@@ -4790,8 +4846,9 @@ def _commission_ils_series(df: pd.DataFrame, fx: float) -> pd.Series:
     """Per-row buy commission converted to ILS (Commission is stored in origin
     currency). USD commission is converted at the row's BUY-date FX when a purchase
     date is available (consistent with the frozen Cost_ILS basis), else at `fx`.
-    Lets Yield_ILS use a commission-inclusive denominator (Cost_ILS_With_Fee) so it
-    matches the commission-inclusive Yield_Origin (Cost_Origin_With_Fee). (audit #10)"""
+    WARNING: NOT used to build Cost_ILS_With_Fee. Cost_ILS is ALREADY commission-
+    inclusive ((Cost_Origin+Commission)*fx), so adding this series to it would
+    DOUBLE-COUNT the buy fee in the Yield_ILS denominator. Do not wire it in. (audit #10)"""
     if "Commission" not in df.columns:
         return pd.Series(0.0, index=df.index)
     comm = df["Commission"].map(_num)
@@ -4917,7 +4974,11 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
 
     total_value = float(work["Current_Value_ILS"].sum())
 
-    crypto_mask = (work["Type"] == "קריפטו") | (work["Ticker"].isin(CRYPTO_SHARE_TICKERS))
+    # Crypto exposure uses the SAME broad classifier as the allocation pie and
+    # engine.js aggregates() (assetClass=='crypto' OR a crypto-proxy ETF), so a
+    # blank-Type / English-CRYPTO / new-coin row counts identically in both apps.
+    # (audit sync-defs crypto-share asymmetry)
+    crypto_mask = work.apply(lambda r: _asset_class_label(r.get("Ticker", ""), r.get("Type", "")) == "crypto", axis=1) | (work["Ticker"].isin(CRYPTO_SHARE_TICKERS))
     crypto_value = float(work.loc[crypto_mask, "Current_Value_ILS"].sum())
     btc_value = float(work.loc[work["Ticker"].isin(BTC_SHARE_TICKERS), "Current_Value_ILS"].sum())
 
@@ -4929,6 +4990,8 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     fx = usd_ils if usd_ils and usd_ils > 0 else _usd_ils_rate()
 
     work["Cost_Origin_With_Fee"] = work["Cost_Origin"] + work["Commission"]
+    # Cost_ILS is ALREADY commission-inclusive ((Cost_Origin+Commission)*fx per GAS/
+    # live convention), so the ILS-yield denominator does NOT add Commission again.
     work["Cost_ILS_With_Fee"] = work["Cost_ILS"]
     work["Value_Origin_Est"] = _value_origin_series(work, fx)
     # Detect tickers with mixed currencies — summing ILS+USD costs is invalid.
@@ -6325,8 +6388,11 @@ def build_demo_snapshot_data() -> pd.DataFrame:
            closed=False, sell_date="2026-03-18", loc=""):
         fx = FX.get(ccy, 1.0)
         cost_origin = qty * buy
-        cost_ils = cost_origin * fx
-        cur_ils = cost_ils * now_mul
+        # Market value scales off the FEE-EXCLUSIVE invested principal.
+        cur_ils = (cost_origin * fx) * now_mul
+        # Cost_ILS is commission-INCLUSIVE ((Cost_Origin+Commission)*fx), mirroring the
+        # GAS/live convention so demo Yield_ILS and Yield_Origin agree. (audit demo fee)
+        cost_ils = (cost_origin + commission) * fx
         row = {
             "Current_Location": loc,
             "Platform": platform,
@@ -8864,7 +8930,10 @@ def _real_capital_gains_tax(
     # months=0 with a monthly stream: derive the horizon from years so a documented
     # months=0 caller matches engine.js (which does months = round(years*12)). (audit fin-tax)
     if monthly and months == 0 and years > 0:
-        months = int(round(years * 12))
+        # Half-up (floor(x+0.5)) to match JS Math.round — Python's round() is banker's
+        # rounding (round-half-to-even), which would derive a different month at x.5 and
+        # diverge from engine.js's months. (audit fin-tax rounding parity)
+        months = int(_pp_math.floor(years * 12 + 0.5))
     # Index the initial term over the SAME month-based horizon the projection uses
     # (months/12), not the float `years`, so every basis term references one horizon. (audit fin-tax)
     indexed_basis = max(0.0, float(initial)) * (1.0 + i) ** (months / 12.0)
@@ -9338,7 +9407,8 @@ def render_simulator_page(
             ))
 
         years_total = max(1.0, float(age_target) - float(age_now))
-        months_total = int(round(years_total * 12))
+        # Half-up to match JS Math.round (engine.js), not Python's banker's round(). (audit)
+        months_total = int(_pp_math.floor(years_total * 12 + 0.5))
 
     # ── Regular (TAXABLE) portfolio ─────────────────────────────────────
     with st.container(border=True):
@@ -10768,11 +10838,13 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 tkr_y = _agg_y.dropna(subset=["_y"]).set_index("Ticker")["_y"]
                 # Crypto exposure must use the SAME definition as the rest of the
                 # dashboard (build_home_inspired_reports / Crypto-Share KPI): spot
-                # crypto Type PLUS the crypto-proxy ETFs (IBIT/ETHA/BSOL/MSTR).
+                # crypto Type PLUS the crypto-proxy ETFs (IBIT/ETHA/BSOL).
                 # Counting only Type=="קריפטו" here previously reported ~46% while
                 # other panels showed ~72% for the same portfolio.
                 _ticker_up = df.get("Ticker", pd.Series(dtype=str)).map(lambda x: _clean(x).upper())
-                crypto_mask = df.get("Type", pd.Series(dtype=str)).map(lambda x: _clean(x) == "קריפטו") | _ticker_up.isin(CRYPTO_SHARE_TICKERS)
+                # Same broad classifier as the allocation pie / Crypto-Share KPI / engine.js
+                # so a blank-Type or new-coin row counts identically. (audit sync-defs)
+                crypto_mask = df.apply(lambda r: _asset_class_label(r.get("Ticker", ""), r.get("Type", "")) == "crypto", axis=1) | _ticker_up.isin(CRYPTO_SHARE_TICKERS)
                 crypto_share = float(df.loc[crypto_mask, "Current_Value_ILS"].sum()) / total_val if total_val else 0.0
                 msgs = []
                 if top_w >= 0.30:
@@ -10784,8 +10856,11 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 if not tkr_y.empty:
                     w, l = tkr_y.idxmax(), tkr_y.idxmin()
                     _we, _le = _esc(w), _esc(l)  # escape: sheet-sourced tickers rendered as HTML (audit XSS)
-                    msgs.append(("🏆", _t(f"Best: {_we} ({tkr_y[w]:+.1%}) · Worst: {_le} ({tkr_y[l]:+.1%}).",
-                                          f"מוביל: {_we} ({tkr_y[w]:+.1%}) · מפגר: {_le} ({tkr_y[l]:+.1%}).")))
+                    # Ranked on ILS yield (Current_Value_ILS vs Cost_ILS) — labelled (₪)
+                    # so it reads distinctly from the dashboard Winner/Loser card, which
+                    # ranks on the origin-currency yield and can name a different ticker.
+                    msgs.append(("🏆", _t(f"Best (₪): {_we} ({tkr_y[w]:+.1%}) · Worst (₪): {_le} ({tkr_y[l]:+.1%}).",
+                                          f"מוביל (₪): {_we} ({tkr_y[w]:+.1%}) · מפגר (₪): {_le} ({tkr_y[l]:+.1%}).")))
                 msgs.append(("🪙", _t(f"Crypto is {crypto_share:.0%} of the portfolio.",
                                       f"קריפטו מהווה {crypto_share:.0%} מהתיק.")))
                 for icon, m in msgs:
@@ -12491,19 +12566,14 @@ def main() -> None:
             class_work["Type"] = class_work["Type"].map(_clean)
 
             def _class_bucket(row: pd.Series) -> str:
-                ticker = _clean(row.get("Ticker", "")).upper()
-                type_text = _clean(row.get("Type", ""))
-                type_upper = type_text.upper()
-                if ticker in CHART_STOCK_TICKERS:
-                    return tr("Stocks", "מניות")
-                # Forced-ETF (incl. the crypto-proxy ETFs IBIT/ETHA/BSOL) wins over a
-                # crypto Type label so the allocation pie matches engine.js assetClass(),
-                # which returns "etf" for these. (audit sync-defs assetClass drift)
-                if ticker in CHART_FORCED_ETF_TICKERS:
-                    return tr("ETF", "ETF")
-                if (type_text == "קריפטו") or (type_upper == "CRYPTO") or (ticker in CHART_CRYPTO_TICKERS):
+                # Single source of truth shared with the crypto-share KPI and mirrored
+                # to engine.js assetClass() (broad KNOWN_COINS/KNOWN_ETFS + -USD heuristic)
+                # so blank-Type / English-CRYPTO / new-coin rows bucket identically across
+                # the Streamlit and native apps. (audit sync-defs assetClass drift)
+                cls = _asset_class_label(row.get("Ticker", ""), row.get("Type", ""))
+                if cls == "crypto":
                     return tr("Crypto", "קריפטו")
-                if "ETF" in type_upper or type_text == "קרן סל":
+                if cls == "etf":
                     return tr("ETF", "ETF")
                 return tr("Stocks", "מניות")
 
@@ -12692,7 +12762,7 @@ def main() -> None:
                 out["Yield_Origin"] = np.where(_is_pure, _origin_raw, out["Yield_ILS"])
                 return out
 
-            def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview") -> None:
+            def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview", include_watchlist: bool = True) -> None:
 
                 st.markdown(f"#### {tr('Exposure Table', 'טבלת חשיפה')}")
                 # Return shown in the ORIGIN currency (per-ticker), not ILS (user pref).
@@ -12768,102 +12838,103 @@ def main() -> None:
                         # Last-ditch: plain frame so the table can never silently vanish.
                         st.dataframe(exposure_view, width="stretch", hide_index=True)
 
-                watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
-                category_labels = {
-                    "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
-                    "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
-                    "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
-                }
-                watch_rows = []
-                for item in DEFAULT_TRADINGVIEW_WATCHLIST:
-                    watch_rows.append(
-                        {
-                            "Ticker": item["ticker"],
-                            "Title": f"{item['ticker']} - {item['label']}",
-                            "Symbol": item["tv_symbol"],
-                            "Category": category_labels[item["category"]],
-                        }
-                    )
-
-                if watch_rows:
-                    watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
-                    # Inline category TABS (no floating popover): the watchlist sits in
-                    # normal document flow, so the chart that opens below it can NEVER be
-                    # covered — the popover used to overlay the chart. Organised by category;
-                    # 4-col chip grid on desktop, 2-col on mobile. Click a chip -> live chart.
-                    st.markdown("##### 📈 " + watchlist_label)
-                    st.caption(tr("Pick an instrument to open its live chart below.",
-                                  "בחר נכס לפתיחת גרף חי למטה."))
-                    _wl_cats = [
-                        ("crypto", "🪙 " + tr("Crypto", "קריפטו")),
-                        ("stocks", "📈 " + tr("Stocks", "מניות")),
-                        ("macro", "🌐 " + tr("Macro", "מאקרו")),
-                    ]
-                    _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
-                    _wl_ncol = 2 if is_mobile else 4
-                    for _ti, (catkey, _lbl) in enumerate(_wl_cats):
-                        with _wl_tabs[_ti]:
-                            part = watch_df[watch_df["Category"] == category_labels[catkey]]
-                            if part.empty:
-                                st.caption("—")
-                                continue
-                            _wrows = list(part.itertuples(index=False))
-                            for _base in range(0, len(_wrows), _wl_ncol):
-                                _chunk = _wrows[_base:_base + _wl_ncol]
-                                _cols = st.columns(_wl_ncol)
-                                for _ci, row in enumerate(_chunk):
-                                    with _cols[_ci]:
-                                        if st.button(row.Ticker, help=row.Title, width="stretch",
-                                                     key=f"{widget_prefix}_watch_{catkey}_{_base + _ci}_{row.Symbol}"):
-                                            st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
-                                            st.session_state["tv_chart_open"] = True
-                                            st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
-                                            st.rerun()
-                else:
-                    st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
-
-                if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
-                    active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
-                    chart_anchor_id = f"tv-chart-anchor-{widget_prefix}"
-                    st.markdown(f"<div id='{chart_anchor_id}'></div>", unsafe_allow_html=True)
-                    st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
-                    # Compact toolbar: [title · close]. Per-chart theme toggle
-                    # was removed — TradingView's embed widget caches theme
-                    # state in localStorage and ignores re-init theme params,
-                    # which made the toggle unreliable.
-                    _ttitle_col, close_col = st.columns([8, 1])
-                    if close_col.button(
-                        tr("✕ Close", "✕ סגור"),
-                        key=f"{widget_prefix}_tv_inline_close",
-                        type="primary",
-                        width="stretch",
-                    ):
-                        st.session_state["tv_chart_open"] = False
-                        st.session_state.pop("tv_chart_ticker", None)
-                        st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
-                        st.rerun()
-                    _render_tradingview_widget(
-                        active_ticker,
-                        height=580 if is_mobile else 750,
-                        theme="dark" if is_dark else "light",
-                    )
-                    if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
-                        components.html(
-                            f"""
-                            <script>
-                            (function() {{
-                              const doc = (window.parent && window.parent.document) ? window.parent.document : document;
-                              const el = doc.getElementById('{chart_anchor_id}');
-                              if (el && el.scrollIntoView) {{
-                                setTimeout(function() {{ el.scrollIntoView({{ behavior: 'smooth', block: 'start' }}); }}, 80);
-                              }}
-                            }})();
-                            </script>
-                            """,
-                            height=0,
-                            width=0,
+                if include_watchlist:
+                    watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
+                    category_labels = {
+                        "crypto": tr("Crypto (Crypto)", "Crypto (קריפטו)"),
+                        "stocks": tr("Actions / Stocks (Stocks & ETFs)", "Actions / Stocks (מניות וקרנות סל)"),
+                        "macro": tr("Futures / Commodities / Forex", "Futures / Commodities / Forex (חוזים, סחורות ומט\"ח)"),
+                    }
+                    watch_rows = []
+                    for item in DEFAULT_TRADINGVIEW_WATCHLIST:
+                        watch_rows.append(
+                            {
+                                "Ticker": item["ticker"],
+                                "Title": f"{item['ticker']} - {item['label']}",
+                                "Symbol": item["tv_symbol"],
+                                "Category": category_labels[item["category"]],
+                            }
                         )
-                        st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
+
+                    if watch_rows:
+                        watch_df = pd.DataFrame(watch_rows).drop_duplicates(subset=["Symbol"])
+                        # Inline category TABS (no floating popover): the watchlist sits in
+                        # normal document flow, so the chart that opens below it can NEVER be
+                        # covered — the popover used to overlay the chart. Organised by category;
+                        # 4-col chip grid on desktop, 2-col on mobile. Click a chip -> live chart.
+                        st.markdown("##### 📈 " + watchlist_label)
+                        st.caption(tr("Pick an instrument to open its live chart below.",
+                                      "בחר נכס לפתיחת גרף חי למטה."))
+                        _wl_cats = [
+                            ("crypto", "🪙 " + tr("Crypto", "קריפטו")),
+                            ("stocks", "📈 " + tr("Stocks", "מניות")),
+                            ("macro", "🌐 " + tr("Macro", "מאקרו")),
+                        ]
+                        _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
+                        _wl_ncol = 2 if is_mobile else 4
+                        for _ti, (catkey, _lbl) in enumerate(_wl_cats):
+                            with _wl_tabs[_ti]:
+                                part = watch_df[watch_df["Category"] == category_labels[catkey]]
+                                if part.empty:
+                                    st.caption("—")
+                                    continue
+                                _wrows = list(part.itertuples(index=False))
+                                for _base in range(0, len(_wrows), _wl_ncol):
+                                    _chunk = _wrows[_base:_base + _wl_ncol]
+                                    _cols = st.columns(_wl_ncol)
+                                    for _ci, row in enumerate(_chunk):
+                                        with _cols[_ci]:
+                                            if st.button(row.Ticker, help=row.Title, width="stretch",
+                                                         key=f"{widget_prefix}_watch_{catkey}_{_base + _ci}_{row.Symbol}"):
+                                                st.session_state["tv_chart_ticker"] = _clean(row.Symbol).upper()
+                                                st.session_state["tv_chart_open"] = True
+                                                st.session_state[f"{widget_prefix}_chart_scroll_pending"] = True
+                                                st.rerun()
+                    else:
+                        st.caption(tr("Watchlist is empty.", "רשימת המעקב ריקה."))
+
+                    if st.session_state.get("tv_chart_open") and _clean(st.session_state.get("tv_chart_ticker", "")):
+                        active_ticker = _clean(st.session_state.get("tv_chart_ticker", "")).upper()
+                        chart_anchor_id = f"tv-chart-anchor-{widget_prefix}"
+                        st.markdown(f"<div id='{chart_anchor_id}'></div>", unsafe_allow_html=True)
+                        st.markdown(f"#### {tr('TradingView Chart', 'גרף TradingView')} - `{active_ticker}`")
+                        # Compact toolbar: [title · close]. Per-chart theme toggle
+                        # was removed — TradingView's embed widget caches theme
+                        # state in localStorage and ignores re-init theme params,
+                        # which made the toggle unreliable.
+                        _ttitle_col, close_col = st.columns([8, 1])
+                        if close_col.button(
+                            tr("✕ Close", "✕ סגור"),
+                            key=f"{widget_prefix}_tv_inline_close",
+                            type="primary",
+                            width="stretch",
+                        ):
+                            st.session_state["tv_chart_open"] = False
+                            st.session_state.pop("tv_chart_ticker", None)
+                            st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
+                            st.rerun()
+                        _render_tradingview_widget(
+                            active_ticker,
+                            height=580 if is_mobile else 750,
+                            theme="dark" if is_dark else "light",
+                        )
+                        if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
+                            components.html(
+                                f"""
+                                <script>
+                                (function() {{
+                                  const doc = (window.parent && window.parent.document) ? window.parent.document : document;
+                                  const el = doc.getElementById('{chart_anchor_id}');
+                                  if (el && el.scrollIntoView) {{
+                                    setTimeout(function() {{ el.scrollIntoView({{ behavior: 'smooth', block: 'start' }}); }}, 80);
+                                  }}
+                                }})();
+                                </script>
+                                """,
+                                height=0,
+                                width=0,
+                            )
+                            st.session_state[f"{widget_prefix}_chart_scroll_pending"] = False
 
         # ── Exposure table with live-price fragment ──────────────────────────
         # Fragment MUST be anchored inside the target container (_alloc_exposure_slot)
@@ -13117,7 +13188,10 @@ def main() -> None:
                                 )
                         except Exception:
                             pass
-                    render_exposure_section(_ov_summary, widget_prefix="overview_body")
+                    # Mirror: render only the exposure TABLE — the heavy 26-symbol
+                    # watchlist + TradingView chart render once in the primary section
+                    # so the dashboard never loads two iframes at once. (audit double-render)
+                    render_exposure_section(_ov_summary, widget_prefix="overview_body", include_watchlist=False)
 
                 _ov_exposure_fragment()
 
@@ -13764,7 +13838,20 @@ def main() -> None:
                         if "Origin_Buy_Price" in _tx.columns:
                             _bp = _tx["Origin_Buy_Price"].map(_num)
                             _tx["Yield_Current"] = np.where(_bp > 0, (_tx["Market_Price_Origin"] - _bp) / _bp, np.nan)
-                            _syc = np.where(_bp > 0, (_tx["Sell_Price_Origin"] - _bp) / _bp, np.nan)
+                            # App-created sells (blank Yield_At_Sale) use a COMMISSION-INCLUSIVE
+                            # origin basis (Cost_Origin+Commission), matching GAS yieldAtSale
+                            # (F*U-(H+J))/(H+J) and the ILS sale-return — NOT the fee-excluding
+                            # (sp-bp)/bp which over-states the return. (audit sync-defs C)
+                            _co_sc = _tx["Cost_Origin"].map(_num) if "Cost_Origin" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                            _comm_sc = _tx["Commission"].map(_num) if "Commission" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                            _qty_sc = _tx["Quantity"].map(_num) if "Quantity" in _tx.columns else pd.Series(0.0, index=_tx.index)
+                            _basis_sc = _co_sc + _comm_sc
+                            _proceeds_sc = _qty_sc * _tx["Sell_Price_Origin"].map(_num)
+                            _syc = np.where(
+                                _basis_sc > 0,
+                                (_proceeds_sc - _basis_sc) / _basis_sc,
+                                np.where(_bp > 0, (_tx["Sell_Price_Origin"] - _bp) / _bp, np.nan),
+                            )
                             if "Yield_At_Sale" in _tx.columns:
                                 _hys = ~_tx["Yield_At_Sale"].map(lambda v: pd.isna(v) or _clean(v) == "")
                                 _tx["Yield_At_Sale"] = np.where(_hys, _tx["Yield_At_Sale"], _syc)
@@ -13819,21 +13906,26 @@ def main() -> None:
                         # (_ci_eff is already commission-inclusive) so the two yields agree. (audit #10)
                         _cowf = _co + _comm_tx
                         _yic = np.where(_ci_eff > 0, (_vi - _ci_eff) / _ci_eff, np.nan)
-                        # Value in origin currency: for USD assets divide ILS value by FX rate;
-                        # for ILS assets the value is already in ILS.
-                        _is_usd_cur = _tx["Origin_Currency"].map(_normalize_currency_code) == "USD"
+                        # Value in origin currency: divide the ILS value by the PARENT-unit FX
+                        # rate for EVERY currency (USD/GBP/GBX/EUR/ILS/ILA), mirroring the
+                        # dashboard's _value_origin_series so non-USD rows (GBX/EUR/ILA) no
+                        # longer leak the raw ILS value into the origin column. (audit fin-fx)
+                        _cur_norm_tx = _tx["Origin_Currency"].map(_normalize_currency_code) if "Origin_Currency" in _tx.columns else pd.Series("ILS", index=_tx.index)
+                        _por_tx = _cur_norm_tx.map(lambda c: _ils_per_origin_parent_unit(c, _fx))
+                        _is_ils_origin = _cur_norm_tx.isin(["ILS", "ILA", ""])
                         _vo = np.where(
-                            _is_usd_cur,
-                            np.where(_fx > 0, _vi / _fx, np.nan), _vi,
+                            _por_tx.to_numpy() > 0,
+                            _vi / _por_tx.to_numpy(),
+                            _vi,
                         )
-                        # Yield_Origin — only meaningful for USD assets (different currency = different rate).
-                        # For ILS assets Yield_Origin == Yield_ILS by definition (same currency, no FX).
-                        # Using Cost_Origin (excl. fees) vs Cost_ILS (incl. fees) would create a phantom
-                        # discrepancy for ILS assets, so we force them equal.
+                        # For ILS/ILA assets Yield_Origin == Yield_ILS by definition (same currency,
+                        # no FX). Using Cost_Origin (excl. fees) vs Cost_ILS (incl. fees) would create
+                        # a phantom discrepancy, so we force them equal. Other currencies use the
+                        # commission-inclusive parent-unit basis.
                         _yoc = np.where(
-                            _is_usd_cur,
+                            _is_ils_origin.to_numpy(),
+                            _yic,  # ILS/ILA assets: Yield_Origin == Yield_ILS
                             np.where(_cowf > 0, (_vo - _cowf) / _cowf, np.nan),
-                            _yic,  # ILS assets: Yield_Origin == Yield_ILS
                         )
                         # Always use fresh live yields — don't preserve stale values from the
                         # stored JSON (which may be from an old Google Sheets sync).
@@ -14081,9 +14173,13 @@ def main() -> None:
                 language=language,
             )
         except Exception as _adv_exc:
+            # Log the real exception to the server console (dev) instead of leaking the
+            # raw text — which can expose internal paths / column names — into the UI.
+            import traceback as _adv_tb
+            _adv_tb.print_exc()
             st.caption(tr(
-                f"Advanced analytics unavailable: {_adv_exc}",
-                f"האנליטיקה המתקדמת אינה זמינה: {_adv_exc}",
+                "Advanced analytics are temporarily unavailable.",
+                "האנליטיקה המתקדמת אינה זמינה כעת.",
             ))
 
     elif page == page_manage:

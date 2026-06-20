@@ -3,11 +3,33 @@
 // Preserves prior dashboard behavior + adds reconciled transaction fixes.
 // =========================================================================
 
-const CRYPTO_ETFS = ["IBIT", "ETHA", "BSOL", "MSTR"];
 // Crypto-SHARE tickers exclude MSTR: it is treated as a pure stock so the crypto-share
 // KPI agrees with the allocation pie, matching app.py CRYPTO_SHARE_TICKERS and
 // engine.js. (cross-file convention — MSTR is NOT crypto for the share %)
 const CRYPTO_SHARE_TICKERS = ["IBIT", "ETHA", "BSOL"];
+// Broad crypto classifier mirroring engine.js assetClass()=='crypto' so the crypto-SHARE
+// KPI agrees with the native app even when a coin is NOT tagged with the exact Hebrew
+// 'קריפטו' (e.g. English 'CRYPTO', an untagged new coin, or any BTC/ETH/SOL/XRP whose Type
+// drifted). MSTR stays a stock. (audit sync-defs crypto-share)
+const CRYPTO_CHART_TICKERS_ = ["BTC", "ETH", "SOL", "XRP"];
+const KNOWN_COINS_ = ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "DOT", "LINK", "MATIC", "BNB", "LTC", "BCH", "TRX", "SHIB", "UNI", "ATOM", "XLM", "NEAR", "APT", "ARB", "OP", "FIL", "ICP", "HBAR", "VET", "ALGO", "SAND", "MANA", "AAVE", "GRT", "SUI", "PEPE", "TON", "TIA", "BONK", "JUP", "WIF", "RENDER", "FET", "INJ", "SEI", "STX", "RUNE"];
+function isCryptoTicker_(ticker) {
+  const t = cleanText(ticker).toUpperCase();
+  if (/-USD$|-USDT$|USDT$/.test(t)) return true;
+  const base = t.replace(/-?USD[T]?$/, "");
+  return KNOWN_COINS_.indexOf(base) >= 0;
+}
+// True when the row counts toward the crypto-SHARE KPI (broad, matching engine.js).
+function isCryptoShareRow_(ticker, type) {
+  const t = cleanText(ticker).toUpperCase();
+  if (t === "MSTR") return false; // leveraged equity proxy — never crypto for the share %
+  const tp = cleanText(type);
+  if (tp === "קריפטו" || tp.toUpperCase() === "CRYPTO") return true;
+  if (CRYPTO_CHART_TICKERS_.indexOf(t) >= 0) return true;
+  if (isCryptoTicker_(t)) return true;
+  if (CRYPTO_SHARE_TICKERS.indexOf(t) >= 0) return true; // crypto-proxy ETFs
+  return false;
+}
 const PORTFOLIO_SHEET = "תמונת מצב";
 const AUDIT_SHEET = "תגובות לטופס 1";
 const DEPOSITS_SHEET = "הפקדות ידניות";
@@ -78,7 +100,6 @@ function onOpen() {
     .addItem("🛡️ העברה לארנק קר (ללא כפילויות)", "TransferToColdWallet")
     .addSeparator()
     .addItem("🛠️ רופא המערכת - ניקוי ופיצול עמלות", "SystemDoctor")
-    .addItem("🧹 צמצום עמודות כפולות (חד-פעמי)", "RunSnapshotSchemaDedupOnce")
     .addItem("⚙️ התקנה ותיקון נוסחאות (מבנה חדש)", "InstallSystem")
     .addToUi();
 }
@@ -96,8 +117,7 @@ function cleanText(val) {
 // Canonical closed-status synonyms — mirrors engine.js CLOSED_STATUS_SET and app.py CLOSED_STATUS.
 const CLOSED_STATUS_VALUES_ = ["סגור", "closed", "close", "sold", "נמכר"];
 function isClosedStatus_(val) {
-  return CLOSED_STATUS_VALUES_.indexOf(cleanText(val).toLowerCase()) !== -1 ||
-    cleanText(val) === "סגור";
+  return CLOSED_STATUS_VALUES_.indexOf(cleanText(val).toLowerCase()) !== -1;
 }
 
 // Defense-in-depth against spreadsheet formula injection. A token-authorized
@@ -130,6 +150,20 @@ function colLetter_(idx) {
     n = Math.floor((n - 1) / 26);
   }
   return s;
+}
+
+// Closed-status test fragments for the live pricing/yield formulas. The stored-sale
+// branch must trigger for EVERY recognized closed synonym (סגור/closed/close/sold/נמכר),
+// not just the exact Hebrew 'סגור' — otherwise a manually-typed or imported synonym is
+// valued at the LIVE market price instead of the stored sale price, overstating realized
+// P&L and drifting daily. (audit fin-gas closed-synonym)
+function closedTestExpr_(statusCellRef) {
+  return "OR(" + CLOSED_STATUS_VALUES_.map(function (v) {
+    return statusCellRef + "=\"" + v + "\"";
+  }).join(",") + ")";
+}
+function notClosedTestExpr_(statusCellRef) {
+  return "NOT(" + closedTestExpr_(statusCellRef) + ")";
 }
 
 // Dated FX helper: builds a spreadsheet formula fragment that yields the ILS value
@@ -179,6 +213,43 @@ function fxIlsPerUnitLiveExpr_(curCellRef) {
     "IF(" + curCellRef + "=\"GBP\", " + gbp + "," +
     "IF(" + curCellRef + "=\"GBX\", (" + gbp + ")/100," +
     "$AA$1))))))"; // unknown currency -> live USDILS fallback (never silent 1:1)
+}
+
+// PARENT-unit ILS rate (dated) — like fxIlsPerUnitExpr_ but returns the rate per PARENT
+// unit for sub-unit currencies: GBP (not GBP/100) for both GBP and GBX, and 1.0 (not 0.01)
+// for both ILS and ILA. Used ONLY in the yieldOrigin denominator, which back-converts the
+// ILS value Q to an origin-currency value to compare against Cost_Origin (H), which is
+// stored in the PARENT unit. Dividing Q by the SUB-unit rate would inflate the origin
+// market value ~100x for GBX/ILA. (audit fin-gas yieldOrigin-parent)
+function fxIlsPerParentUnitExpr_(dateCellRef, curCellRef) {
+  function pair(code) {
+    return "IFERROR(IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:" + code + "\", \"price\", " + dateCellRef +
+      "), 2, 2), IFNA(INDEX(GOOGLEFINANCE(\"CURRENCY:" + code + "\", \"price\", " + dateCellRef +
+      "-1), 2, 2), $AA$1)), $AA$1)";
+  }
+  const usd = pair("USDILS");
+  const eur = pair("EURILS");
+  const gbp = pair("GBPILS");
+  return "IF(OR(" + curCellRef + "=\"ILS\"," + curCellRef + "=\"ILA\"), 1," +
+    "IF(" + curCellRef + "=\"USD\", " + usd + "," +
+    "IF(" + curCellRef + "=\"EUR\", " + eur + "," +
+    "IF(OR(" + curCellRef + "=\"GBP\"," + curCellRef + "=\"GBX\"), " + gbp + "," +
+    usd + "))))"; // unknown currency -> USDILS fallback (never silent 1:1)
+}
+
+// LIVE PARENT-unit ILS rate — live analogue of fxIlsPerParentUnitExpr_ for the yieldOrigin
+// denominator of OPEN positions. (audit fin-gas yieldOrigin-parent)
+function fxIlsPerParentUnitLiveExpr_(curCellRef) {
+  function livePair(code) {
+    return "IFERROR(GOOGLEFINANCE(\"CURRENCY:" + code + "\"), $AA$1)";
+  }
+  const eur = livePair("EURILS");
+  const gbp = livePair("GBPILS");
+  return "IF(OR(" + curCellRef + "=\"ILS\"," + curCellRef + "=\"ILA\"), 1," +
+    "IF(" + curCellRef + "=\"USD\", $AA$1," +
+    "IF(" + curCellRef + "=\"EUR\", " + eur + "," +
+    "IF(OR(" + curCellRef + "=\"GBP\"," + curCellRef + "=\"GBX\"), " + gbp + "," +
+    "$AA$1))))"; // unknown currency -> live USDILS fallback (never silent 1:1)
 }
 
 function buildSnapshotHeaderIndexMap_(headers) {
@@ -547,7 +618,9 @@ function dedupeSnapshotSchemaOnce_() {
 }
 
 function RunSnapshotSchemaDedupOnce() {
-  const result = dedupeSnapshotSchemaOnce_();
+  // Hard-disabled — the canonical migration is done and schema dedup must NEVER run on
+  // the live sheet (it rewrites the ledger). (audit fin-gas dedup-reachable)
+  const result = { ok: false, error: "disabled" };
   SpreadsheetApp.getUi().alert("צמצום סכמת תמונת מצב", JSON.stringify(result, null, 2), SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
@@ -932,6 +1005,10 @@ function fixSnapshotSheet_() {
     r[ix.ticker] = cleanText(r[ix.ticker]).toUpperCase();
     r[ix.currency] = cleanText(r[ix.currency]);
     r[ix.status] = cleanText(r[ix.status]);
+    // Canonicalize any recognized closed synonym (closed/close/sold/נמכר) to the
+    // exact Hebrew 'סגור' the write path uses, so a stray manual/imported value can't
+    // persist and later misvalue via the live formulas. (audit fin-gas closed-synonym)
+    if (isClosedStatus_(r[ix.status])) r[ix.status] = "סגור";
     r[ix.purchaseDate] = normalizeDateOnly_(r[ix.purchaseDate]);
     if (ix.location >= 0) {
       r[ix.location] = inferCryptoLocationByFields_(r[ix.platform], r[ix.type], r[ix.ticker], r[ix.purchaseDate], r[ix.location]);
@@ -1080,8 +1157,12 @@ function doPost(e) {
     }
 
     if (action === "dedupe_snapshot_schema") {
-      const result = dedupeSnapshotSchemaOnce_();
-      return jsonResponse_(result);
+      // Hard-disabled: schema dedup rewrites the live ledger (freezes GOOGLEFINANCE
+      // prices, wipes formulas, depends on InstallSystem rebuilding perfectly). The
+      // canonical migration is already done; per the standing guardrail this must
+      // NEVER run on the live sheet, so it is unreachable from the public API.
+      // (audit fin-gas dedup-reachable)
+      return jsonResponse_({ ok: false, error: "disabled" });
     }
 
     // ---- Telegram bot setup/diagnostics (token-guarded) ----
@@ -1258,6 +1339,7 @@ function sanitizeTrade_(trade) {
   out.Origin_Currency = neuterFormula_((out.Origin_Currency || out["מטבע"] || "ILS").toUpperCase());
   out.Commission = parseNum(out.Commission || out["עמלה"]);
   out.Status = neuterFormula_(out.Status || out["סטטוס"] || "פתוח");
+  if (isClosedStatus_(out.Status)) out.Status = "סגור";
   out.Sell_Date = normalizeDateOnly_(out.Sell_Date || out["תאריך מכירה"] || "");
   // Sell_Price_Origin (שער מכירה) is a STORED value used by the closed-trade yield
   // formulas. It must be explicitly carried through sanitize so an edit that marks a
@@ -1294,8 +1376,17 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
   const fxBuy = fxIlsPerUnitExpr_("E" + r, "$I" + r);
   // Currency-aware ILS-per-unit-of-origin rate on the SELL date (V) — used for the
   // closed-position proceeds so a non-USD (e.g. ILS Bit2C/Horizon) sale is no longer
-  // multiplied by USDILS. (audit fin-gas #1, bug-gas closed-Q)
-  const fxSell = fxIlsPerUnitExpr_("V" + r, "$I" + r);
+  // multiplied by USDILS. (audit fin-gas #1, bug-gas closed-Q). When the sell date (V)
+  // is blank, GOOGLEFINANCE on an empty date errors and silently collapses to the LIVE
+  // USDILS ($AA$1) — inventing a spurious FX gain/loss vs the actual sale day. Fall back
+  // to the BUY-date rate instead, so a back-dated sale with no date entered is not valued
+  // at today's FX. (audit fin-gas sell-date-FX)
+  const fxSell = 'IF(V' + r + '<>"", (' + fxIlsPerUnitExpr_("V" + r, "$I" + r) + '), (' + fxBuy + '))';
+  // PARENT-unit rates for the yieldOrigin denominator only (GBP/1.0 for sub-units),
+  // so back-converting Q to an origin value matches the PARENT-unit Cost_Origin (H).
+  // (audit fin-gas yieldOrigin-parent)
+  const fxSellParent = 'IF(V' + r + '<>"", (' + fxIlsPerParentUnitExpr_("V" + r, "$I" + r) + '), (' + fxIlsPerParentUnitExpr_("E" + r, "$I" + r) + '))';
+  const fxLiveParent = fxIlsPerParentUnitLiveExpr_("$I" + r);
   // Currency-aware LIVE ILS-per-unit-of-origin rate — used for the open-position
   // value/spot side so EUR/GBP/GBX/ILA live values use their own pair, not USDILS.
   // (audit fin-gas #2)
@@ -1305,20 +1396,23 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
   // ETFs M is the NATIVE quote currency (= Origin_Currency), so use the currency-aware
   // live pair. (audit fin-gas #3 — M is not always USD)
   const liveMRate = 'IF(C' + r + '="קריפטו", $AA$1, (' + fxLive + '))';
+  // Closed-status test fragments — every recognized synonym, not just exact 'סגור'.
+  const closedK = closedTestExpr_("K" + r);
+  const notClosedK = notClosedTestExpr_("K" + r);
   const formulas = {
     // ETF/קרן סל priced like stocks (direct quote), not zeroed. (audit fix #95)
     spotUsd: '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(OR(C' + r + '="שוק ההון",C' + r + '="ETF",C' + r + '="קרן סל"), GOOGLEFINANCE(D' + r + ', "price"), 0)))',
     // costUsd / buyUsd = ILS amount converted back to USD via the dated USDILS rate.
     costUsd: '=IF(H' + r + '="","", ((H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + ')) / ' + hRate + ')',
     costIls: '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + '))',
-    valueUsd: '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
+    valueUsd: '=IF(F' + r + '="", 0, F' + r + '*IF(AND(' + closedK + ', U' + r + '<>""), U' + r + ', M' + r + '))',
     // שווי ILS — computed DIRECTLY in ILS and currency-aware. Closed (with a stored
     // sale price U): proceeds = qty × U(origin) × ILS-per-origin-unit at the SELL date.
     // Open / closed-without-U: qty × spotIls-per-unit (T), which is itself currency-
     // aware (USDILS only for crypto, the row's own pair for stocks/ETFs). The old
     // formula multiplied EVERY currency's proceeds by USDILS, inflating ILS-denominated
     // closed trades ~3.6-3.7x and using the wrong pair for EUR/GBP. (audit fin-gas #1/#2)
-    valueIls: '=IF(F' + r + '="","", F' + r + ' * IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ' * (' + fxSell + '), IF(M' + r + '="", 0, M' + r + ' * (' + liveMRate + '))))',
+    valueIls: '=IF(F' + r + '="","", F' + r + ' * IF(AND(' + closedK + ', U' + r + '<>""), U' + r + ' * (' + fxSell + '), IF(M' + r + '="", 0, M' + r + ' * (' + liveMRate + '))))',
     buyUsd: '=IF(G' + r + '="","", ($G' + r + ' * (' + fxBuy + ')) / ' + hRate + ')',
     buyIls: '=IF(G' + r + '="","", $G' + r + ' * (' + fxBuy + '))',
     // שער נוכחי ILS (live price per unit, in ILS) — currency-aware: USDILS for crypto
@@ -1326,13 +1420,13 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
     spotIls: '=IF(M' + r + '="","", M' + r + ' * (' + liveMRate + '))',
     // שער מכירה (U) is a STORED value (the real sale price) for closed positions,
     // entered at sell time — NOT auto-computed from the live market price.
-    yieldAtSale: '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
+    yieldAtSale: '=IF(OR(' + notClosedK + ', H' + r + '="", H' + r + '=0, U' + r + '="", F' + r + '=""), "", (F' + r + '*U' + r + '-(H' + r + '+IF(J' + r + '="",0,J' + r + ')))/(H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
     // תשואה מקור — origin-currency (FX-stripped) return. Origin market value is derived
     // by dividing the (currency-correct) ILS value Q back out by the LIVE ILS-per-origin
     // rate, so it is valid for EVERY currency (USD/ILS/EUR/GBP/GBX/ILA) instead of the
     // old branch that mixed an ILS value with a foreign-currency cost basis. (audit fin-gas #4)
-    yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (($Q' + r + ' / (' + fxLive + ')) - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
-    yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')',
+    yieldOrigin: '=IF(OR($H' + r + '="", $H' + r + '=0), "", IF(OR($Q' + r + '="", $Q' + r + '=0), "", (($Q' + r + ' / IF(AND(' + closedK + ', U' + r + '<>""), (' + fxSellParent + '), (' + fxLiveParent + '))) - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + '))))',
+    yieldIls: '=IF(OR($O' + r + '="", $O' + r + '=0), "", IF(OR($Q' + r + '="", $Q' + r + '=0), "", ($Q' + r + '-$O' + r + ')/$O' + r + '))',
     // Sale return in ILS — the ₪ analogue of yieldAtSale (W). Only populated for
     // closed positions; uses sale proceeds in ILS (Q=שווי ILS) vs cost in ILS
     // (O=עלות ILS). Also requires the stored sale price U<>"" so this reads as a
@@ -1340,7 +1434,7 @@ function applyCalculatedFormulasForRow_(ws, rowNum) {
     // ONLY when U is present; if U is blank, Q falls back to the LIVE market price
     // (M) and the return would drift daily. Gating on U<>"" (matching yieldAtSale)
     // keeps it frozen at the actual sale, blank otherwise. (audit fix #74)
-    yieldAtSaleIls: '=IF(OR(K' + r + '<>"סגור", U' + r + '="", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')'
+    yieldAtSaleIls: '=IF(OR(' + notClosedK + ', U' + r + '="", O' + r + '="", O' + r + '=0, Q' + r + '=""), "", (Q' + r + '-O' + r + ')/O' + r + ')'
   };
 
   Object.keys(formulas).forEach(function (k) {
@@ -1382,7 +1476,7 @@ function addSaleReturnIlsColumn_() {
   if (lastRow >= 2 && kL && oL && qL && uL) {
     const formulas = [];
     for (let r = 2; r <= lastRow; r++) {
-      formulas.push(['=IF(OR(' + kL + r + '<>"סגור", ' + uL + r + '="", ' + oL + r + '="", ' + oL + r + '=0, ' + qL + r + '=""), "", (' + qL + r + '-' + oL + r + ')/' + oL + r + ')']);
+      formulas.push(['=IF(OR(' + notClosedTestExpr_(kL + r) + ', ' + uL + r + '="", ' + oL + r + '="", ' + oL + r + '=0, ' + qL + r + '=""), "", (' + qL + r + '-' + oL + r + ')/' + oL + r + ')']);
     }
     const rng = ws.getRange(2, col, formulas.length, 1);
     rng.setFormulas(formulas);
@@ -1456,7 +1550,11 @@ function isSpreadsheetOwnerTrigger_() {
       // equal the script's effective user (the deployer/owner).
       return !!active && !!effective && active === effective;
     }
-    return !!active && active === owner;
+    // Prefer the effective user (always the owner/deployer under an installable trigger,
+    // and reliably populated where getActiveUser() can return "" for a consumer Gmail in
+    // a simple onEdit — which would silently reject the legitimate owner's own edits).
+    // Still accept active===owner. Fail-closed default preserved. (audit fin-gas owner-gate)
+    return (!!effective && effective === owner) || (!!active && active === owner);
   } catch (e) {
     return false; // fail closed
   }
@@ -1541,6 +1639,11 @@ function findTradeRowByKey_(ws, ix, trade) {
   const targetDate = normalizeDateOnly_(trade.Purchase_Date || "");
   const targetQty = parseNum(trade.Quantity || 0);
   const targetCost = parseNum(trade.Cost_Origin || 0);
+
+  // Never match on an all-empty identity — that would match the FIRST row (qty/cost 0,
+  // blank ticker/date/platform) and let a key-less call hit an unrelated placeholder
+  // row. Require at least ticker + date + platform to be present. (audit bug-bridge)
+  if (!targetTicker || !targetDate || !targetPlatform) return -1;
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
@@ -1700,10 +1803,12 @@ function deleteTradeImpl_(tradeOrId) {
   const ix = getColumnMap_(ws);
   const asTrade = (typeof tradeOrId === "object" && tradeOrId !== null) ? tradeOrId : { Trade_ID: tradeOrId };
   const tradeId = cleanText(asTrade.Trade_ID || "");
-  let rowIndex = findTradeRowById_(ws, ix, tradeId);
-  if (rowIndex < 0) {
-    rowIndex = findTradeRowByKey_(ws, ix, asTrade);
-  }
+  // Deletion is ID-ONLY: an empty/typo'd Trade_ID must FAIL, never fall through to the
+  // fuzzy key match — an empty-key match can silently delete an unrelated (e.g. blank
+  // placeholder) row. Fuzzy matching is fine for edit, never for a destructive delete.
+  // (audit bug-bridge — empty-key wrong-row delete)
+  if (!tradeId) return { ok: false, error: "delete requires a non-empty Trade_ID" };
+  const rowIndex = findTradeRowById_(ws, ix, tradeId);
   if (rowIndex < 0) return { ok: false, error: "Trade not found" };
   ws.deleteRow(rowIndex);
   return { ok: true, message: "Deleted", row: rowIndex };
@@ -1862,7 +1967,7 @@ function SystemDoctor() {
       continue;
     }
     let changed = false;
-    if (ticker === "VOO" && statusK !== "סגור") {
+    if (ticker === "VOO" && !isClosedStatus_(statusK)) {
       sheet.getRange(r, 11).setValue("סגור");
       changed = true;
     }
@@ -1916,7 +2021,7 @@ function InstallSystem() {
   const yieldHeaders = [["תשואה במכירה", "תשואה מקור", "תשואה שקלית"]];
   mainSheet.getRange("W1:Y1").setValues(yieldHeaders).setBackground("#2C5282").setFontColor("white").setFontWeight("bold").setHorizontalAlignment("center");
   mainSheet.getRange("Z1").setValue("שער USD/ILS עדכני:").setFontWeight("bold");
-  mainSheet.getRange("AA1").setFormula('=GOOGLEFINANCE("CURRENCY:USDILS")').setBackground("#FFF2CC").setFontWeight("bold").setHorizontalAlignment("center");
+  mainSheet.getRange("AA1").setFormula('=IFERROR(GOOGLEFINANCE("CURRENCY:USDILS"), 3.6)').setBackground("#FFF2CC").setFontWeight("bold").setHorizontalAlignment("center");
   mainSheet.getRange("AA1").setNumberFormat("#,##0.000000");
   const numRows = Math.max(mainSheet.getLastRow(), 2) - 1;
   const pricingFormulas = [];
@@ -1927,10 +2032,17 @@ function InstallSystem() {
     // Currency-aware ILS-per-unit-of-origin rate on the buy date. (audit #7/#97)
     const fxBuy = fxIlsPerUnitExpr_("E" + r, "$I" + r);
     // Sell-date and live currency-aware ILS-per-origin-unit rates (mirror of
-    // applyCalculatedFormulasForRow_). (audit fin-gas #1/#2/#3/#4)
-    const fxSell = fxIlsPerUnitExpr_("V" + r, "$I" + r);
+    // applyCalculatedFormulasForRow_). (audit fin-gas #1/#2/#3/#4). Blank sell date (V)
+    // falls back to the BUY-date rate, not live USDILS. (audit fin-gas sell-date-FX)
+    const fxSell = 'IF(V' + r + '<>"", (' + fxIlsPerUnitExpr_("V" + r, "$I" + r) + '), (' + fxBuy + '))';
     const fxLive = fxIlsPerUnitLiveExpr_("$I" + r);
+    // PARENT-unit rates for the yieldOrigin denominator only. (audit fin-gas yieldOrigin-parent)
+    const fxSellParent = 'IF(V' + r + '<>"", (' + fxIlsPerParentUnitExpr_("V" + r, "$I" + r) + '), (' + fxIlsPerParentUnitExpr_("E" + r, "$I" + r) + '))';
+    const fxLiveParent = fxIlsPerParentUnitLiveExpr_("$I" + r);
     const liveMRate = 'IF(C' + r + '="קריפטו", $AA$1, (' + fxLive + '))';
+    // Closed-status test fragments — every recognized synonym, not just exact 'סגור'.
+    const closedK = closedTestExpr_("K" + r);
+    const notClosedK = notClosedTestExpr_("K" + r);
     pricingFormulas.push([
       // spotUsd: crypto via CURRENCY pair; stocks AND ETFs (שוק ההון / ETF / קרן סל)
       // via direct price quote. Previously ETF/קרן סל fell to the 0 branch → valueIls=0
@@ -1938,23 +2050,23 @@ function InstallSystem() {
       '=IF(D' + r + '="","", IF(C' + r + '="קריפטו", GOOGLEFINANCE("CURRENCY:"&D' + r + '&"USD"), IF(OR(C' + r + '="שוק ההון",C' + r + '="ETF",C' + r + '="קרן סל"), GOOGLEFINANCE(D' + r + ', "price"), 0)))',
       '=IF(H' + r + '="","", ((H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + ')) / ' + hRate + ')',
       '=IF(H' + r + '="","", (H' + r + '+IF(J' + r + '="",0,J' + r + ')) * (' + fxBuy + '))',
-      '=IF(F' + r + '="", 0, F' + r + '*IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ', M' + r + '))',
+      '=IF(F' + r + '="", 0, F' + r + '*IF(AND(' + closedK + ', U' + r + '<>""), U' + r + ', M' + r + '))',
       // שווי ILS — currency-aware (see applyCalculatedFormulasForRow_). Closed-with-U:
       // qty×U(origin)×ILS-per-origin at SELL date; else qty×M×live-rate (USDILS only for
       // crypto, the row's own pair for stocks/ETFs). Fixes the ~3.7x ILS-close inflation
       // and the EUR/GBP wrong-pair value. (audit fin-gas #1/#2)
-      '=IF(F' + r + '="","", F' + r + ' * IF(AND(K' + r + '="סגור", U' + r + '<>""), U' + r + ' * (' + fxSell + '), IF(M' + r + '="", 0, M' + r + ' * (' + liveMRate + '))))',
+      '=IF(F' + r + '="","", F' + r + ' * IF(AND(' + closedK + ', U' + r + '<>""), U' + r + ' * (' + fxSell + '), IF(M' + r + '="", 0, M' + r + ' * (' + liveMRate + '))))',
       '=IF(G' + r + '="","", ($G' + r + ' * (' + fxBuy + ')) / ' + hRate + ')',
       '=IF(G' + r + '="","", $G' + r + ' * (' + fxBuy + '))',
       // שער נוכחי ILS — currency-aware live per-unit price in ILS. (audit fin-gas #2/#3)
       '=IF(M' + r + '="","", M' + r + ' * (' + liveMRate + '))'
     ]);
     yieldFormulas.push([
-      '=IF(OR(K' + r + '<>"סגור", G' + r + '="", G' + r + '=0, U' + r + '=""), "", (U' + r + '-G' + r + ')/G' + r + ')',
+      '=IF(OR(' + notClosedK + ', H' + r + '="", H' + r + '=0, U' + r + '="", F' + r + '=""), "", (F' + r + '*U' + r + '-(H' + r + '+IF(J' + r + '="",0,J' + r + ')))/(H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
       // תשואה מקור — FX-stripped origin return for EVERY currency (Q back-converted by
       // the live origin pair), replacing the old USD/ILS-only branch. (audit fin-gas #4)
-      '=IF(OR($H' + r + '="", $H' + r + '=0), 0, (($Q' + r + ' / (' + fxLive + ')) - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + ')))',
-      '=IF(OR($O' + r + '="", $O' + r + '=0), 0, ($Q' + r + '-$O' + r + ')/$O' + r + ')'
+      '=IF(OR($H' + r + '="", $H' + r + '=0), "", IF(OR($Q' + r + '="", $Q' + r + '=0), "", (($Q' + r + ' / IF(AND(' + closedK + ', U' + r + '<>""), (' + fxSellParent + '), (' + fxLiveParent + '))) - ($H' + r + '+IF(J' + r + '="",0,J' + r + '))) / ($H' + r + '+IF(J' + r + '="",0,J' + r + '))))',
+      '=IF(OR($O' + r + '="", $O' + r + '=0), "", IF(OR($Q' + r + '="", $Q' + r + '=0), "", ($Q' + r + '-$O' + r + ')/$O' + r + '))'
     ]);
   }
   if (numRows > 0) {
@@ -1973,7 +2085,7 @@ function InstallSystem() {
       const ilsYieldFormulas = [];
       for (let i = 0; i < numRows; i++) {
         const rr = i + 2;
-        ilsYieldFormulas.push(['=IF(OR(' + kL + rr + '<>"סגור", ' + uL + rr + '="", ' + oL + rr + '="", ' + oL + rr + '=0, ' + qL + rr + '=""), "", (' + qL + rr + '-' + oL + rr + ')/' + oL + rr + ')']);
+        ilsYieldFormulas.push(['=IF(OR(' + notClosedTestExpr_(kL + rr) + ', ' + uL + rr + '="", ' + oL + rr + '="", ' + oL + rr + '=0, ' + qL + rr + '=""), "", (' + qL + rr + '-' + oL + rr + ')/' + oL + rr + ')']);
       }
       mainSheet.getRange(2, acIx + 1, numRows, 1).setFormulas(ilsYieldFormulas).setNumberFormat("0.00%");
     }
@@ -2005,7 +2117,7 @@ function InstallSystem() {
         const statusVal = cleanText(statusVals[i][0]);
         const existingVal = sellVals[i][0];
         const existingText = cleanText(existingVal);
-        if (statusVal === "סגור") {
+        if (isClosedStatus_(statusVal)) {
           outSell.push([existingText && existingText !== "עדיין פתוח" ? existingVal : new Date()]);
         } else {
           outSell.push(["עדיין פתוח"]);
@@ -2134,7 +2246,11 @@ function buildDashboardV2() {
     const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
     const cur = cleanText(rowVal_(r, map, "currency")), fee = parseNum(rowVal_(r, map, "fee"));
     const co = parseNum(rowVal_(r, map, "costOrigin"));
-    realized += (vi - ci);
+    // Only realize a closed row that carries a STORED sale price (U). Without it,
+    // valueIls falls back to the LIVE market price and "realized" would be a
+    // fabricated figure that drifts daily. (audit fin-gas #3)
+    const hasSale = cleanText(rowVal_(r, map, "sellPrice")) !== "";
+    if (hasSale) realized += (vi - ci);
     totFeeIls += feeToIls_(fee, cur, co, ci, rate);
     if (!closedAgg[t]) closedAgg[t] = { cost: 0, val: 0 };
     closedAgg[t].cost += ci; closedAgg[t].val += vi;
@@ -2151,7 +2267,7 @@ function buildDashboardV2() {
   const cash = deposits > 0 ? (deposits - totCost) : 0;
   const totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
   let cryptoVal = 0, equityVal = 0;
-  Object.keys(byTicker).forEach(function (t) { if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
+  Object.keys(byTicker).forEach(function (t) { if (isCryptoShareRow_(t, byTicker[t].type)) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
   const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
   let top3 = 0; tks.slice(0, 3).forEach(function (t) { top3 += byTicker[t].val; });
   const conc = totVal ? top3 / totVal : 0;
@@ -2541,13 +2657,24 @@ function feeToIls_(fee, cur, costOrigin, costIls, usdIlsRate) {
   if (!f) return 0;
   const c = cleanText(cur).toUpperCase();
   if (c === "ILS") return f;
-  if (c === "USD") return f * (usdIlsRate || 1);
+  if (c === "ILA") return f / 100; // agorot — exactly ILS/100, no FX needed
+  // USD: scale by the live USDILS only when it actually loaded. The caller passes
+  // rate=1 as a "failed to load" sentinel (USDILS is never legitimately ~1, it's ~3.6),
+  // so a bare `f*(rate||1)` would silently add a USD fee as raw ILS. When the live rate
+  // is unavailable, fall through to the row's derived ci/(co+f) rate instead. (audit fin-gas #8)
   const co = parseNum(costOrigin), ci = parseNum(costIls);
+  if (c === "USD" && usdIlsRate && usdIlsRate > 1) return f * usdIlsRate;
   if (co + f > 0 && ci > 0) {
     const derived = ci / (co + f); // ILS per 1 unit of origin currency
     if (isFinite(derived) && derived > 0) return f * derived;
   }
-  return f * (usdIlsRate || 1); // last-ditch: USDILS, never silent 1:1
+  // Last-ditch only when the derived rate is unavailable. USDILS is the wrong pair for
+  // a recognized non-USD foreign currency (EUR/GBP/GBX), so apply it strictly to USD /
+  // genuinely-unknown currencies; for a known foreign currency with no resolvable rate
+  // leave the fee unscaled rather than mis-converting by USDILS. (audit fin-gas #8)
+  const KNOWN_FOREIGN_ = ["EUR", "GBP", "GBX", "EURX"];
+  if (KNOWN_FOREIGN_.indexOf(c) >= 0) return f;
+  return f * (usdIlsRate || 1); // last-ditch: USDILS for USD / unknown only
 }
 
 function computePortfolioStats_() {
@@ -2585,7 +2712,10 @@ function computePortfolioStats_() {
     const ci = parseNum(rowVal_(r, map, "costIls")), vi = parseNum(rowVal_(r, map, "valueIls"));
     const cur = cleanText(rowVal_(r, map, "currency")), fee = parseNum(rowVal_(r, map, "fee"));
     const co = parseNum(rowVal_(r, map, "costOrigin"));
-    realized += (vi - ci); totFeeIls += feeToIls_(fee, cur, co, ci, rate);
+    // Realize only when a stored sale price (U) exists — otherwise valueIls is the
+    // LIVE price and "realized" would be fabricated/daily-drifting. (audit fin-gas #3)
+    if (cleanText(rowVal_(r, map, "sellPrice")) !== "") realized += (vi - ci);
+    totFeeIls += feeToIls_(fee, cur, co, ci, rate);
     if (!closedAgg[t]) closedAgg[t] = { cost: 0, val: 0 };
     closedAgg[t].cost += ci; closedAgg[t].val += vi;
   });
@@ -2599,7 +2729,7 @@ function computePortfolioStats_() {
   const cash = deposits > 0 ? (deposits - totCost) : 0;
   const totalAccount = totVal + cash, netPL = totVal - totCost, ret = totCost ? netPL / totCost : 0;
   let cryptoVal = 0, equityVal = 0;
-  Object.keys(byTicker).forEach(function (t) { if (byTicker[t].type === "קריפטו" || cryptoTk[t]) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
+  Object.keys(byTicker).forEach(function (t) { if (isCryptoShareRow_(t, byTicker[t].type)) cryptoVal += byTicker[t].val; else equityVal += byTicker[t].val; });
   const tks = Object.keys(byTicker).sort(function (a, b) { return byTicker[b].val - byTicker[a].val; });
   let top3 = 0; tks.slice(0, 3).forEach(function (t) { top3 += byTicker[t].val; });
   const ranked = tks.filter(function (t) { return byTicker[t].cost > 0; })
@@ -2864,10 +2994,14 @@ function pollTelegramTick() { pollTelegram_(); try { keepStreamlitAwake_(); } ca
 function authorizeBot() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     const f = t.getHandlerFunction();
-    if (f === "logPortfolioValueDaily" || f === "pollTelegramTick") ScriptApp.deleteTrigger(t);
+    if (f === "logPortfolioValueDaily" || f === "pollTelegramTick" || f === "onFormSubmit") ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger("logPortfolioValueDaily").timeBased().everyDays(1).atHour(22).create();
   ScriptApp.newTrigger("pollTelegramTick").timeBased().everyMinutes(1).create();
+  // Install the onFormSubmit trigger: Google does NOT run a SIMPLE onFormSubmit on real
+  // form submissions, only an INSTALLABLE one, so linked-Form trades would otherwise never
+  // flow into the snapshot. (audit fin-gas onFormSubmit-trigger)
+  try { ScriptApp.newTrigger("onFormSubmit").forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onFormSubmit().create(); } catch (e) {}
   tgApi_("deleteWebhook", { drop_pending_updates: true }); // polling, not webhook
   logPortfolioValue_();
   const chat = PropertiesService.getScriptProperties().getProperty("TELEGRAM_CHAT_ID");
@@ -2886,7 +3020,7 @@ function buildDashboard() {
   const data = mainSheet.getDataRange().getValues();
   const map = buildSnapshotHeaderIndexMap_(data[0] || []);
   const rows = data.slice(1).filter(function (r) {
-    return cleanText(rowVal_(r, map, "ticker")) !== "" && cleanText(rowVal_(r, map, "status")) !== "סגור";
+    return cleanText(rowVal_(r, map, "ticker")) !== "" && !isClosedStatus_(rowVal_(r, map, "status"));
   });
   const summary = {};
   let totalCostILS = 0;
@@ -2898,7 +3032,14 @@ function buildDashboard() {
     const costIls = parseNum(rowVal_(r, map, "costIls"));
     const valueIls = parseNum(rowVal_(r, map, "valueIls"));
     const costOrig = parseNum(rowVal_(r, map, "costOrigin")) + parseNum(rowVal_(r, map, "fee"));
-    const valueOrig = cleanText(rowVal_(r, map, "currency")) === "USD" ? parseNum(rowVal_(r, map, "valueUsd")) : valueIls;
+    // Origin-currency market value: USD has a true native quote (valueUsd); for ILS the
+    // value already IS in origin units; for EUR/GBP/GBX/ILA back-convert valueIls by the
+    // row's own ILS-per-origin-unit rate (costIls/costOrig) instead of treating an ILS
+    // number as EUR/GBP — which divided ILS by a foreign cost basis. (audit fin-gas #4)
+    const cur = cleanText(rowVal_(r, map, "currency"));
+    const valueOrig = cur === "USD" ? parseNum(rowVal_(r, map, "valueUsd"))
+      : (cur === "ILS" ? valueIls
+        : (costOrig > 0 && costIls > 0 ? valueIls * (costOrig / costIls) : valueIls));
     summary[t].qty += qty;
     summary[t].costILS += costIls;
     summary[t].valILS += valueIls;
@@ -2999,7 +3140,7 @@ function onEdit(e) {
     if (editedCol === map.status && map.sellDate >= 0) {
       const rowNum = e.range.getRow();
       const statusVal = cleanText(sheet.getRange(rowNum, map.status + 1).getValue());
-      if (statusVal === "סגור") {
+      if (isClosedStatus_(statusVal)) {
         const sellDateCell = sheet.getRange(rowNum, map.sellDate + 1);
         const currentSellDate = cleanText(sellDateCell.getValue());
         if (!currentSellDate || currentSellDate === "עדיין פתוח") {
@@ -3011,9 +3152,14 @@ function onEdit(e) {
     }
   }
 
-  // Allow manual/additional rows in תגובות לטופס 1 to flow into תמונת מצב.
+  // Allow manual/additional rows in תגובות לטופס 1 to flow into תמונת מצב. A multi-row
+  // paste/fill fires ONE onEdit whose range spans N rows — loop over all of them, not just
+  // the top row, or the rest are silently dropped. (audit fin-gas onEdit-multirow)
   if (sheetName === AUDIT_SHEET) {
-    syncAuditRowToPortfolio_(sheet, e.range.getRow());
+    const startRow = e.range.getRow(), nRows = e.range.getNumRows();
+    for (let rr = startRow; rr < startRow + nRows; rr++) {
+      if (rr >= 2) syncAuditRowToPortfolio_(sheet, rr);
+    }
     return;
   }
 
@@ -3054,7 +3200,7 @@ function renderReport(reportName, homeSheet) {
   const data = mainSheet.getDataRange().getValues();
   const map = buildSnapshotHeaderIndexMap_(data[0] || []);
   const rows = data.slice(1).filter(function (r) {
-    return cleanText(rowVal_(r, map, "ticker")) !== "" && cleanText(rowVal_(r, map, "status")) !== "סגור";
+    return cleanText(rowVal_(r, map, "ticker")) !== "" && !isClosedStatus_(rowVal_(r, map, "status"));
   });
   let totalVal = 0, totalCost = 0, cryptoVal = 0, btcVal = 0;
   const platformCosts = {}, tickerSummary = {};
@@ -3067,13 +3213,19 @@ function renderReport(reportName, homeSheet) {
     const costILS = parseNum(rowVal_(r, map, "costIls"));
     const valILS = parseNum(rowVal_(r, map, "valueIls"));
     const costOrig = parseNum(rowVal_(r, map, "costOrigin")) + parseNum(rowVal_(r, map, "fee"));
-    const valOrig = cleanText(rowVal_(r, map, "currency")) === "USD" ? parseNum(rowVal_(r, map, "valueUsd")) : valILS;
+    // Origin-currency value, currency-aware (see prior report). USD→native quote, ILS→
+    // already origin, EUR/GBP/GBX/ILA→back-convert valILS by the row's own ILS-per-origin
+    // rate (costILS/costOrig) rather than mislabeling an ILS number. (audit fin-gas #4)
+    const curOrig = cleanText(rowVal_(r, map, "currency"));
+    const valOrig = curOrig === "USD" ? parseNum(rowVal_(r, map, "valueUsd"))
+      : (curOrig === "ILS" ? valILS
+        : (costOrig > 0 && costILS > 0 ? valILS * (costOrig / costILS) : valILS));
     totalVal += valILS; totalCost += costILS;
     if (platform) platformCosts[platform] = (platformCosts[platform] || 0) + costILS;
     if (!tickerSummary[ticker]) tickerSummary[ticker] = { cost: 0, val: 0, costOrig: 0, valOrig: 0 };
     tickerSummary[ticker].cost += costILS; tickerSummary[ticker].val += valILS;
     tickerSummary[ticker].costOrig += costOrig; tickerSummary[ticker].valOrig += valOrig;
-    if (type === "קריפטו" || CRYPTO_SHARE_TICKERS.indexOf(ticker) >= 0) cryptoVal += valILS; // MSTR=stock (crypto-share parity)
+    if (isCryptoShareRow_(ticker, type)) cryptoVal += valILS; // broad classifier, MSTR=stock (crypto-share parity)
     if (ticker === "BTC") { btcVal += valILS; assetData.BTC.realQty += qty; assetData.BTC.realVal += valILS; }
     if (ticker === "IBIT") { btcVal += valILS; assetData.BTC.etfQty += qty; assetData.BTC.etfVal += valILS; }
     if (ticker === "ETH") { assetData.ETH.realQty += qty; assetData.ETH.realVal += valILS; }
@@ -3234,7 +3386,7 @@ function drawSingleAssetTable(ticker, allRows, homeSheet, startRow) {
       .setFontWeight("bold");
 
     // Closed status emphasized in red.
-    if (String(body[i][7]).trim() === "סגור") {
+    if (isClosedStatus_(body[i][7])) {
       homeSheet.getRange(rr, 9).setFontColor("#E53E3E").setFontWeight("bold");
     }
   }
@@ -3285,7 +3437,7 @@ function distributeToPlatformSheets() {
     const rows = data.filter(function (r, idx) { return idx > 0 && cleanText(rowVal_(r, map, "platform")) === platform && cleanText(rowVal_(r, map, "ticker")) !== ""; });
     let totCostIls = 0, totValIls = 0;
     const body = rows.map(function (r) {
-      if (cleanText(rowVal_(r, map, "status")) !== "סגור") {
+      if (!isClosedStatus_(rowVal_(r, map, "status"))) {
         totCostIls += parseNum(rowVal_(r, map, "costIls"));
         totValIls += parseNum(rowVal_(r, map, "valueIls"));
       }
