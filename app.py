@@ -367,7 +367,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r12"
+APP_BUILD = "2026-06-20 · r13"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -7070,7 +7070,16 @@ def _pp_inject_help_shim() -> None:
                 if (isPhantom(c)) {
                   if (c.style.display !== 'none') {
                     c.style.setProperty('display', 'none', 'important');
+                    c.setAttribute('data-pp-phantom2', '1');
                   }
+                } else if (c.getAttribute('data-pp-phantom2')) {
+                  // NON-DESTRUCTIVE: this scanner walks the WHOLE document (incl. the sidebar).
+                  // A container that was momentarily empty during a slow cold-start render got
+                  // display:none'd and was NEVER restored — that is why the sidebar opened
+                  // empty/WHITE on the first open until a manual refresh. Restore it the moment
+                  // it gains real content. (android cold-start: empty sidebar fix)
+                  c.style.removeProperty('display');
+                  c.removeAttribute('data-pp-phantom2');
                 }
               }
             }
