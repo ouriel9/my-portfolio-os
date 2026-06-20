@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r3"
+APP_BUILD = "2026-06-20 · r4"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -7884,7 +7884,11 @@ def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
           content:'width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover'}});
         ensure('meta[name="theme-color"]', {{_tag:'meta', name:'theme-color', content:'{theme_color}'}});
         ensure('meta[name="apple-mobile-web-app-capable"]', {{_tag:'meta', name:'apple-mobile-web-app-capable', content:'yes'}});
-        ensure('meta[name="apple-mobile-web-app-status-bar-style"]', {{_tag:'meta', name:'apple-mobile-web-app-status-bar-style', content:'black-translucent'}});
+        // 'default' (not 'black-translucent'): in a standalone iOS PWA, black-translucent
+        // makes the web content render UNDER the status bar/notch, hiding the page header
+        // and pushing the sidebar menu button (top ~12px) behind the clock so it can't be
+        // tapped. 'default' reserves the status-bar space so all top UI is visible+tappable.
+        ensure('meta[name="apple-mobile-web-app-status-bar-style"]', {{_tag:'meta', name:'apple-mobile-web-app-status-bar-style', content:'default'}});
         ensure('meta[name="mobile-web-app-capable"]', {{_tag:'meta', name:'mobile-web-app-capable', content:'yes'}});
         ensure('link[rel="manifest"]', {{_tag:'link', rel:'manifest', href:'{manifest_data_uri}'}});
       }} catch(e) {{}}
