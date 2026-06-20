@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r8"
+APP_BUILD = "2026-06-20 · r9"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -11425,7 +11425,7 @@ def main() -> None:
         index=list(theme_label_to_value.keys()).index(default_theme_label),
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
-    st.sidebar.caption(tr(f"build {APP_BUILD}", f"גרסה {APP_BUILD}"))
+    st.sidebar.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
 
     # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
     # share the same preference on next page load — writes to the shared server-side JSON.

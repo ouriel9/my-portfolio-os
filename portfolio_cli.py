@@ -150,20 +150,53 @@ def cmd_snapshot(_args) -> None:
     print(f"\n{len(rows)} rows | {n_open} open | {n_closed} closed")
 
 
+CURRENCY_ALLOWLIST = ("ILS", "USD", "EUR", "GBP", "GBX", "ILA")
+_MAX_MAGNITUDE = 1e15
+
+
+def _no_dup_keys(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise ValueError(f"duplicate key not allowed: {k!r}")
+        seen[k] = v
+    return seen
+
+
 def _parse_trade_json(raw: str) -> dict:
     if not raw or not raw.strip():
         sys.exit("--json must not be empty")
     def _no_const(c):
         raise ValueError(f"non-finite number not allowed: {c}")
     try:
-        trade = json.loads(raw, parse_constant=_no_const)
+        trade = json.loads(raw, parse_constant=_no_const, object_pairs_hook=_no_dup_keys)
     except json.JSONDecodeError as e:
         sys.exit(f"--json is not valid JSON: {e}")
     except ValueError as e:
         sys.exit(f"--json is not valid JSON: {e}")
     if not isinstance(trade, dict):
         sys.exit("--json must be a JSON object {…}, not a list or primitive")
+    for k, v in trade.items():
+        if not isinstance(v, (str, int, float, bool)) and v is not None:
+            sys.exit(f"--json field {k!r} must be a scalar (string/number/bool/null), not a list/object")
     return trade
+
+
+def _validate_number(trade: dict, key: str, *, allow_negative: bool, require_positive: bool) -> None:
+    if key not in trade or (isinstance(trade.get(key), str) and not str(trade.get(key)).strip()):
+        return
+    v = trade.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        sys.exit(f"{key} must be a number (not bool/string/list)")
+    fv = float(v)
+    if not math.isfinite(fv):
+        sys.exit(f"{key} must be a finite number")
+    if abs(fv) > _MAX_MAGNITUDE:
+        sys.exit(f"{key} magnitude is implausibly large (max {_MAX_MAGNITUDE:g})")
+    if require_positive and fv <= 0:
+        sys.exit(f"{key} must be greater than 0")
+    if not allow_negative and fv < 0:
+        sys.exit(f"{key} must not be negative")
 
 
 def cmd_add(args) -> None:
@@ -177,6 +210,8 @@ def cmd_add(args) -> None:
     qty = float(qty_raw)
     if not math.isfinite(qty) or qty <= 0:
         sys.exit("add requires a finite Quantity greater than 0")
+    if qty > _MAX_MAGNITUDE:
+        sys.exit(f"add Quantity magnitude is implausibly large (max {_MAX_MAGNITUDE:g})")
     pdate = str(trade.get("Purchase_Date", "")).strip()
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", pdate) or not _valid_date(pdate):
         sys.exit("add requires a valid calendar Purchase_Date in YYYY-MM-DD format")
@@ -185,8 +220,11 @@ def cmd_add(args) -> None:
         sys.exit("add requires a valid calendar Sell_Date in YYYY-MM-DD format")
     if "Origin_Currency" in trade:
         cur = str(trade.get("Origin_Currency", "")).strip().upper()
-        if cur and cur not in ("ILS", "USD"):
-            sys.exit("add requires Origin_Currency in {ILS, USD}")
+        if cur and cur not in CURRENCY_ALLOWLIST:
+            sys.exit(f"add requires Origin_Currency in {{{', '.join(CURRENCY_ALLOWLIST)}}}")
+    _validate_number(trade, "Origin_Buy_Price", allow_negative=False, require_positive=False)
+    _validate_number(trade, "Cost_Origin", allow_negative=False, require_positive=False)
+    _validate_number(trade, "Commission", allow_negative=False, require_positive=False)
 
     def _num(k):
         v = trade.get(k)
@@ -200,6 +238,13 @@ def cmd_add(args) -> None:
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
+EDIT_FULL_FIELDS = (
+    "Platform", "Current_Location", "Type", "Ticker", "Purchase_Date",
+    "Quantity", "Origin_Buy_Price", "Cost_Origin", "Origin_Currency",
+    "Commission", "Status",
+)
+
+
 def cmd_edit(args) -> None:
     trade = _parse_trade_json(args.json)
     tid = str(trade.get("Trade_ID", "")).strip()
@@ -209,8 +254,31 @@ def cmd_edit(args) -> None:
     if not changed:
         sys.exit("edit requires at least one field to change besides Trade_ID "
                  "(a Trade_ID-only payload would zero Quantity/Cost_Origin/Ticker server-side)")
-    _confirm_write(args, "edit", f"Trade_ID={tid} fields={','.join(changed)}", {"trade": trade})
-    out = call("edit", {"trade": trade})
+    if "Quantity" in trade and str(trade.get("Quantity", "")).strip() != "":
+        _validate_number(trade, "Quantity", allow_negative=False, require_positive=True)
+    _validate_number(trade, "Origin_Buy_Price", allow_negative=False, require_positive=False)
+    _validate_number(trade, "Cost_Origin", allow_negative=False, require_positive=False)
+    _validate_number(trade, "Commission", allow_negative=False, require_positive=False)
+    for dk in ("Purchase_Date", "Sell_Date"):
+        dv = str(trade.get(dk, "")).strip()
+        if dv and (not re.match(r"^\d{4}-\d{2}-\d{2}$", dv) or not _valid_date(dv)):
+            sys.exit(f"edit requires a valid calendar {dk} in YYYY-MM-DD format")
+    if "Origin_Currency" in trade:
+        cur = str(trade.get("Origin_Currency", "")).strip().upper()
+        if cur and cur not in CURRENCY_ALLOWLIST:
+            sys.exit(f"edit requires Origin_Currency in {{{', '.join(CURRENCY_ALLOWLIST)}}}")
+    missing = [f for f in EDIT_FULL_FIELDS
+               if f not in trade or str(trade.get(f, "")).strip() == ""]
+    if missing and not getattr(args, "force_overwrite", False):
+        sys.exit(
+            "edit is a FULL-ROW overwrite server-side: omitted fields "
+            f"({', '.join(missing)}) would be zeroed/blanked. Supply every field, "
+            "or pass --force-overwrite to intentionally overwrite the omitted fields.")
+    summary = f"Trade_ID={tid} fields={','.join(changed)}"
+    if missing and getattr(args, "force_overwrite", False):
+        summary += f" | OVERWRITING (zeroing) omitted: {','.join(missing)}"
+    _confirm_write(args, "edit", summary, {"trade": trade})
+    out = call("edit", {"trade": trade, "client_op_id": uuid.uuid4().hex})
     print(json.dumps(out, ensure_ascii=False, indent=2))
 
 
@@ -219,7 +287,7 @@ def cmd_delete(args) -> None:
     if not tid:
         sys.exit("delete requires a non-empty Trade_ID")
     _confirm_write(args, "delete", f"Trade_ID={tid}", {"trade": {"Trade_ID": tid}})
-    out = call("delete", {"trade": {"Trade_ID": tid}})
+    out = call("delete", {"trade": {"Trade_ID": tid}, "client_op_id": uuid.uuid4().hex})
     print(json.dumps(out, ensure_ascii=False, indent=2))
     print("note: verify the server response above identifies the intended row "
           "(row/ticker/qty); a by-id delete that missed may have matched a zeroed row.", file=sys.stderr)
@@ -230,7 +298,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("snapshot").set_defaults(fn=cmd_snapshot)
     a = sub.add_parser("add", allow_abbrev=False); a.add_argument("--json", required=True); a.add_argument("--yes", action="store_true"); a.add_argument("--dry-run", action="store_true"); a.set_defaults(fn=cmd_add)
-    e = sub.add_parser("edit", allow_abbrev=False); e.add_argument("--json", required=True); e.add_argument("--yes", action="store_true"); e.add_argument("--dry-run", action="store_true"); e.set_defaults(fn=cmd_edit)
+    e = sub.add_parser("edit", allow_abbrev=False); e.add_argument("--json", required=True); e.add_argument("--yes", action="store_true"); e.add_argument("--dry-run", action="store_true"); e.add_argument("--force-overwrite", action="store_true"); e.set_defaults(fn=cmd_edit)
     d = sub.add_parser("delete", allow_abbrev=False); d.add_argument("--id", required=True); d.add_argument("--yes", action="store_true"); d.add_argument("--dry-run", action="store_true"); d.set_defaults(fn=cmd_delete)
     args = p.parse_args()
     args.fn(args)
