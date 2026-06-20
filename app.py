@@ -208,6 +208,40 @@ def _lock_save(d: dict) -> None:
         pass
 
 
+# ── One-shot GLOBAL lock reset (Streamlit Cloud) ─────────────────────────────
+# The lock file lives in _DATA_DIR, which on Streamlit Cloud is shared/server-side
+# and SURVIVES redeploys. A stale lock (here: fingerprint-only, no passcode
+# fallback) therefore locks the owner out with no way back in if the registered
+# credential is lost. Bump _LOCK_RESET_TOKEN to force-clear the lock exactly ONCE
+# on the next deploy. A separate marker file records the applied token, so this
+# never fights a lock the user deliberately sets afterwards.
+_LOCK_RESET_TOKEN = "2026-06-20-r18"
+_LOCK_RESET_MARKER = _DATA_DIR / "lock_reset_done.json"
+
+
+def _lock_maybe_reset() -> None:
+    try:
+        done = ""
+        try:
+            done = json.loads(_LOCK_RESET_MARKER.read_text(encoding="utf-8")).get("token", "")
+        except Exception:
+            done = ""
+        if done != _LOCK_RESET_TOKEN:
+            try:
+                APP_LOCK_FILE.unlink()
+            except Exception:
+                _lock_save({})
+            try:
+                _LOCK_RESET_MARKER.write_text(json.dumps({"token": _LOCK_RESET_TOKEN}), encoding="utf-8")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+_lock_maybe_reset()
+
+
 def _lock_hash(pin: str, salt: str) -> str:
     return hashlib.sha256((salt + str(pin)).encode("utf-8")).hexdigest()
 
@@ -367,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r17"
+APP_BUILD = "2026-06-20 · r18"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
