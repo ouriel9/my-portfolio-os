@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r6"
+APP_BUILD = "2026-06-20 · r7"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -3382,7 +3382,7 @@ def inject_client_fixes() -> None:
               startX = e.touches[0].clientX;
               startY = e.touches[0].clientY;
               locked = true;
-            }, { passive: true });
+            }, { passive: true, capture: true });
 
             rootDoc.addEventListener('touchend', (e) => {
               if (!locked) return;
@@ -3390,8 +3390,8 @@ def inject_client_fixes() -> None:
               if (!e.changedTouches || !e.changedTouches.length) return;
               const dx = e.changedTouches[0].clientX - startX;
               const dy = e.changedTouches[0].clientY - startY;
-              // Must be >55px horizontal and more horizontal than vertical
-              if (Math.abs(dx) < 55 || Math.abs(dy) > Math.abs(dx) * 0.65) return;
+              // Must be >45px horizontal and more horizontal than vertical
+              if (Math.abs(dx) < 45 || Math.abs(dy) > Math.abs(dx) * 0.65) return;
 
               const found = getContentTabList();
               if (!found) return;
@@ -3406,7 +3406,7 @@ def inject_client_fixes() -> None:
                 tabs[nextIdx].click();
                 tabs[nextIdx].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
               }
-            }, { passive: true });
+            }, { passive: true, capture: true });
 
             rootWin.__pmSwipeBound = true;
           }
