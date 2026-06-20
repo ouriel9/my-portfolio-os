@@ -1,0 +1,43 @@
+# ── First-paint theme ──────────────────────────────────────────────────
+# This is the theme Streamlit renders NATIVELY, before any of the app's own
+# dynamic CSS loads. The app is dark-first (Aurora design), and a dark-mode
+# user opening the sidebar during a cold start would otherwise briefly see a
+# LIGHT base bleed through → an "all-white" sidebar until the dark CSS paints.
+# Matching the base to the app's real dark palette eliminates that white flash:
+#   backgroundColor          → app main bg   (#0b1120)
+#   secondaryBackgroundColor → sidebar / panels (#0f172a, the app's resolved sidebar bg)
+#   textColor                → light slate   (#e2e8f0)
+# Users who explicitly choose Light mode still get light — _resolve_theme_base()
+# honours an explicit theme_mode; only the "system" default now resolves to dark,
+# which matches this app's dark-first identity.
+[theme]
+base = "dark"
+primaryColor = "#6366f1"
+backgroundColor = "#0b1120"
+secondaryBackgroundColor = "#0f172a"
+textColor = "#e2e8f0"
+font = "sans serif"
+
+[server]
+runOnSave = true
+headless = true
+# ── Mobile / LAN access stability ──────────────────────────────────────
+# Disable CORS so phones on the same Wi-Fi can open the app without
+# the browser rejecting the WebSocket handshake.
+enableCORS = false
+# Disable XSRF token checks — these can cause the mobile browser to fail
+# on reconnect after the screen dims / app is backgrounded.
+enableXsrfProtection = false
+# Raise message-size cap (default 200 MB) — large DataFrames or chart
+# payloads would otherwise silently drop the WebSocket on mobile.
+maxMessageSize = 200
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+# Production: never leak a raw traceback / local file path to the UI — show a
+# generic message instead. (Full errors still go to the server log.)
+showErrorDetails = "none"
