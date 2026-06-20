@@ -210,6 +210,52 @@ def _lock_save(d: dict) -> None:
 
 def _lock_hash(pin: str, salt: str) -> str:
     return hashlib.sha256((salt + str(pin)).encode("utf-8")).hexdigest()
+
+
+def _bio_register_html(label: str) -> str:
+    """Button + WebAuthn registration: enrols the device's platform authenticator
+    (fingerprint/face), stores the credential id in localStorage, reloads with ?_bioreg=ok."""
+    return """
+<div style="text-align:center">
+  <button id="bioR" style="width:100%;padding:9px 12px;border-radius:9px;border:1px solid #6366f1;background:transparent;color:inherit;font-size:.92rem;cursor:pointer">\U0001F446 __LABEL__</button>
+  <div id="bioRM" style="font-size:.75rem;opacity:.8;margin-top:5px"></div>
+</div>
+<script>(function(){
+  var W=(window.parent&&window.parent!==window)?window.parent:window;
+  var b=document.getElementById('bioR'), m=document.getElementById('bioRM');
+  b.onclick=async function(){ try{
+    var nav=(W.navigator&&W.navigator.credentials)?W.navigator:navigator;
+    var cred=await nav.credentials.create({publicKey:{challenge:new Uint8Array(32),rp:{name:'Portfolio OS'},
+      user:{id:new Uint8Array(16),name:'owner',displayName:'Owner'},
+      pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+      authenticatorSelection:{authenticatorAttachment:'platform',userVerification:'required'},timeout:60000}});
+    var raw=new Uint8Array(cred.rawId); W.localStorage.setItem('pos_bio_cred', btoa(String.fromCharCode.apply(null,raw)));
+    var u=new URL(W.location.href); u.searchParams.set('_bioreg','ok'); W.location.href=u.toString();
+  }catch(e){ m.textContent='✗ '+((e&&e.message)||e); } };
+})();</script>
+""".replace("__LABEL__", label)
+
+
+def _bio_unlock_html(label: str, fail_msg: str, none_msg: str) -> str:
+    """Button + WebAuthn assertion: prompts the fingerprint/face, on success reloads with ?_bio=ok."""
+    return """
+<div style="text-align:center;margin-top:8px">
+  <button id="bioU" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid #6366f1;background:#6366f1;color:#fff;font-size:1rem;cursor:pointer">\U0001F446 __LABEL__</button>
+  <div id="bioUM" style="font-size:.78rem;opacity:.8;margin-top:6px"></div>
+</div>
+<script>(function(){
+  var W=(window.parent&&window.parent!==window)?window.parent:window;
+  var b=document.getElementById('bioU'), m=document.getElementById('bioUM');
+  b.onclick=async function(){ try{
+    var cid=W.localStorage.getItem('pos_bio_cred'); if(!cid){ m.textContent='__NONE__'; return; }
+    var id=Uint8Array.from(atob(cid),function(c){return c.charCodeAt(0);});
+    var nav=(W.navigator&&W.navigator.credentials)?W.navigator:navigator;
+    await nav.credentials.get({publicKey:{challenge:new Uint8Array(32),
+      allowCredentials:[{type:'public-key',id:id}],userVerification:'required',timeout:60000}});
+    var u=new URL(W.location.href); u.searchParams.set('_bio','ok'); W.location.href=u.toString();
+  }catch(e){ m.textContent='__FAIL__: '+((e&&e.message)||e); } };
+})();</script>
+""".replace("__LABEL__", label).replace("__NONE__", none_msg).replace("__FAIL__", fail_msg)
 DEFAULT_SERVICE_ACCOUNT_FILE = _DATA_DIR / "clean-linker-492313-s3-770814e64205.json"
 DEFAULT_WORKSHEET_NAME = "תמונת מצב"
 DEFAULT_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyDKgJszq8NWNgG7OQVPLflfN2rufBhAT5-fzmjy8iEVFMmNLZlK_CeI4MFvx1dijZF/exec"
@@ -318,7 +364,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r10"
+APP_BUILD = "2026-06-20 · r11"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1139,6 +1185,17 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
        mobile open/close and scroll-lock and were the root of the menu-won't-reopen and
        broken-vertical-scroll bugs on Android. Streamlit handles the sidebar open/close, width,
        slide animation, backdrop and scroll-lock natively. (android sidebar: stop fighting Streamlit) */
+    /* Cosmetic ONLY: when collapsed, make the sidebar fully transparent so no white sliver/strip
+       shows at the edge. Background/border/shadow only — NO width/transform/visibility/pointer-events
+       (those broke reopen + scroll). Safe because it never changes layout or interactivity. */
+    section[data-testid="stSidebar"][aria-expanded="false"],
+    section[data-testid="stSidebar"][aria-expanded="false"] > div,
+    section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
+        background: transparent !important;
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }}
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
     [data-testid="stSidebar"] .nav-link {{
@@ -11341,9 +11398,30 @@ def main() -> None:
     language = st.sidebar.selectbox("Language" if language_default == LANG_EN else "שפה", [LANG_EN, LANG_HE], index=0 if language_default == LANG_EN else 1)
     tr = (lambda en, he: he if language == LANG_HE else en)
 
-    # ── App lock (passcode gate): if a passcode is set, require it before the app renders ──
+    # ── App lock (passcode + optional fingerprint gate) ──
     _lk = _lock_load()
-    if _lk.get("pin_hash") and not st.session_state.get("_app_unlocked"):
+    # Fingerprint just registered (from the sidebar) → enable biometric unlock.
+    try:
+        if st.query_params.get("_bioreg") == "ok":
+            _lk["bio_enabled"] = True
+            _lock_save(_lk)
+            try:
+                del st.query_params["_bioreg"]
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # A successful fingerprint (WebAuthn) unlock returns here via a query param.
+    try:
+        if st.query_params.get("_bio") == "ok" and _lk.get("bio_enabled"):
+            st.session_state["_app_unlocked"] = True
+            try:
+                del st.query_params["_bio"]
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if (_lk.get("pin_hash") or _lk.get("bio_enabled")) and not st.session_state.get("_app_unlocked"):
         st.markdown(
             "<div style='max-width:380px;margin:14vh auto 1rem;text-align:center'>"
             "<div style='font-size:3rem;line-height:1'>🔒</div>"
@@ -11353,14 +11431,20 @@ def main() -> None:
         )
         _lc1, _lc2, _lc3 = st.columns([1, 2, 1])
         with _lc2:
-            _pin = st.text_input(tr("Passcode", "קוד גישה"), type="password", key="_lock_pin_input",
-                                 label_visibility="collapsed", placeholder=tr("Passcode", "קוד גישה"))
-            if st.button(tr("Unlock", "פתיחה"), key="_lock_unlock_btn", use_container_width=True, type="primary"):
-                if _pin and _lock_hash(_pin, _lk.get("salt", "")) == _lk.get("pin_hash"):
-                    st.session_state["_app_unlocked"] = True
-                    st.rerun()
-                else:
-                    st.error(tr("Wrong passcode", "קוד שגוי"))
+            if _lk.get("pin_hash"):
+                _pin = st.text_input(tr("Passcode", "קוד גישה"), type="password", key="_lock_pin_input",
+                                     label_visibility="collapsed", placeholder=tr("Passcode", "קוד גישה"))
+                if st.button(tr("Unlock", "פתיחה"), key="_lock_unlock_btn", use_container_width=True, type="primary"):
+                    if _pin and _lock_hash(_pin, _lk.get("salt", "")) == _lk.get("pin_hash"):
+                        st.session_state["_app_unlocked"] = True
+                        st.rerun()
+                    else:
+                        st.error(tr("Wrong passcode", "קוד שגוי"))
+            if _lk.get("bio_enabled"):
+                components.html(_bio_unlock_html(
+                    tr("Unlock with fingerprint", "פתיחה עם טביעת אצבע"),
+                    tr("Fingerprint failed", "טביעת אצבע נכשלה"),
+                    tr("No fingerprint enrolled", "לא נרשמה טביעת אצבע")), height=96)
         st.stop()
 
     theme_label_to_value = {
@@ -11378,11 +11462,14 @@ def main() -> None:
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
     st.sidebar.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
 
-    # ── App lock settings (set / change / remove passcode) ──
+    # ── App lock settings (passcode + fingerprint) ──
     with st.sidebar.expander(tr("🔒 App lock", "🔒 נעילה")):
         _lk_now = _lock_load()
-        if _lk_now.get("pin_hash"):
-            st.caption("🟢 " + tr("Lock is ON", "הנעילה פעילה"))
+        _has_pin = bool(_lk_now.get("pin_hash"))
+        _has_bio = bool(_lk_now.get("bio_enabled"))
+        if _has_pin or _has_bio:
+            st.caption("🟢 " + tr("Lock is ON", "הנעילה פעילה")
+                       + (" · 👆" if _has_bio else "") + (" · #" if _has_pin else ""))
             if st.button(tr("Remove lock", "הסר נעילה"), key="_lock_remove_btn", use_container_width=True):
                 _lock_save({})
                 st.session_state["_app_unlocked"] = True
@@ -11393,12 +11480,23 @@ def main() -> None:
         if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", use_container_width=True):
             if len(str(_newpin)) >= 4:
                 _salt = _secrets.token_hex(8)
-                _lock_save({"pin_hash": _lock_hash(_newpin, _salt), "salt": _salt})
+                _lk_now["pin_hash"] = _lock_hash(_newpin, _salt)
+                _lk_now["salt"] = _salt
+                _lock_save(_lk_now)
                 st.session_state["_app_unlocked"] = True
-                st.success(tr("Passcode set — it will be required next time you open the app.",
+                st.success(tr("Passcode set — required next time you open the app.",
                               "הקוד נשמר — יידרש בפעם הבאה שתפתח את האפליקציה."))
             else:
                 st.error(tr("At least 4 characters", "לפחות 4 תווים"))
+        st.divider()
+        st.caption("👆 " + tr("Fingerprint (phone) — experimental", "טביעת אצבע (טלפון) — ניסיוני"))
+        if _has_bio:
+            if st.button(tr("Disable fingerprint", "בטל טביעת אצבע"), key="_bio_disable_btn", use_container_width=True):
+                _lk_now["bio_enabled"] = False
+                _lock_save(_lk_now)
+                st.rerun()
+        else:
+            components.html(_bio_register_html(tr("Enable fingerprint", "הפעל טביעת אצבע")), height=80)
 
     # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
     # share the same preference on next page load — writes to the shared server-side JSON.
