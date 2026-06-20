@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r4"
+APP_BUILD = "2026-06-20 · r5"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -11460,14 +11460,19 @@ def main() -> None:
         function killPhantoms() {{
           var main = d.querySelector('section.main') || d;
           main.querySelectorAll('[data-testid="stElementContainer"]').forEach(function(el){{
-            if (el.dataset.ppHidden) return;
             var ifr = el.querySelector(':scope > iframe[data-testid="stIFrame"]');
             var phantomIframe = ifr && ifr.offsetHeight === 0 && !ifr.getAttribute('height');
             var md = el.querySelector(':scope > [data-testid="stMarkdown"] > [data-testid="stMarkdownContainer"]');
             var onlyStyle = md && md.children.length > 0 &&
               Array.prototype.every.call(md.children, function(c){{ return c.tagName==='STYLE'||c.tagName==='SCRIPT'; }}) &&
               !((md.innerText||'').trim());
-            if (phantomIframe || onlyStyle) {{ el.style.display='none'; el.dataset.ppHidden='1'; }}
+            // NON-PERMANENT: re-evaluate every tick. Mark with data-pp-phantom (not a
+            // permanent ppHidden skip) so a container that was momentarily empty during a
+            // SLOW cold-start render and got hidden is RESTORED the moment it gains real
+            // content — this is what made the hero/page content vanish on Android cold start
+            // until a manual refresh. Only ever un-hide containers WE hid. (android cold-start fix)
+            if (phantomIframe || onlyStyle) {{ el.style.display='none'; el.dataset.ppPhantom='1'; }}
+            else if (el.dataset.ppPhantom) {{ el.style.removeProperty('display'); el.removeAttribute('data-pp-phantom'); }}
           }});
         }}
         function tick() {{ applyLock(); killPhantoms(); }}
