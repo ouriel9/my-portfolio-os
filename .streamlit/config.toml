@@ -18,6 +18,19 @@ secondaryBackgroundColor = "#0f172a"
 textColor = "#e2e8f0"
 font = "sans serif"
 
+# ── Sidebar theme (Streamlit 1.46+) ─────────────────────────────────────
+# CRITICAL: since 1.46 the sidebar has its OWN theme namespace. The top-level
+# secondaryBackgroundColor above colours the MAIN canvas (metric cards etc.) but
+# NOT the sidebar — so without this section the native sidebar (especially the
+# expanded mobile OVERLAY) falls back to WHITE, which is the all-white-sidebar
+# bug a dark-mode user hits on a cold open. Painting it here makes the FIRST
+# native paint dark, independent of any app CSS or load timing.
+[theme.sidebar]
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#e2e8f0"
+borderColor = "#1e293b"
+
 [server]
 runOnSave = true
 headless = true
