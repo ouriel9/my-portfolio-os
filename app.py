@@ -298,7 +298,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-20 · r2"
+APP_BUILD = "2026-06-20 · r3"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1138,13 +1138,19 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         border: 0 !important;
         display: none !important;
     }}
-    /* Expanded: spring into view */
+    /* Expanded: spring into view. MUST restore width/min/max — the collapsed rule
+       forces them to 0 !important, and Streamlit does not always re-set an inline
+       width when opening on mobile, so without this the sidebar opens to 0px (the
+       "menu button does nothing" bug). */
     section[data-testid="stSidebar"][aria-expanded="true"],
     section[data-testid="stSidebar"][data-pp-collapsed="false"] {{
         transform: translateX(0) !important;
         opacity: 1 !important;
         pointer-events: auto !important;
         visibility: visible !important;
+        width: min(80vw, 22rem) !important;
+        min-width: 16rem !important;
+        max-width: 80vw !important;
     }}
     [data-testid="stSidebar"] .nav,
     [data-testid="stSidebar"] .nav-item,
@@ -1152,11 +1158,11 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         direction: ltr !important;
         text-align: left !important;
     }}
-    [data-testid="collapsedControl"] button svg,
-    [data-testid="stSidebarCollapsedControl"] button svg,
+    [data-testid="stExpandSidebarButton"] button svg,
+    [data-testid="stExpandSidebarButton"] button svg,
     button[aria-label*="sidebar"] svg {{display: none !important;}}
-    [data-testid="collapsedControl"] button::before,
-    [data-testid="stSidebarCollapsedControl"] button::before,
+    [data-testid="stExpandSidebarButton"] button::before,
+    [data-testid="stExpandSidebarButton"] button::before,
     button[aria-label*="sidebar"]::before {{
         content: "\2630";
         font-size: 1.28rem;
@@ -1644,8 +1650,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             text-rendering: geometricPrecision;
             backface-visibility: hidden;
         }}
-        [data-testid="collapsedControl"],
-        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stExpandSidebarButton"],
+        [data-testid="stExpandSidebarButton"],
         button[aria-label*="sidebar"],
         button[aria-label*="Sidebar"] {{
             display: flex !important;
@@ -1658,8 +1664,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             z-index: 100002 !important;
             direction: ltr !important;
         }}
-        [data-testid="collapsedControl"] button,
-        [data-testid="stSidebarCollapsedControl"] button,
+        [data-testid="stExpandSidebarButton"] button,
+        [data-testid="stExpandSidebarButton"] button,
         button[aria-label*="sidebar"],
         button[aria-label*="Sidebar"] {{
             width: 44px !important;
@@ -1729,8 +1735,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             touch-action: pan-y !important;
         }}
         /* ── Dark-mode-aware hamburger button ── */
-        [data-testid="collapsedControl"] button,
-        [data-testid="stSidebarCollapsedControl"] button,
+        [data-testid="stExpandSidebarButton"] button,
+        [data-testid="stExpandSidebarButton"] button,
         button[aria-label*="sidebar"],
         button[aria-label*="Sidebar"] {{
             background: {hamburger_bg} !important;
@@ -2090,8 +2096,8 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         color: {dark_muted} !important;
     }}
     /* Hamburger/toolbar buttons in dark mode */
-    [data-testid="collapsedControl"] button,
-    [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="stExpandSidebarButton"] button,
+    [data-testid="stExpandSidebarButton"] button,
     button[aria-label*="sidebar"],
     button[aria-label*="Sidebar"],
     [data-testid="stToolbar"] button {{
@@ -3611,8 +3617,12 @@ def inject_client_fixes() -> None:
               rootDoc.querySelectorAll('section[data-testid="stSidebar"]').forEach(function(e){
                 var ae = e.getAttribute('aria-expanded');
                 if (ae !== null) {
+                  // Mirror Streamlit's aria-expanded into our stable data hook, but DO
+                  // NOT remove aria-expanded — Streamlit's own open/close (and the width
+                  // it sets) depend on it; stripping it left the mobile sidebar stuck at
+                  // width:0 ("menu button does nothing"). The a11y aria-allowed-attr note
+                  // is Streamlit's own markup; a working menu outranks that lint.
                   e.setAttribute('data-pp-collapsed', ae === 'false' ? 'true' : 'false');
-                  e.removeAttribute('aria-expanded');
                 }
               });
             } catch(e){}
@@ -7741,13 +7751,13 @@ def _pp_inject_mobile_polish_v2(is_dark: bool, is_mobile: bool) -> None:
         }}
 
         /* Safer hamburger — bigger, subtle press */
-        [data-testid="collapsedControl"] button,
-        [data-testid="stSidebarCollapsedControl"] button,
+        [data-testid="stExpandSidebarButton"] button,
+        [data-testid="stExpandSidebarButton"] button,
         button[aria-label*="sidebar"] {{
             transition: transform 120ms var(--pp2-ease), box-shadow 120ms var(--pp2-ease) !important;
         }}
-        [data-testid="collapsedControl"] button:active,
-        [data-testid="stSidebarCollapsedControl"] button:active,
+        [data-testid="stExpandSidebarButton"] button:active,
+        [data-testid="stExpandSidebarButton"] button:active,
         button[aria-label*="sidebar"]:active {{
             transform: scale(0.92) !important;
         }}
@@ -11067,9 +11077,9 @@ def main() -> None:
         }
         /* Explicitly ensure the collapse/expand sidebar control AND the
            3-dots Main-Menu stay visible in all viewports. */
-        [data-testid="collapsedControl"],
+        [data-testid="stExpandSidebarButton"],
         [data-testid="stSidebarCollapseButton"],
-        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="stExpandSidebarButton"],
         [data-testid="stMainMenuButton"],
         [data-testid="stToolbar"],
         [data-testid="stToolbarActions"],
