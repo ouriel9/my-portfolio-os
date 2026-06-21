@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r27"
+APP_BUILD = "2026-06-22 · r28"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -3524,7 +3524,13 @@ def inject_client_fixes() -> None:
               const htmlEl = d.documentElement;
               if (htmlEl) {
                 if (htmlEl.getAttribute('dir') !== 'ltr') htmlEl.setAttribute('dir', 'ltr');
-                if (htmlEl.getAttribute('lang') !== 'en')  htmlEl.setAttribute('lang', 'en');
+                // NOTE: dir=ltr is the layout trick (keeps the sidebar on the LEFT; Hebrew
+                // still renders RTL via Unicode BiDi). We do NOT force lang='en' — that
+                // made screen readers pronounce the Hebrew UI as English. Mirror the real
+                // content language instead so a11y/RTL is correct.
+                var _wantLang = (d.querySelector('[data-testid="stSidebar"]') &&
+                                 /[֐-׿]/.test(d.body ? d.body.innerText : '')) ? 'he' : 'en';
+                if (htmlEl.getAttribute('lang') !== _wantLang) htmlEl.setAttribute('lang', _wantLang);
               }
 
               // 2. Force stApp (Streamlit layout root) to LTR flex direction.
@@ -11527,7 +11533,10 @@ def main() -> None:
         language_default = DEFAULT_LANGUAGE
     # Dark-first product: a fresh/unset install defaults to (and renders) Dark, so
     # the Appearance control matches the actual dark render (see _resolve_theme_base).
-    theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_DARK))
+    # Default = SYSTEM so a fresh install follows the DEVICE theme (config.toml has no
+    # forced base + st.context.theme.type drives "system"). The old THEME_DARK default
+    # gave a light-phone owner a Dark control + dark first paint, overriding the device.
+    theme_default = _normalize_theme_mode(settings.get("theme_mode", THEME_SYSTEM))
 
     if "demo_mode_persist" not in st.session_state:
         st.session_state["demo_mode_persist"] = bool(settings.get("demo_mode", False))
@@ -11638,8 +11647,11 @@ def main() -> None:
     _default_chart_lock = _is_mobile_client()
     chart_lock = bool(st.session_state.get("chart_lock_persist", _default_chart_lock))
     demo_mode = bool(st.session_state.get("demo_mode_persist", False))
-    # Live updates always-on: fragment refreshes every 30s without full-page reload
-    live_updates = True
+    # Live updates: fragments refresh every 30s with live prices — but NOT in demo, where
+    # the curated 80k-scaled values must stay deterministic. The live fragments (Transactions
+    # ~14084, Reports exchange-rates ~13673, exposure ~13243, Trade-Manage ~15357) all gate on
+    # `live_updates`, so disabling it in demo stops them overriding the demo prices. (demo determinism)
+    live_updates = (not demo_mode)
     refresh_seconds = 30
 
     inject_global_styles(language, theme_mode)
