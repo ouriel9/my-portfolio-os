@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r26"
+APP_BUILD = "2026-06-22 · r27"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -11611,68 +11611,8 @@ def main() -> None:
     # ── ⚙ Settings: version + chart/demo toggles + App-lock (passcode + fingerprint) ──
     # Single grouped Settings expander (rendered here so the chart_lock/demo values it
     # writes are available to the main content read below, with no one-rerun lag).
-    _default_chart_lock = _is_mobile_client()
-    with st.sidebar.expander(tr("⚙ Settings", "⚙ הגדרות")):
-        st.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
-        st.checkbox(
-            tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
-            value=bool(st.session_state.get("chart_lock_persist", _default_chart_lock)),
-            key="chart_lock_persist",
-        )
-        st.checkbox(
-            tr("Demo view", "מצב הדגמה"),
-            value=bool(st.session_state.get("demo_mode_persist", False)),
-            key="demo_mode_persist",
-        )
-        st.divider()
-        st.markdown("**🔒 " + tr("App lock", "נעילה") + "**")
-        _lk_now = _lock_load()
-        _has_pin = bool(_lk_now.get("pin_hash"))
-        _has_bio = bool(_lk_now.get("bio_enabled"))
-        if _has_pin or _has_bio:
-            st.caption("🟢 " + tr("Lock is ON", "הנעילה פעילה")
-                       + (" · 👆" if _has_bio else "") + (" · #" if _has_pin else ""))
-            if st.button(tr("Remove lock", "הסר נעילה"), key="_lock_remove_btn", use_container_width=True):
-                _lock_save({})
-                st.session_state["_app_unlocked"] = True
-                st.rerun()
-            st.divider()
-        _newpin = st.text_input(tr("Set / change passcode (4+ chars)", "קבע / שנה קוד (4+ תווים)"),
-                                type="password", key="_lock_newpin")
-        if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", use_container_width=True):
-            if len(str(_newpin)) >= 4:
-                _salt = _secrets.token_hex(8)
-                _lk_now["pin_hash"] = _lock_hash(_newpin, _salt)
-                _lk_now["salt"] = _salt
-                _lock_save(_lk_now)
-                st.session_state["_app_unlocked"] = True
-                st.success(tr("Passcode set — required next time you open the app.",
-                              "הקוד נשמר — יידרש בפעם הבאה שתפתח את האפליקציה."))
-            else:
-                st.error(tr("At least 4 characters", "לפחות 4 תווים"))
-        st.divider()
-        st.caption("👆 " + tr("Fingerprint (phone) — experimental", "טביעת אצבע (טלפון) — ניסיוני"))
-        if _has_bio:
-            if st.button(tr("Disable fingerprint", "בטל טביעת אצבע"), key="_bio_disable_btn", use_container_width=True):
-                _lk_now["bio_enabled"] = False
-                _lock_save(_lk_now)
-                st.rerun()
-            st.caption(tr("Register your fingerprint on this device:", "רשום את טביעת האצבע במכשיר הזה:"))
-            components.html(_bio_register_html(tr("Register fingerprint", "רשום טביעת אצבע")), height=84)
-        else:
-            if st.button(tr("Enable fingerprint", "הפעל טביעת אצבע"), key="_bio_enable_btn", use_container_width=True):
-                if not _lk_now.get("pin_hash"):
-                    # SECURITY: never allow biometric-ONLY. The WebAuthn credential lives in
-                    # this browser's localStorage; if it's lost/cleared (new device, cleared
-                    # data) and there's no passcode, the owner is locked out with no way in.
-                    # Require a passcode as the mandatory fallback first.
-                    st.warning(tr("Set a passcode above first — it's your fallback if the fingerprint is ever lost.",
-                                  "קבע קודם קוד גישה למעלה — הוא הגיבוי אם טביעת האצבע תאבד."))
-                else:
-                    _lk_now["bio_enabled"] = True
-                    _lock_save(_lk_now)
-                    st.session_state["_app_unlocked"] = True  # don't lock the CURRENT session out before a credential is registered
-                    st.rerun()
+    # ⚙ Settings moved to the BOTTOM of the sidebar (below Data + AI) — rendered by the
+    # tabbed _render_sidebar_settings() panel near the end of this function.
 
     # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
     # share the same preference on next page load — writes to the shared server-side JSON.
@@ -12378,181 +12318,181 @@ def main() -> None:
 
     connection_state_box = None
 
-    # ── Google Sheets Sync panel (optional — Google is NOT required) ──
-    _has_google = bool(_clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) or DEFAULT_WEB_APP_URL) or _clean(settings.get("spreadsheet_ref", "")))
-    _dirty_badge = count_dirty_local_trades()
-    _sync_expander_label = tr("☁ Sync with Google Sheets", "☁ סנכרון עם גוגל שיט")
-    if _dirty_badge > 0:
-        _sync_expander_label += f" · {_dirty_badge} {tr('pending', 'ממתינ/ים')}"
-    with st.sidebar.expander(_sync_expander_label, expanded=(_dirty_badge > 0)):
-        _sync_web_url = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) or DEFAULT_WEB_APP_URL)
-        _sync_token = _clean(settings.get("api_token", ""))
-        _sync_sheet_ref = _clean(settings.get("spreadsheet_ref", ""))
-        _sync_ws = _clean(settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME
-        _sync_sa = _clean(settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)))
-        _lm = get_local_portfolio_meta()
-        _last_modified = _clean(str(_lm.get("_last_modified", "")))[:16]
-        _last_synced = _clean(str(_lm.get("_last_synced", "")))[:16]
-        st.caption(
-            tr(
-                f"Local data: **{_last_modified or 'never'}**  \n"
-                f"Last synced: **{_last_synced or 'never'}**  \n"
-                f"Pending sync: **{_dirty_badge}** change(s)",
-                f"נתונים מקומיים: **{_last_modified or 'אין'}**  \n"
-                f"סנכרון אחרון: **{_last_synced or 'אף פעם'}**  \n"
-                f"ממתינים לסנכרון: **{_dirty_badge}** שינוי/ים",
-            )
-        )
-        has_google_connection = bool(_sync_web_url) or bool(_sync_sheet_ref)
-        if not has_google_connection:
-            st.info(tr(
-                "Configure a Web App URL or Spreadsheet ID below to enable sync.",
-                "הגדר Web App URL או Spreadsheet ID למטה כדי לאפשר סנכרון.",
-            ))
-        # Warn when there are unsynced local changes that might confuse the pull result
-        if _dirty_badge > 0:
-            st.warning(tr(
-                f"⚠ **{_dirty_badge}** local change(s) pending. "
-                "Normal pull keeps them. Use **Force pull** to fully replace with Google data.",
-                f"⚠ **{_dirty_badge}** שינוי/ים מקומיים ממתינים לסנכרון. "
-                "שליפה רגילה שומרת אותם. השתמש ב**שליפה כפויה** להחלפה מוחלטת עם נתוני גוגל.",
-            ))
-        _force_pull = st.checkbox(
-            tr("Force pull (fully replace with Google data)",
-               "שליפה כפויה (החלף הכל בנתוני גוגל)"),
-            value=False,
-            key="chk_force_pull",
-            disabled=not has_google_connection,
-            help=tr(
-                "Ignores any unsynced local additions/edits and replaces the local store "
-                "with exactly what Google Sheets contains. Use this to fix a mismatch.",
-                "מתעלם מהוספות/עריכות מקומיות שלא סונכרנו ומחליף את המאגר המקומי "
-                "בדיוק לפי מה שיש בגוגל שיט. השתמש כשיש חוסר התאמה.",
-            ),
-        )
-        if st.button(
-            tr("↓ Pull from Google Sheets", "↓ שלוף מגוגל שיט"),
-            width="stretch",
-            disabled=not has_google_connection,
-            help=tr(
-                "Download the latest trades AND manual deposits from Google Sheets and update your local store.",
-                "הורד את העסקאות והפקדות הידניות האחרונות מגוגל שיט ועדכן את המאגר המקומי.",
-            ),
-            key="btn_pull_google",
-        ):
-            with st.spinner(tr("Pulling from Google Sheets…", "שולף מגוגל שיט…")):
-                _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
-                    _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa,
-                    tr=tr, force_full_replace=_force_pull,
-                )
-            load_google_snapshot_data.clear()
-            load_google_snapshot_data_via_gspread.clear()
-            if _pull_ok:
-                # Also pull manual deposits for both modes
-                _dep_errors: List[str] = []
-                if is_apps_script_web_app_url(_sync_web_url) and bool(_sync_token):
-                    for _dep_mode in ["live", "demo"]:
-                        _dep_ok, _dep_rows, _dep_err = load_manual_deposits_remote(_sync_web_url, _sync_token, _dep_mode)
-                        if _dep_ok:
-                            # ONLY overwrite local when the cloud actually returned rows. An
-                            # empty cloud (fresh/unsaved deposits sheet) returns (True, [], '')
-                            # and the old code wiped the LOCAL deposits store with [] — silent
-                            # data loss. Mirror the dashboard-load logic: empty cloud → keep local.
-                            if _dep_rows:
-                                _dep_store = load_manual_deposits_store()
-                                _dep_store[_dep_mode] = _dep_rows
-                                save_manual_deposits_store(_dep_store)
-                                st.session_state.pop(f"manual_deposits_loaded_{_dep_mode}", None)
-                        else:
-                            _dep_errors.append(f"{_dep_mode}: {_dep_err}")
-                _dep_note = f"  \n⚠ {tr('Deposits pull had errors', 'שגיאה בשליפת הפקדות')}: {'; '.join(_dep_errors)}" if _dep_errors else ""
-                st.success(f"✅ {_pull_msg}{_dep_note}")
-                st.rerun()
-            else:
-                st.error(f"❌ {_pull_msg}")
-
-    # GitHub sync UI removed per user request — Google Sheets is the
-    # canonical sync target. The helper functions sync_portfolio_*_github
-    # remain in the codebase (unused) so they're available if needed later.
-
-    with st.sidebar.expander(tr("Connection & Data Settings", "הגדרות חיבור ונתונים"), expanded=False):
-        web_app_url = st.text_input("Apps Script Web App URL", value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
-        api_token = st.text_input("API Token", value=settings.get("api_token", ""), type="password")
-        st.caption(tr("If Web App is missing, fallback to gspread is available.", "אם אין Web App אפשר לעבוד בקריאה ישירה עם Service Account (gspread)."))
-        spreadsheet_ref = st.text_input(
-            "Spreadsheet URL or ID",
-            value=settings.get("spreadsheet_ref", ""),
-            help=tr("Use full Google Sheets URL or only its ID.", "ניתן להדביק URL מלא של Google Sheets או את ה-ID בלבד."),
-        )
-        worksheet_name = st.text_input(tr("Worksheet name", "שם גיליון"), value=settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME))
-        service_account_file = st.text_input(
-            tr("Service Account JSON path", "נתיב קובץ Service Account JSON"),
-            value=settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)),
-        )
-        followed_symbols_text = settings.get("followed_symbols", "")
-        st.caption(
-            tr(
-                "TradingView watchlist is fixed to the dashboard default list.",
-                "רשימת המעקב של TradingView קבועה לפי רשימת ברירת המחדל בדשבורד.",
-            )
-        )
-
-        if st.button(tr("Save settings on this machine", "שמור חיבור למחשב הזה")):
-            ok = save_local_settings(
-                web_app_url,
-                api_token,
-                spreadsheet_ref,
-                worksheet_name,
-                service_account_file,
-                language,
-                theme_mode,
-                demo_mode,
-                followed_symbols_text,
-            )
-            if ok:
-                st.success(tr("Settings saved locally", "החיבור נשמר מקומית"))
-            else:
-                st.error(tr("Failed to save settings", "שמירת החיבור נכשלה"))
-
-        # PERMANENT cloud persistence: on Streamlit Cloud the local file is wiped on
-        # every restart, so paste these into Settings → Secrets ONCE and it sticks.
-        with st.expander(tr("🔒 Make the connection permanent (cloud)", "🔒 חיבור קבוע (ענן) — שלא יתאפס יותר"), expanded=False):
-            st.caption(tr(
-                "On Streamlit Cloud the local file resets on restart. Copy the block below into the app dashboard → Settings → Secrets, save once, and the sync never drops again.",
-                "בענן הקובץ המקומי מתאפס בכל הפעלה. העתק את הבלוק למטה אל לוח הבקרה של האפליקציה ← Settings ← Secrets, שמור פעם אחת, והסנכרון לא ייעלם יותר.",
-            ))
-            _toml = (
-                f'web_app_url = "{web_app_url}"\n'
-                f'api_token = "{api_token}"\n'
-                f'spreadsheet_ref = "{spreadsheet_ref}"\n'
-                f'worksheet_name = "{worksheet_name}"\n'
-            )
-            st.code(_toml, language="toml")
-
-        if st.button(tr("Refresh local data", "רענן נתונים מקומיים")):
-            load_google_snapshot_data.clear()
-            load_google_snapshot_data_via_gspread.clear()
-            st.rerun()
-
-        connection_state_box = st.empty()
-
-    # ── Mobile-only: AI Agent button at the BOTTOM of the sidebar ──
-    # (Desktop keeps it in the option_menu nav.) The top nav pills stay 4-wide.
+    # ── Mobile sidebar nav: AI Agent button right under Data (Settings is LAST, below) ──
     if is_mobile:
         _chat_active = (active_page_id == "chat")
         if st.sidebar.button(
             tr("AGENT AI", "סוכן AI") + ("  ✓" if _chat_active else ""),
             icon=":material/smart_toy:",
             width="stretch",
-            # Always secondary so the button keeps a consistent colour with the rest of
-            # the nav; the "✓" marks the active state instead of the accent-gradient
-            # primary style that made it suddenly stand out. (fix)
             type="secondary",
             help=tr("Chat with your AI portfolio agent.", "שיחה עם סוכן ה-AI של התיק."),
             key="sidebar_chat_nav_btn",
         ):
             st.session_state["active_page_id"] = "chat"
             st.rerun()
+
+    # ════════ ⚙ Settings — ONE tabbed panel at the BOTTOM of the sidebar ════════
+    # Tabs: ☁ Sync · 🔗 Connection · 🔒 Lock · ⚙ General. The Connection tab assigns the
+    # web_app_url/api_token/... locals the main content reads below; widgets inside an
+    # expander/tab still run every rerun (collapsed or not), so the locals are always set.
+    _dirty_badge = count_dirty_local_trades()
+    _settings_label = tr("⚙ Settings", "⚙ הגדרות") + (f"   ·   ☁ {_dirty_badge}" if _dirty_badge > 0 else "")
+    # Safe defaults so the connection locals exist no matter what:
+    web_app_url = settings.get("web_app_url", DEFAULT_WEB_APP_URL)
+    api_token = settings.get("api_token", "")
+    spreadsheet_ref = settings.get("spreadsheet_ref", "")
+    worksheet_name = settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME)
+    service_account_file = settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE))
+    followed_symbols_text = settings.get("followed_symbols", "")
+    with st.sidebar.expander(_settings_label, expanded=(_dirty_badge > 0)):
+        _tab_sync, _tab_conn, _tab_lock, _tab_gen = st.tabs([
+            tr("☁ Sync", "☁ סנכרון"),
+            tr("🔗 Connect", "🔗 חיבור"),
+            tr("🔒 Lock", "🔒 נעילה"),
+            tr("⚙ General", "⚙ כללי"),
+        ])
+
+        # ── ☁ Sync ──
+        with _tab_sync:
+            _sync_web_url = _clean(settings.get("web_app_url", DEFAULT_WEB_APP_URL) or DEFAULT_WEB_APP_URL)
+            _sync_token = _clean(settings.get("api_token", ""))
+            _sync_sheet_ref = _clean(settings.get("spreadsheet_ref", ""))
+            _sync_ws = _clean(settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME)) or DEFAULT_WORKSHEET_NAME
+            _sync_sa = _clean(settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)))
+            _lm = get_local_portfolio_meta()
+            _last_synced = _clean(str(_lm.get("_last_synced", "")))[:16]
+            st.caption(tr(
+                f"Last synced: **{_last_synced or 'never'}** · pending: **{_dirty_badge}**",
+                f"סונכרן: **{_last_synced or 'אף פעם'}** · ממתינים: **{_dirty_badge}**",
+            ))
+            _has_conn = bool(_sync_web_url) or bool(_sync_sheet_ref)
+            if not _has_conn:
+                st.info(tr("Set a Web App URL / Spreadsheet ID in 🔗 Connect first.",
+                           "הגדר Web App URL / Spreadsheet ID בלשונית 🔗 חיבור."))
+            _force_pull = st.checkbox(
+                tr("Force pull (replace local with Google)", "שליפה כפויה (החלף מקומי בנתוני גוגל)"),
+                value=False, key="chk_force_pull", disabled=not _has_conn,
+                help=tr("Discards unsynced local edits and mirrors exactly what Google has.",
+                        "מוחק עריכות מקומיות שלא סונכרנו ומשקף בדיוק את מה שבגוגל."))
+            if st.button(tr("☁ Sync now", "☁ סנכרן עכשיו"), width="stretch",
+                         type="primary", disabled=not _has_conn, key="btn_pull_google"):
+                with st.spinner(tr("Syncing…", "מסנכרן…")):
+                    _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
+                        _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa,
+                        tr=tr, force_full_replace=_force_pull,
+                    )
+                load_google_snapshot_data.clear()
+                load_google_snapshot_data_via_gspread.clear()
+                if _pull_ok:
+                    _dep_errors: List[str] = []
+                    if is_apps_script_web_app_url(_sync_web_url) and bool(_sync_token):
+                        for _dep_mode in ["live", "demo"]:
+                            _dep_ok, _dep_rows, _dep_err = load_manual_deposits_remote(_sync_web_url, _sync_token, _dep_mode)
+                            if _dep_ok:
+                                if _dep_rows:  # empty cloud → keep local (no silent wipe)
+                                    _dep_store = load_manual_deposits_store()
+                                    _dep_store[_dep_mode] = _dep_rows
+                                    save_manual_deposits_store(_dep_store)
+                                    st.session_state.pop(f"manual_deposits_loaded_{_dep_mode}", None)
+                            else:
+                                _dep_errors.append(f"{_dep_mode}: {_dep_err}")
+                    _dep_note = f"  \n⚠ {'; '.join(_dep_errors)}" if _dep_errors else ""
+                    st.success(f"✅ {_pull_msg}{_dep_note}")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {_pull_msg}")
+
+        # ── 🔗 Connection (assigns the locals the main content reads) ──
+        with _tab_conn:
+            web_app_url = st.text_input("Apps Script Web App URL", value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
+            api_token = st.text_input("API Token", value=settings.get("api_token", ""), type="password")
+            spreadsheet_ref = st.text_input(
+                tr("Spreadsheet URL or ID", "Spreadsheet URL / ID"),
+                value=settings.get("spreadsheet_ref", ""),
+                help=tr("Full Google Sheets URL or just its ID.", "URL מלא של Google Sheets או ה-ID בלבד."))
+            worksheet_name = st.text_input(tr("Worksheet name", "שם גיליון"), value=settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME))
+            service_account_file = st.text_input(
+                tr("Service Account JSON path", "נתיב Service Account JSON"),
+                value=settings.get("service_account_file", str(DEFAULT_SERVICE_ACCOUNT_FILE)))
+            followed_symbols_text = settings.get("followed_symbols", "")
+            _cc1, _cc2 = st.columns(2)
+            with _cc1:
+                if st.button(tr("💾 Save", "💾 שמור"), width="stretch", key="_conn_save_btn"):
+                    _ok = save_local_settings(web_app_url, api_token, spreadsheet_ref, worksheet_name,
+                                              service_account_file, language, theme_mode, demo_mode, followed_symbols_text)
+                    (st.success(tr("Saved", "נשמר")) if _ok else st.error(tr("Save failed", "השמירה נכשלה")))
+            with _cc2:
+                if st.button(tr("↻ Refresh", "↻ רענן"), width="stretch", key="_conn_refresh_btn"):
+                    load_google_snapshot_data.clear()
+                    load_google_snapshot_data_via_gspread.clear()
+                    st.rerun()
+            if st.checkbox(tr("Show cloud-secrets block (permanent connection)", "הצג בלוק secrets (חיבור קבוע בענן)"), key="_show_secrets"):
+                st.caption(tr("Paste into the app dashboard → Settings → Secrets, once.",
+                              "הדבק בלוח הבקרה ← Settings ← Secrets, פעם אחת."))
+                st.code(f'web_app_url = "{web_app_url}"\napi_token = "{api_token}"\n'
+                        f'spreadsheet_ref = "{spreadsheet_ref}"\nworksheet_name = "{worksheet_name}"\n', language="toml")
+            connection_state_box = st.empty()
+
+        # ── 🔒 Lock (passcode + fingerprint) ──
+        with _tab_lock:
+            _lk_now = _lock_load()
+            _has_pin = bool(_lk_now.get("pin_hash"))
+            _has_bio = bool(_lk_now.get("bio_enabled"))
+            if _has_pin or _has_bio:
+                st.caption("🟢 " + tr("Lock is ON", "הנעילה פעילה") + (" · 👆" if _has_bio else "") + (" · #" if _has_pin else ""))
+                if st.button(tr("Remove lock", "הסר נעילה"), key="_lock_remove_btn", use_container_width=True):
+                    _lock_save({})
+                    st.session_state["_app_unlocked"] = True
+                    st.rerun()
+                st.divider()
+            _newpin = st.text_input(tr("Set / change passcode (4+ chars)", "קבע / שנה קוד (4+ תווים)"),
+                                    type="password", key="_lock_newpin")
+            if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", use_container_width=True):
+                if len(str(_newpin)) >= 4:
+                    _salt = _secrets.token_hex(8)
+                    _lk_now["pin_hash"] = _lock_hash(_newpin, _salt)
+                    _lk_now["salt"] = _salt
+                    _lock_save(_lk_now)
+                    st.session_state["_app_unlocked"] = True
+                    st.success(tr("Passcode set — required next time you open the app.",
+                                  "הקוד נשמר — יידרש בפעם הבאה שתפתח את האפליקציה."))
+                else:
+                    st.error(tr("At least 4 characters", "לפחות 4 תווים"))
+            st.divider()
+            st.caption("👆 " + tr("Fingerprint (phone) — experimental", "טביעת אצבע (טלפון) — ניסיוני"))
+            if _has_bio:
+                if st.button(tr("Disable fingerprint", "בטל טביעת אצבע"), key="_bio_disable_btn", use_container_width=True):
+                    _lk_now["bio_enabled"] = False
+                    _lock_save(_lk_now)
+                    st.rerun()
+                st.caption(tr("Register your fingerprint on this device:", "רשום את טביעת האצבע במכשיר הזה:"))
+                components.html(_bio_register_html(tr("Register fingerprint", "רשום טביעת אצבע")), height=84)
+            else:
+                if st.button(tr("Enable fingerprint", "הפעל טביעת אצבע"), key="_bio_enable_btn", use_container_width=True):
+                    if not _lk_now.get("pin_hash"):
+                        st.warning(tr("Set a passcode above first — it's your fallback if the fingerprint is ever lost.",
+                                      "קבע קודם קוד גישה למעלה — הוא הגיבוי אם טביעת האצבע תאבד."))
+                    else:
+                        _lk_now["bio_enabled"] = True
+                        _lock_save(_lk_now)
+                        st.session_state["_app_unlocked"] = True
+                        st.rerun()
+
+        # ── ⚙ General ──
+        with _tab_gen:
+            st.checkbox(
+                tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
+                value=bool(st.session_state.get("chart_lock_persist", _is_mobile_client())),
+                key="chart_lock_persist",
+            )
+            st.checkbox(
+                tr("Demo view", "מצב הדגמה"),
+                value=bool(st.session_state.get("demo_mode_persist", False)),
+                key="demo_mode_persist",
+            )
+            st.divider()
+            st.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
 
     if _looks_like_private_key_blob(api_token):
         st.error(tr("API Token appears invalid (looks like a private key). Paste your Apps Script API token instead.", "נראה שבשדה API Token הודבק מפתח פרטי. יש להדביק את ה-API Token של Apps Script."))
