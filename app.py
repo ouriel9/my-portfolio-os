@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r25"
+APP_BUILD = "2026-06-21 · r26"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -11548,16 +11548,12 @@ def main() -> None:
                 pass
     except Exception:
         pass
-    # A successful fingerprint (WebAuthn) unlock returns here via a query param.
-    try:
-        if st.query_params.get("_bio") == "ok" and _lk.get("bio_enabled"):
-            st.session_state["_app_unlocked"] = True
-            try:
-                del st.query_params["_bio"]
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # SECURITY: the old `?_bio=ok` query-param unlock was a TRIVIAL bypass — anyone could
+    # append ?_bio=ok to the public URL and unlock. Removed. The real WebAuthn flow unlocks
+    # by clicking the hidden Streamlit bridge button (_bio_bridge_btn) after the on-device
+    # fingerprint ceremony succeeds. NOTE: an in-app lock on a publicly-reachable single-tenant
+    # Cloud URL is a DETERRENT, not a true confidentiality boundary (the server already holds
+    # the data); for real protection use a private deployment / Streamlit auth / viewer allowlist.
     if (_lk.get("pin_hash") or _lk.get("bio_enabled")) and not st.session_state.get("_app_unlocked"):
         st.markdown(
             "<div style='max-width:380px;margin:14vh auto 1rem;text-align:center'>"
@@ -11612,10 +11608,24 @@ def main() -> None:
         key=_appearance_key,
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
-    st.sidebar.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
-
-    # ── App lock settings (passcode + fingerprint) ──
-    with st.sidebar.expander(tr("🔒 App lock", "🔒 נעילה")):
+    # ── ⚙ Settings: version + chart/demo toggles + App-lock (passcode + fingerprint) ──
+    # Single grouped Settings expander (rendered here so the chart_lock/demo values it
+    # writes are available to the main content read below, with no one-rerun lag).
+    _default_chart_lock = _is_mobile_client()
+    with st.sidebar.expander(tr("⚙ Settings", "⚙ הגדרות")):
+        st.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
+        st.checkbox(
+            tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
+            value=bool(st.session_state.get("chart_lock_persist", _default_chart_lock)),
+            key="chart_lock_persist",
+        )
+        st.checkbox(
+            tr("Demo view", "מצב הדגמה"),
+            value=bool(st.session_state.get("demo_mode_persist", False)),
+            key="demo_mode_persist",
+        )
+        st.divider()
+        st.markdown("**🔒 " + tr("App lock", "נעילה") + "**")
         _lk_now = _lock_load()
         _has_pin = bool(_lk_now.get("pin_hash"))
         _has_bio = bool(_lk_now.get("bio_enabled"))
@@ -11681,17 +11691,13 @@ def main() -> None:
             )
         except Exception:
             pass
+    # chart_lock / demo VALUES are read here (main content below needs them), but the
+    # actual checkboxes now render inside the bottom ⚙ Settings expander. Reading from
+    # session_state keeps the value available at the top; a toggle applies on the
+    # immediately-following rerun (a checkbox click always reruns anyway).
     _default_chart_lock = _is_mobile_client()
-    chart_lock = st.sidebar.checkbox(
-        tr("🔒 Lock charts (smooth scroll)", "🔒 נעילת תרשימים (גלילה חלקה)"),
-        value=bool(st.session_state.get("chart_lock_persist", _default_chart_lock)),
-        key="chart_lock_persist",
-    )
-    demo_mode = st.sidebar.checkbox(
-        tr("Demo view", "מצב הדגמה"),
-        value=bool(st.session_state.get("demo_mode_persist", False)),
-        key="demo_mode_persist",
-    )
+    chart_lock = bool(st.session_state.get("chart_lock_persist", _default_chart_lock))
+    demo_mode = bool(st.session_state.get("demo_mode_persist", False))
     # Live updates always-on: fragment refreshes every 30s without full-page reload
     live_updates = True
     refresh_seconds = 30
@@ -12448,11 +12454,15 @@ def main() -> None:
                     for _dep_mode in ["live", "demo"]:
                         _dep_ok, _dep_rows, _dep_err = load_manual_deposits_remote(_sync_web_url, _sync_token, _dep_mode)
                         if _dep_ok:
-                            _dep_store = load_manual_deposits_store()
-                            _dep_store[_dep_mode] = _dep_rows
-                            save_manual_deposits_store(_dep_store)
-                            # Reset loaded flag so dashboard reloads from local
-                            st.session_state.pop(f"manual_deposits_loaded_{_dep_mode}", None)
+                            # ONLY overwrite local when the cloud actually returned rows. An
+                            # empty cloud (fresh/unsaved deposits sheet) returns (True, [], '')
+                            # and the old code wiped the LOCAL deposits store with [] — silent
+                            # data loss. Mirror the dashboard-load logic: empty cloud → keep local.
+                            if _dep_rows:
+                                _dep_store = load_manual_deposits_store()
+                                _dep_store[_dep_mode] = _dep_rows
+                                save_manual_deposits_store(_dep_store)
+                                st.session_state.pop(f"manual_deposits_loaded_{_dep_mode}", None)
                         else:
                             _dep_errors.append(f"{_dep_mode}: {_dep_err}")
                 _dep_note = f"  \n⚠ {tr('Deposits pull had errors', 'שגיאה בשליפת הפקדות')}: {'; '.join(_dep_errors)}" if _dep_errors else ""
