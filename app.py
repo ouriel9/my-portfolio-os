@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r21"
+APP_BUILD = "2026-06-21 · r22"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -3748,54 +3748,11 @@ def inject_client_fixes() -> None:
             } catch(e){}
           }
 
-          // Top LOADING BAR: a slim, always-on-top progress bar that animates while
-          // Streamlit is running a script (page load / navigation / sync) and completes
-          // when idle — so it's always clear whether a page finished loading. Streamlit's
-          // own status widget is hidden (ugly dot); we READ its running state (it still
-          // updates in the DOM even when display:none) to drive this bar. Installed once.
-          function setupLoadBar() {
-            if (rootWin.__pmLoadBar) return;
-            rootWin.__pmLoadBar = true;
-            try {
-              var bar = rootDoc.getElementById('pp-loadbar');
-              if (!bar) {
-                bar = rootDoc.createElement('div');
-                bar.id = 'pp-loadbar';
-                bar.style.cssText = 'position:fixed;top:0;left:0;height:3px;width:0%;'
-                  + 'z-index:2147483647;background:linear-gradient(90deg,#6366f1,#06b6d4,#10b981);'
-                  + 'box-shadow:0 0 10px rgba(99,102,241,.7);opacity:0;pointer-events:none;'
-                  + 'border-radius:0 2px 2px 0;transition:width .18s ease,opacity .35s ease;';
-                (rootDoc.body || rootDoc.documentElement).appendChild(bar);
-              }
-              function running() {
-                var sw = rootDoc.querySelector('[data-testid="stStatusWidget"]');
-                if (sw) {
-                  var t = (sw.innerText || '').toLowerCase();
-                  if (t.indexOf('running') >= 0 || t.indexOf('connecting') >= 0 || t.indexOf('updating') >= 0) return true;
-                  if (sw.querySelector('svg, [class*="spin"], [data-testid*="Spinner"], [data-testid*="Running"]')) return true;
-                }
-                return false;
-              }
-              var prog = 0, creep = null, active = false;
-              function start() {
-                if (active) return; active = true;
-                prog = 12; bar.style.opacity = '1'; bar.style.width = prog + '%';
-                if (creep) clearInterval(creep);
-                creep = setInterval(function () { if (prog < 90) { prog += Math.max(0.6, (90 - prog) / 14); bar.style.width = prog + '%'; } }, 170);
-              }
-              function finish() {
-                if (!active) return; active = false;
-                if (creep) { clearInterval(creep); creep = null; }
-                prog = 100; bar.style.width = '100%';
-                setTimeout(function () { bar.style.opacity = '0'; setTimeout(function () { prog = 0; bar.style.width = '0%'; }, 350); }, 220);
-              }
-              rootWin.__pmLoadPoll = setInterval(function () { running() ? start() : finish(); }, 140);
-            } catch (e) {}
-          }
+          // (The top loading bar lives in _pp_inject_loading_bar() — a single, fixed
+          // implementation. No duplicate here.)
 
           function run() {
             removeBranding();
-            setupLoadBar();
             setupTabSwipe();
             if (rootWin.__pmRestoreActiveTab) rootWin.__pmRestoreActiveTab();  // re-select the active sub-tab after a rerun reset it to Overview
             fixSidebarLeft();
@@ -5241,7 +5198,20 @@ def call_apps_script_(web_app_url: str, payload: Dict[str, object]) -> Dict[str,
         method="POST",
     )
     body = _read_url_with_retries(req)
-    return json.loads(body)
+    try:
+        return json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        # Google sometimes answers with HTTP 200 but a NON-JSON body — a sign-in /
+        # quota / Apps Script redirect HTML page (common intermittently on a phone on
+        # cellular). json.loads then raised the cryptic "Expecting value: line 1
+        # column 1 (char 0)" that surfaced as the user's pull error. Convert it to a
+        # clear, actionable, localized message instead. (sync robustness)
+        _looks_html = (body or "").lstrip()[:1] == "<"
+        raise RuntimeError(
+            ("גוגל החזיר תשובה שאינה JSON"
+             + (" (דף התחברות/מכסה/הפניה זמני)" if _looks_html else "")
+             + " — נסה שוב בעוד רגע. / Google returned a non-JSON response — retry in a moment.")
+        )
 
 
 def _is_timeout_error(exc: Exception) -> bool:
@@ -6973,8 +6943,15 @@ def _pp_inject_loading_bar() -> None:
             function busy(){ try{
               // Only Streamlit's run-status widget — NOT [data-stale], which can stay
               // stuck on some pages (e.g. the AI Agent) and froze the bar. (fix)
+              // Detect by CONTENT, not offsetParent: the app hides stStatusWidget with
+              // display:none (offsetParent is then null even WHILE running), which made
+              // this bar never appear. innerText/spinner still update under display:none.
               var sw=doc.querySelector('[data-testid="stStatusWidget"]');
-              return !!(sw && sw.offsetParent!==null);
+              if(!sw) return false;
+              var t=(sw.innerText||'').toLowerCase();
+              if(t.indexOf('running')>=0||t.indexOf('connecting')>=0||t.indexOf('updating')>=0) return true;
+              if(sw.querySelector('svg,[class*="spin"],[data-testid*="Spinner"],[data-testid*="Running"]')) return true;
+              return false;
             }catch(e){ return false; } }
             W.setInterval(function(){
               if(running && (Date.now()-startTs)>9000){ done(); return; }   // safety net: never stay stuck
