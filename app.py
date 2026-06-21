@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r23"
+APP_BUILD = "2026-06-21 · r24"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -11650,9 +11650,18 @@ def main() -> None:
             components.html(_bio_register_html(tr("Register fingerprint", "רשום טביעת אצבע")), height=84)
         else:
             if st.button(tr("Enable fingerprint", "הפעל טביעת אצבע"), key="_bio_enable_btn", use_container_width=True):
-                _lk_now["bio_enabled"] = True
-                _lock_save(_lk_now)
-                st.rerun()
+                if not _lk_now.get("pin_hash"):
+                    # SECURITY: never allow biometric-ONLY. The WebAuthn credential lives in
+                    # this browser's localStorage; if it's lost/cleared (new device, cleared
+                    # data) and there's no passcode, the owner is locked out with no way in.
+                    # Require a passcode as the mandatory fallback first.
+                    st.warning(tr("Set a passcode above first — it's your fallback if the fingerprint is ever lost.",
+                                  "קבע קודם קוד גישה למעלה — הוא הגיבוי אם טביעת האצבע תאבד."))
+                else:
+                    _lk_now["bio_enabled"] = True
+                    _lock_save(_lk_now)
+                    st.session_state["_app_unlocked"] = True  # don't lock the CURRENT session out before a credential is registered
+                    st.rerun()
 
     # Auto-persist language + theme so ALL connected devices (phone, tablet, desktop)
     # share the same preference on next page load — writes to the shared server-side JSON.
@@ -12696,7 +12705,15 @@ def main() -> None:
         fx = _safe_quote("USDILS=X")
         if fx <= 0:
             fx = _usd_ils_rate()
-        dashboard_df = enrich_open_trades_with_prices(open_trades)
+        # DEMO must stay deterministic: enrich_open_trades_with_prices() fetches LIVE
+        # yfinance prices and overrode the curated 80k-scaled demo values, so the pie /
+        # top-holding / bar / treemap reflected TODAY's market instead of the showcase.
+        # In demo, enrich with EMPTY live prices → adds the structural columns but keeps
+        # the stored Current_Value_ILS (override only happens where a live price > 0).
+        if is_demo:
+            dashboard_df = _enrich_compute(open_trades.copy(), {}, fx)
+        else:
+            dashboard_df = enrich_open_trades_with_prices(open_trades)
         dashboard_df["Cost_Origin_With_Fee"] = dashboard_df["Cost_Origin"] + dashboard_df["Commission"]
         dashboard_df["Cost_ILS_With_Fee"] = dashboard_df["Cost_ILS"].map(_num)
         dashboard_df["Value_Origin_Est"] = _value_origin_series(dashboard_df, fx)
