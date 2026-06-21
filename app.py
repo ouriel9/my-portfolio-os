@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r24"
+APP_BUILD = "2026-06-21 · r25"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -6979,12 +6979,13 @@ def _pp_inject_loading_bar() -> None:
               var sw=doc.querySelector('[data-testid="stStatusWidget"]');
               if(!sw) return false;
               var t=(sw.innerText||'').toLowerCase();
-              if(t.indexOf('running')>=0||t.indexOf('connecting')>=0||t.indexOf('updating')>=0) return true;
-              if(sw.querySelector('svg,[class*="spin"],[data-testid*="Spinner"],[data-testid*="Running"]')) return true;
-              return false;
+              // TEXT ONLY. A generic svg / connection icon is present even when IDLE, so
+              // matching svg made busy() true forever → the bar STUCK at ~90%. Streamlit
+              // shows the literal word "Running"/"Connecting" only while actually running.
+              return t.indexOf('running')>=0 || t.indexOf('connecting')>=0;
             }catch(e){ return false; } }
             W.setInterval(function(){
-              if(running && (Date.now()-startTs)>9000){ done(); return; }   // safety net: never stay stuck
+              if(running && (Date.now()-startTs)>6000){ done(); return; }   // safety net: never stay stuck >6s
               if(busy()){ if(!running && !delay){ delay=W.setTimeout(function(){delay=null; start();},220); } }
               else { done(); }
             },140);
