@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r20"
+APP_BUILD = "2026-06-21 · r21"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -3748,8 +3748,54 @@ def inject_client_fixes() -> None:
             } catch(e){}
           }
 
+          // Top LOADING BAR: a slim, always-on-top progress bar that animates while
+          // Streamlit is running a script (page load / navigation / sync) and completes
+          // when idle — so it's always clear whether a page finished loading. Streamlit's
+          // own status widget is hidden (ugly dot); we READ its running state (it still
+          // updates in the DOM even when display:none) to drive this bar. Installed once.
+          function setupLoadBar() {
+            if (rootWin.__pmLoadBar) return;
+            rootWin.__pmLoadBar = true;
+            try {
+              var bar = rootDoc.getElementById('pp-loadbar');
+              if (!bar) {
+                bar = rootDoc.createElement('div');
+                bar.id = 'pp-loadbar';
+                bar.style.cssText = 'position:fixed;top:0;left:0;height:3px;width:0%;'
+                  + 'z-index:2147483647;background:linear-gradient(90deg,#6366f1,#06b6d4,#10b981);'
+                  + 'box-shadow:0 0 10px rgba(99,102,241,.7);opacity:0;pointer-events:none;'
+                  + 'border-radius:0 2px 2px 0;transition:width .18s ease,opacity .35s ease;';
+                (rootDoc.body || rootDoc.documentElement).appendChild(bar);
+              }
+              function running() {
+                var sw = rootDoc.querySelector('[data-testid="stStatusWidget"]');
+                if (sw) {
+                  var t = (sw.innerText || '').toLowerCase();
+                  if (t.indexOf('running') >= 0 || t.indexOf('connecting') >= 0 || t.indexOf('updating') >= 0) return true;
+                  if (sw.querySelector('svg, [class*="spin"], [data-testid*="Spinner"], [data-testid*="Running"]')) return true;
+                }
+                return false;
+              }
+              var prog = 0, creep = null, active = false;
+              function start() {
+                if (active) return; active = true;
+                prog = 12; bar.style.opacity = '1'; bar.style.width = prog + '%';
+                if (creep) clearInterval(creep);
+                creep = setInterval(function () { if (prog < 90) { prog += Math.max(0.6, (90 - prog) / 14); bar.style.width = prog + '%'; } }, 170);
+              }
+              function finish() {
+                if (!active) return; active = false;
+                if (creep) { clearInterval(creep); creep = null; }
+                prog = 100; bar.style.width = '100%';
+                setTimeout(function () { bar.style.opacity = '0'; setTimeout(function () { prog = 0; bar.style.width = '0%'; }, 350); }, 220);
+              }
+              rootWin.__pmLoadPoll = setInterval(function () { running() ? start() : finish(); }, 140);
+            } catch (e) {}
+          }
+
           function run() {
             removeBranding();
+            setupLoadBar();
             setupTabSwipe();
             if (rootWin.__pmRestoreActiveTab) rootWin.__pmRestoreActiveTab();  // re-select the active sub-tab after a rerun reset it to Overview
             fixSidebarLeft();
@@ -11537,10 +11583,20 @@ def main() -> None:
     }
     theme_value_to_label = {v: k for k, v in theme_label_to_value.items()}
     default_theme_label = theme_value_to_label.get(theme_default, tr("System", "מערכת"))
+    # KEY + session_state (NOT a dynamic index=). A keyless selectbox whose index is
+    # derived from a value the widget itself persists lags by one interaction — the
+    # FIRST theme switch did nothing, only the second worked. With a stable key the
+    # widget owns its state and the change applies on the SAME rerun. The key is seeded
+    # from the saved preference once per session; the label list is language-dependent,
+    # so re-seed if the stored label isn't a valid option (e.g. after a language switch).
+    _appearance_key = "appearance_label_key"
+    if (_appearance_key not in st.session_state
+            or st.session_state.get(_appearance_key) not in theme_label_to_value):
+        st.session_state[_appearance_key] = default_theme_label
     appearance_label = st.sidebar.selectbox(
         tr("Appearance", "תצוגה"),
         list(theme_label_to_value.keys()),
-        index=list(theme_label_to_value.keys()).index(default_theme_label),
+        key=_appearance_key,
     )
     theme_mode = theme_label_to_value.get(appearance_label, THEME_SYSTEM)
     st.sidebar.caption(tr(f"build {APP_BUILD} · st{st.__version__}", f"גרסה {APP_BUILD} · st{st.__version__}"))
