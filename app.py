@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r22"
+APP_BUILD = "2026-06-21 · r23"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -3764,12 +3764,22 @@ def inject_client_fixes() -> None:
 
           run();
           if (!rootWin._pmObserverAttached) {
-            const obs = new MutationObserver(run);
+            // THROTTLED observer: run() does heavy passes (a11y querySelectorAll, a
+            // full-body TreeWalker, swipe re-bind). Firing it on EVERY mutation thrashed
+            // layout and, over time, starved touch handling so the SWIPE stopped working.
+            // Coalesce to at most once per ~120ms. (perf / swipe-stops fix)
+            var _runT = null;
+            const obs = new MutationObserver(function () {
+              if (_runT) return;
+              _runT = rootWin.setTimeout(function () { _runT = null; try { run(); } catch (e) {} }, 120);
+            });
             obs.observe(rootDoc.body, { childList: true, subtree: true });
             rootWin._pmTimerBranding = rootWin.setInterval(removeBranding, 1200);
             rootWin._pmTimerSidebar = rootWin.setInterval(fixSidebarLeft, 800);
             rootWin._pmTimerToolbar = rootWin.setInterval(forceToolbarVisible, 1500);
-            rootWin._pmTimerUndef = rootWin.setInterval(removeUndefinedText, 200);
+            // 200ms full-body TreeWalker was pure waste (the observer already calls it);
+            // a 3s safety-net is plenty. (perf fix)
+            rootWin._pmTimerUndef = rootWin.setInterval(removeUndefinedText, 3000);
             rootWin.addEventListener('scroll', removeUndefinedText, {passive:true, capture:true});
             rootWin._pmTimerHide = window.setInterval(function () {
               injectHideStyle(document);
@@ -5806,22 +5816,39 @@ def sync_portfolio_from_google(
         n_removed = len(local_ids - remote_ids)      # rows locally that Google deleted
         n_kept = len(remote_ids & local_ids)         # rows in both (could still differ in fields, but treated as same identity)
 
-        # ── Step 5: Save — overwrite local with Google, full mirror.
-        merged_df = df_remote
+        # ── Step 5: Save. force_full_replace was accepted but never honoured — every
+        # pull silently full-mirrored and DROPPED unsynced local (dirty) edits, while the
+        # sidebar promised "Normal pull keeps them" and offered a Force-pull checkbox that
+        # did nothing. Now implemented: a NORMAL pull preserves dirty rows (they win over
+        # remote for the same Trade_ID, and dirty-only-local rows are kept); FORCE pull
+        # is the true full mirror that discards local edits.
+        n_dirty = len(dirty_ids)
+        if force_full_replace or not dirty_ids or local_df.empty:
+            merged_df = df_remote
+            _preserve = False
+        else:
+            _dirty_mask_local = local_df["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)
+            dirty_df = local_df[_dirty_mask_local]
+            _remote_keep = ~df_remote["Trade_ID"].map(lambda t: _clean(str(t))).isin(dirty_ids)
+            merged_df = pd.concat([df_remote[_remote_keep], dirty_df], ignore_index=True)
+            _preserve = True
         save_local_portfolio(
             merged_df,
-            preserve_dirty=False,   # Mirror means: drop any local-dirty markers
+            preserve_dirty=_preserve,
             meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
         )
         _save_local_snapshot_cache(merged_df)
 
         n_google = len(df_remote)
-        n_dirty = len(dirty_ids)
         # Build human-readable summary of what changed
         diff_bits = []
         if n_added:    diff_bits.append(tr(f"+{n_added} added", f"+{n_added} נוספו"))
         if n_removed:  diff_bits.append(tr(f"-{n_removed} deleted", f"-{n_removed} נמחקו"))
-        if n_dirty:    diff_bits.append(tr(f"⚠ {n_dirty} local edits OVERWRITTEN", f"⚠ {n_dirty} עריכות מקומיות נדרסו"))
+        if n_dirty:
+            if force_full_replace:
+                diff_bits.append(tr(f"⚠ {n_dirty} local edits OVERWRITTEN", f"⚠ {n_dirty} עריכות מקומיות נדרסו"))
+            else:
+                diff_bits.append(tr(f"{n_dirty} local edits kept", f"{n_dirty} עריכות מקומיות נשמרו"))
         detail = (" · " + ", ".join(diff_bits)) if diff_bits else ""
         return True, tr(
             f"Pulled {n_google:,} rows from Google Sheets.{detail}",
@@ -5850,26 +5877,29 @@ def sync_portfolio_to_google(
 
         pushed = 0
         errors: List[str] = []
-        for r in dirty:
+        for r in dirty:  # r is a reference into raw["rows"] (no copy) — mutating it persists below
             op_code = str(r.get("_dirty_op", "edit"))
             trade_clean = {k: v for k, v in r.items() if not k.startswith("_")}
             ok, msg = sync_trade_to_sheet(web_app_url, api_token, op_code, trade_clean)
             if ok:
                 pushed += 1
+                # Clear dirty PER-ROW immediately. The old code only cleared flags AFTER
+                # an `if errors: return` early-exit, so on a PARTIAL failure the rows that
+                # already pushed kept _dirty=True and got RE-PUSHED next time → duplicate
+                # sheet rows. Clearing here makes a re-push send only the genuinely-failed ones.
+                r["_dirty"] = False
+                r["_dirty_op"] = ""
             else:
                 errors.append(f"[{trade_clean.get('Trade_ID', '?')}] {msg}")
 
+        # Persist whatever succeeded (those rows are now clean), EVEN on partial failure.
+        if pushed:
+            raw.setdefault("_meta", {})["_last_synced"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            raw["_meta"]["_version"] = int(raw["_meta"].get("_version", 0)) + 1
+            with _LOCAL_FILE_LOCK:
+                _write_portfolio_atomic(raw)
         if errors:
             return False, "; ".join(errors[:3]), pushed
-        # Mark all clean after successful push + record sync timestamp
-        for r in raw.get("rows", []):
-            if isinstance(r, dict):
-                r["_dirty"] = False
-                r["_dirty_op"] = ""
-        raw.setdefault("_meta", {})["_last_synced"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-        raw["_meta"]["_version"] = int(raw["_meta"].get("_version", 0)) + 1
-        with _LOCAL_FILE_LOCK:
-            _write_portfolio_atomic(raw)
         return True, tr(f"Pushed {pushed:,} changes to Google Sheets.", f"נדחפו {pushed:,} שינויים לגוגל שיט."), pushed
     except Exception as exc:
         return False, str(exc), 0
@@ -7172,10 +7202,15 @@ def _pp_inject_help_shim() -> None:
             }
             collapsePhantoms();
             try {
+              // SINGLE observer (disconnect any prior) — this block re-emits every rerun
+              // and previously leaked a new subtree observer each time. (perf leak fix)
+              var Wp = d.defaultView || window.parent || window;
+              try { if (Wp.__ppPhantomObs2) Wp.__ppPhantomObs2.disconnect(); } catch(e2) {}
               var mo = new MutationObserver(function(){
                 requestAnimationFrame(collapsePhantoms);
               });
               mo.observe(d.body, {childList: true, subtree: true});
+              Wp.__ppPhantomObs2 = mo;
             } catch(e) {}
           } catch(e) {}
         })();</script>
@@ -11690,9 +11725,16 @@ def main() -> None:
         }}
         function tick() {{ applyLock(); killPhantoms(); }}
         tick();
-        // Keep observing indefinitely so new charts/phantoms on other tabs are handled.
+        // SINGLE observer. This components.html re-emits every rerun; the old code created
+        // a NEW MutationObserver on d.body{{subtree}} each time and never disconnected, so
+        // observers piled up across reruns until the page choked and TOUCH (swipe) stopped
+        // working. Disconnect any prior observer first → only ever one, with the fresh
+        // _lock_action closure. (perf leak / swipe-stops-after-a-while fix)
+        var W = d.defaultView || window.parent || window;
+        try {{ if (W.__ppChartLockObs) W.__ppChartLockObs.disconnect(); }} catch(e){{}}
         var obs = new MutationObserver(function(){{ requestAnimationFrame(tick); }});
         obs.observe(d.body, {{childList:true, subtree:true}});
+        W.__ppChartLockObs = obs;
       }} catch(e){{}}
     }})();</script>""", height=0, width=0)
 
