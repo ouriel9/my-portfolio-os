@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r28"
+APP_BUILD = "2026-06-22 · r29"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -6964,37 +6964,32 @@ def _pp_inject_loading_bar() -> None:
             if(W.__ppLoadbarInit) return;          // set up exactly once
             W.__ppLoadbarInit=true;
             var st=doc.createElement('style');
+            // PURE-CSS one-shot bar. The stStatusWidget isn't in the DOM (can't read a
+            // "running" flag), and JS timer/observer schemes kept getting stuck on animating
+            // pages. A CSS animation has a FIXED duration and self-stops at opacity:0 — it can
+            // never freeze. Tapping a page pill / sub-tab / button (re)starts it.
             st.textContent='#pp-loadbar{position:fixed;top:0;left:0;height:3px;width:0;z-index:2147483647;'
-              +'background:linear-gradient(90deg,#6366f1,#22d3ee,#a78bfa);background-size:200% 100%;'
-              +'box-shadow:0 0 12px rgba(99,102,241,.75);border-radius:0 3px 3px 0;opacity:0;'
-              +'transition:width .2s ease,opacity .45s ease;animation:ppLoadShift 1.1s linear infinite;}'
-              +'@keyframes ppLoadShift{to{background-position:200% 0}}';
+              +'background:linear-gradient(90deg,#6366f1,#22d3ee,#a78bfa);'
+              +'box-shadow:0 0 12px rgba(99,102,241,.75);border-radius:0 3px 3px 0;opacity:0;pointer-events:none;}'
+              +'#pp-loadbar.pp-go{animation:ppLoadGo 1100ms cubic-bezier(.25,.6,.3,1) forwards;}'
+              +'@keyframes ppLoadGo{0%{opacity:1;width:6%}25%{opacity:1;width:42%}'
+              +'60%{opacity:1;width:74%}85%{opacity:1;width:93%}100%{opacity:0;width:100%}}';
             doc.head.appendChild(st);
             var bar=doc.createElement('div'); bar.id='pp-loadbar'; doc.body.appendChild(bar);
-            var running=false, prog=0, anim=null, delay=null, startTs=0;
-            function up(){ prog=Math.min(prog+Math.max(0.4,(92-prog)*0.07),92); bar.style.width=prog+'%'; }
-            function start(){ if(running) return; running=true; startTs=Date.now(); prog=10; bar.style.opacity='1'; bar.style.width='10%'; anim=W.setInterval(up,180); }
-            function done(){ if(delay){W.clearTimeout(delay); delay=null;} if(!running) return; running=false; W.clearInterval(anim);
-              bar.style.width='100%'; W.setTimeout(function(){bar.style.opacity='0'; W.setTimeout(function(){bar.style.width='0';},450);},180); }
-            function busy(){ try{
-              // Only Streamlit's run-status widget — NOT [data-stale], which can stay
-              // stuck on some pages (e.g. the AI Agent) and froze the bar. (fix)
-              // Detect by CONTENT, not offsetParent: the app hides stStatusWidget with
-              // display:none (offsetParent is then null even WHILE running), which made
-              // this bar never appear. innerText/spinner still update under display:none.
-              var sw=doc.querySelector('[data-testid="stStatusWidget"]');
-              if(!sw) return false;
-              var t=(sw.innerText||'').toLowerCase();
-              // TEXT ONLY. A generic svg / connection icon is present even when IDLE, so
-              // matching svg made busy() true forever → the bar STUCK at ~90%. Streamlit
-              // shows the literal word "Running"/"Connecting" only while actually running.
-              return t.indexOf('running')>=0 || t.indexOf('connecting')>=0;
-            }catch(e){ return false; } }
-            W.setInterval(function(){
-              if(running && (Date.now()-startTs)>6000){ done(); return; }   // safety net: never stay stuck >6s
-              if(busy()){ if(!running && !delay){ delay=W.setTimeout(function(){delay=null; start();},220); } }
-              else { done(); }
-            },140);
+            function lbGo(){
+              bar.classList.remove('pp-go');
+              void bar.offsetWidth;          // reflow so the animation restarts cleanly
+              bar.classList.add('pp-go');
+            }
+            doc.addEventListener('click', function(e){
+              try{
+                if(!e.isTrusted) return;     // only real user taps (not synthetic swipe/tab-restore clicks)
+                var t=e.target;
+                if(t && t.closest && t.closest('[data-testid="stRadio"], [role="radio"], [data-baseweb="tab"], [role="tab"], .stButton button, [data-testid="stSidebar"] button')){
+                  lbGo();
+                }
+              }catch(_){}
+            }, true);
           }catch(e){}
         })();</script>
         """,
@@ -15236,15 +15231,21 @@ def main() -> None:
             pass
 
         # ── Column-level completeness ──
+        # Use the SAME rules as the top KPI: skip internal "_" cols and SALE-ONLY fields
+        # (Sell_Date/Sell_Price/Yield_At_Sale are LEGITIMATELY empty for OPEN positions, so
+        # counting them made the chart show a misleading <100% on perfectly valid data), and
+        # treat placeholders ("עדיין פתוח"/NaT/—) as empty — so the chart reflects REAL gaps.
         if not df.empty:
+            _SALE_ONLY = {"Sell_Date", "Sell_Price_Origin", "Yield_At_Sale", "Buy_Price"}
+            _PLACEHOLDERS = {"", "nat", "none", "nan", "null", "—", "-", "עדיין פתוח"}
             col_total = len(df)
             col_rows = []
-            for c in df.columns:
+            for c in [c for c in df.columns if not str(c).startswith("_") and c not in _SALE_ONLY]:
                 s = df[c]
                 if s.dtype.kind in "biufc":
                     non_empty = int(pd.to_numeric(s, errors="coerce").notna().sum())
                 else:
-                    non_empty = int(s.astype(str).map(_clean).ne("").sum())
+                    non_empty = int((~s.map(lambda v: _clean(v).lower()).isin(_PLACEHOLDERS)).sum())
                 col_rows.append({"Column": str(c), "Completeness": non_empty / col_total if col_total else 0.0})
             col_df = pd.DataFrame(col_rows).sort_values("Completeness", ascending=True)
             try:
