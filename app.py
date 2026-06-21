@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r29"
+APP_BUILD = "2026-06-22 · r30"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -5609,6 +5609,7 @@ def save_local_portfolio(
         try:
             existing_flags: Dict[str, Dict[str, object]] = {}
             existing_meta: Dict[str, object] = {}
+            existing_tombstones: List[Dict[str, object]] = []
             if preserve_dirty:
                 try:
                     raw = _read_portfolio_file_raw()
@@ -5622,6 +5623,13 @@ def save_local_portfolio(
                                     "_dirty_op": str(r.get("_dirty_op", "")),
                                     "_deleted": bool(r.get("_deleted", False)),
                                 }
+                            # Pending offline-delete tombstones (_deleted + _dirty)
+                            # are HIDDEN by load_local_portfolio(), so a pull's merged
+                            # DataFrame never carries them. Capture them here so we can
+                            # re-append below — otherwise the unsynced delete is dropped
+                            # and the row RESURRECTS from Google on the next pull.
+                            if r.get("_deleted", False) and r.get("_dirty", False):
+                                existing_tombstones.append(dict(r))
                 except Exception:
                     pass
 
@@ -5640,6 +5648,17 @@ def save_local_portfolio(
                 rd["_dirty_op"] = str(flags.get("_dirty_op", ""))
                 rd["_deleted"] = bool(flags.get("_deleted", False))
                 rows_out.append(rd)
+
+            # Re-append pending-delete tombstones that the incoming df didn't carry
+            # (df comes from load_local_portfolio, which hides _deleted rows). This
+            # keeps the unsynced delete alive until it is pushed to Google.
+            if existing_tombstones:
+                present_ids = {_clean(str(r.get("Trade_ID", ""))) for r in rows_out}
+                for t in existing_tombstones:
+                    tid = _clean(str(t.get("Trade_ID", "")))
+                    if tid and tid not in present_ids:
+                        rows_out.append(t)
+                        present_ids.add(tid)
 
             _write_portfolio_atomic({"_meta": new_meta, "rows": rows_out})
             return True
@@ -5900,6 +5919,13 @@ def sync_portfolio_to_google(
 
         # Persist whatever succeeded (those rows are now clean), EVEN on partial failure.
         if pushed:
+            # A delete that was successfully pushed had its _dirty cleared above; drop
+            # those tombstones entirely so hidden _deleted rows don't accumulate forever.
+            # A delete whose push FAILED keeps _dirty=True and is retained for retry.
+            raw["rows"] = [
+                r for r in raw.get("rows", [])
+                if not (isinstance(r, dict) and r.get("_deleted", False) and not r.get("_dirty", False))
+            ]
             raw.setdefault("_meta", {})["_last_synced"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
             raw["_meta"]["_version"] = int(raw["_meta"].get("_version", 0)) + 1
             with _LOCAL_FILE_LOCK:

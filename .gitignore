@@ -114,3 +114,9 @@ _FIX_WORKFLOW_OUTPUT.json
 
 # per-device passcode lock (hash) — never commit
 app_lock.json
+
+# Android release signing key — NEVER commit
+apk_streamlit/portfolio-os-release.keystore
+*.keystore
+apk_streamlit/_build_log.txt
+apk_streamlit/_npm_log.txt
