@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-21 · r19"
+APP_BUILD = "2026-06-21 · r20"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -674,12 +674,12 @@ def _normalize_theme_mode(theme_mode: str) -> str:
 
 
 def _resolve_theme_base(theme_mode: str) -> str:
-    # Dark-FIRST, but light mode is fully supported. An explicit Light/Dark choice
-    # always wins; "system" follows the (dark) config base. The earlier all-WHITE
-    # sidebar was NOT caused by light mode per se — it was (a) a stale data-pp-collapsed
-    # flag hiding the content (removed r17) and (b) the app forcing the sidebar to pure
-    # #ffffff. Both are fixed, and every theme-dependent colour below is now genuinely
-    # is_dark-aware, so choosing Light yields a consistent, readable LIGHT app.
+    # An explicit Light/Dark choice always wins. "System" follows the DEVICE: config.toml
+    # has no forced base, so Streamlit paints the native shell from the browser's
+    # prefers-color-scheme, and st.context.theme.type reports the resolved device theme —
+    # so the app's CSS overlay matches the device (and the canvas st.dataframe grid).
+    # Both fixed: the old all-white sidebar was the data-pp-collapsed race (r17) + a
+    # forced #ffffff, not light mode itself, and every colour below is now is_dark-aware.
     import os as _os
     if _os.environ.get("PP_DESIGN_V2"):
         return THEME_DARK
@@ -688,8 +688,15 @@ def _resolve_theme_base(theme_mode: str) -> str:
         return THEME_LIGHT
     if mode == THEME_DARK:
         return THEME_DARK
-    # system → follow the native config base (dark-first); default dark if unknown.
-    detected = (_clean(st.get_option("theme.base")) or THEME_DARK).lower()
+    # system → follow the device (browser prefers-color-scheme). st.context.theme.type
+    # is "light"/"dark"; fall back to the (possibly unset) config base, then to light.
+    detected = ""
+    try:
+        detected = (_clean(getattr(getattr(st.context, "theme", None), "type", "")) or "").lower()
+    except Exception:
+        detected = ""
+    if detected not in (THEME_LIGHT, THEME_DARK):
+        detected = (_clean(st.get_option("theme.base")) or THEME_LIGHT).lower()
     return THEME_DARK if detected == THEME_DARK else THEME_LIGHT
 
 
@@ -2927,13 +2934,11 @@ def inject_dark_dropdown_fix(is_dark: bool) -> None:
     the portal.  This function uses a tiny JS snippet to plant a <style>
     tag directly in the parent document <head> with high-specificity rules.
     """
-    try:
-        _key = ("_dark_dropdown_fix", bool(is_dark))
-        if st.session_state.get("_dark_dropdown_key") == _key:
-            return
-        st.session_state["_dark_dropdown_key"] = _key
-    except Exception:
-        pass
+    # NO session_state guard: previously this returned early unless is_dark CHANGED, so
+    # the dropdown/sidebar theme fix only re-applied on a toggle — which read as "the theme
+    # doesn't switch immediately / pieces stay the old colour". The inner JS is idempotent
+    # (style-tag id checks + the __pmSidebarDarkTimer guard), so re-emitting every rerun is
+    # safe and keeps the resolved theme applied. (theme-immediacy fix)
     if not is_dark:
         # In light mode, remove any leftover dark style tags, timers, and forced inline styles.
         components.html(

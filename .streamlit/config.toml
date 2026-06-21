@@ -1,41 +1,32 @@
-# ── First-paint theme ──────────────────────────────────────────────────
-# This is the theme Streamlit renders NATIVELY, before any of the app's own
-# dynamic CSS loads. The app is dark-first (Aurora design), and a dark-mode
-# user opening the sidebar during a cold start would otherwise briefly see a
-# LIGHT base bleed through → an "all-white" sidebar until the dark CSS paints.
-# Matching the base to the app's real dark palette eliminates that white flash:
-#   backgroundColor          → app main bg   (#0b1120)
-#   secondaryBackgroundColor → sidebar / panels (#0f172a, the app's resolved sidebar bg)
-#   textColor                → light slate   (#e2e8f0)
-# Users who explicitly choose Light mode still get light — _resolve_theme_base()
-# honours an explicit theme_mode; only the "system" default now resolves to dark,
-# which matches this app's dark-first identity.
+# ── First-paint theme (follows the device) ──────────────────────────────────
+# NO forced `base`: with both [theme.light] and [theme.dark] defined, Streamlit
+# paints the NATIVE shell (incl. the canvas st.dataframe grid, dropdowns, inputs —
+# things app CSS cannot recolour per-session) to match the device's
+# prefers-color-scheme. So a LIGHT phone gets light tables, a DARK phone gets dark.
+# The app's own theme toggle (Appearance) then drives the premium CSS overlay on top.
+# The earlier all-white sidebar was the data-pp-collapsed content-hide race (fixed
+# r17) + a forced #ffffff — NOT this base — so following the device is safe now.
 [theme]
-base = "dark"
 primaryColor = "#6366f1"
+font = "sans serif"
+
+[theme.light]
+backgroundColor = "#f6f8fd"
+secondaryBackgroundColor = "#eef2fb"
+textColor = "#0f172a"
+
+[theme.light.sidebar]
+backgroundColor = "#f3f5fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#0f172a"
+borderColor = "#e2e8f0"
+
+[theme.dark]
 backgroundColor = "#0b1120"
 secondaryBackgroundColor = "#0f172a"
 textColor = "#e2e8f0"
-font = "sans serif"
 
-# ── Sidebar theme (Streamlit 1.46+) ─────────────────────────────────────
-# CRITICAL: since 1.46 the sidebar has its OWN theme namespace. The top-level
-# secondaryBackgroundColor above colours the MAIN canvas (metric cards etc.) but
-# NOT the sidebar — so without this section the native sidebar (especially the
-# expanded mobile OVERLAY) falls back to WHITE, which is the all-white-sidebar
-# bug a dark-mode user hits on a cold open. Painting it here makes the FIRST
-# native paint dark, independent of any app CSS or load timing.
-[theme.sidebar]
-backgroundColor = "#0f172a"
-secondaryBackgroundColor = "#1e293b"
-textColor = "#e2e8f0"
-borderColor = "#1e293b"
-
-# Belt-and-suspenders: if a session ever resolves to the LIGHT base (e.g. a stale
-# persisted "light" preference), the sidebar must STILL paint dark natively — the
-# app is dark-first and a white sidebar is the bug we are killing. So the light
-# base's sidebar token is dark too.
-[theme.light.sidebar]
+[theme.dark.sidebar]
 backgroundColor = "#0f172a"
 secondaryBackgroundColor = "#1e293b"
 textColor = "#e2e8f0"
