@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r33"
+APP_BUILD = "2026-06-22 · r34"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -2386,6 +2386,18 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         background-color: transparent !important;
     }}
     /* ══════════════ END DARK MODE ══════════════ */
+    </style>
+    """
+    else:
+        # Light app: the canvas st.dataframe grid still follows the DEVICE theme. On a
+        # DARK device the grid is painted dark → a dark table inside the light app. Invert
+        # it to light ONLY when the device is dark (a light device already matches). (audit finding 3)
+        css += """
+    <style>
+    @media (prefers-color-scheme: dark) {
+      [data-testid="stDataFrame"] { filter: invert(1) hue-rotate(180deg) !important; }
+      [data-testid="stDataFrame"] img { filter: invert(1) hue-rotate(180deg) !important; }
+    }
     </style>
     """
 
