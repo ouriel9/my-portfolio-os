@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r42"
+APP_BUILD = "2026-06-22 · r43"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -13193,7 +13193,7 @@ def main() -> None:
                     _pie_src["Value_ILS"] = _pie_src["Value_ILS"].map(_num)
                     _tot_pie = float(_pie_src["Value_ILS"].sum())
                     if _tot_pie > 0:
-                        _small = _pie_src["Value_ILS"] / _tot_pie < 0.025
+                        _small = _pie_src["Value_ILS"] / _tot_pie < (0.04 if is_mobile else 0.025)
                         if int(_small.sum()) > 1:  # only fold when ≥2 tiny slices actually clutter
                             _big = _pie_src[~_small]
                             _other_val = float(_pie_src.loc[_small, "Value_ILS"].sum())
@@ -13211,11 +13211,17 @@ def main() -> None:
                     color_discrete_sequence=_BRAND_PALETTE,
                 )
                 fig_pie.update_layout(
-                    # vertical legend on the side lists EVERY slice (no wrap-clip); extra bottom
-                    # margin keeps it clear of the chart edge.
+                    # horizontal legend below the ring; smaller font on the 400px phone so a 2-row
+                    # legend fits the card without clipping 'NVDA'. An EXPLICIT height guarantees the
+                    # 2-row legend is seated on EVERY render (the Allocation tab was clipping its 2nd
+                    # legend row because the auto-sized figure left no room for it). (design r5)
                     legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5,
-                                font=dict(size=11)),
-                    margin=dict(l=10, r=10, t=40, b=70),
+                                font=dict(size=9 if is_mobile else 11)),
+                    margin=dict(l=10, r=10, t=40, b=72),
+                    height=360 if is_mobile else 430,
+                    # hide a % that can't fit INSIDE its wedge instead of ejecting it OUTSIDE as tiny
+                    # faint gray text (the name is in the legend anyway). Fixes the 3.76%/5.13% labels.
+                    uniformtext_minsize=10, uniformtext_mode="hide",
                 )
                 fig_pie.update_traces(
                     hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
@@ -13274,14 +13280,20 @@ def main() -> None:
                         color="Yield_Origin_Pct",
                         color_continuous_scale=["#dc2626", "#f59e0b", "#16a34a"],
                         color_continuous_midpoint=0,
-                        title=tr("Portfolio Treemap (size = value · color = origin yield)",
-                                 "מפת חום של התיק (גודל = שווי · צבע = תשואה במטבע מקור)"),
+                        # On the 400px phone the long title is RTL-right-anchored and clips its leading
+                        # letter ('מ' of 'מפת'); use a compact title on mobile + a caption below. (design r5)
+                        title=(tr("Portfolio Heatmap", "מפת חום של התיק") if is_mobile else
+                               tr("Portfolio Treemap (size = value · color = origin yield)",
+                                  "מפת חום של התיק (גודל = שווי · צבע = תשואה במטבע מקור)")),
                         template=template,
                         custom_data=["_pct_str"],
                         hover_data={"Value_ILS": ":,.0f", "Yield_Origin_Pct": ":.2f"},
                     )
                     fig_tree.update_traces(
-                        texttemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{customdata[0]}",
+                        # mobile: 2-line label (ticker + yield%) so the small DOGE/INTC tiles aren't
+                        # forced to clip a 3-line label; desktop keeps the ₪ value line.
+                        texttemplate=("<b>%{label}</b><br>%{customdata[0]}" if is_mobile
+                                      else "<b>%{label}</b><br>₪%{value:,.0f}<br>%{customdata[0]}"),
                         textposition="middle center",
                     )
                     # On mobile: move colorbar below the chart to free horizontal space
@@ -13299,8 +13311,13 @@ def main() -> None:
                     fig_tree.update_layout(
                         margin=tree_margin,
                         coloraxis_colorbar=tree_colorbar,
+                        # a tile too small to hold its label hides the text instead of clipping it.
+                        uniformtext=dict(minsize=9, mode="hide"),
                     )
                     st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
+                    if is_mobile:
+                        st.caption(tr("Size = value · color = origin-currency yield",
+                                      "גודל = שווי · צבע = תשואה במטבע מקור"))
                 except Exception:
                     pass
 
@@ -13670,7 +13687,9 @@ def main() -> None:
                             fig_track.add_annotation(
                                 x=_x.iloc[-1], y=_final_val,
                                 text=f"<b>₪{_final_val:,.0f}</b>  ({_ret * 100:+.1f}%)",
-                                showarrow=False, yshift=22, xshift=-6,
+                                # xanchor=right → the badge grows LEFT from the final point (which sits at
+                                # the plot's right edge) so its '(+46.1%)' tail never overflows/clips. (r5)
+                                showarrow=False, yshift=22, xshift=-6, xanchor="right",
                                 font=dict(color=_accent, size=13),
                                 bgcolor="rgba(15,23,42,0.65)" if is_dark else "rgba(255,255,255,0.75)",
                                 bordercolor=_accent, borderwidth=1, borderpad=4,
@@ -13689,8 +13708,12 @@ def main() -> None:
                         _fig_track = _apply_plotly_theme(fig_track, is_dark, is_mobile)
                         _fig_track.update_layout(
                             showlegend=True,
-                            legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1,
-                                        font=dict(color="#e2e8f0" if is_dark else "#334155", size=12),
+                            # On the 400px phone a right-anchored 2-series legend overflowed the LEFT
+                            # edge and clipped the 2nd name ('Cumulative Cost'/'עלות') — center it +
+                            # smaller font on mobile so both names fit. (design r5)
+                            legend=dict(orientation="h", yanchor="bottom", y=1.0,
+                                        xanchor="center" if is_mobile else "right", x=0.5 if is_mobile else 1,
+                                        font=dict(color="#e2e8f0" if is_dark else "#334155", size=10 if is_mobile else 12),
                                         bgcolor="rgba(0,0,0,0)"),
                             margin=dict(t=64, l=8, r=8, b=8),
                             # Taller, more prominent on desktop; keep compact on mobile.
