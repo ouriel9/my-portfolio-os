@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r32"
+APP_BUILD = "2026-06-22 · r33"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -2203,11 +2203,19 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         background-color: transparent !important;
         border-radius: 8px !important;
         overflow: hidden !important;
-        filter: invert(1) hue-rotate(180deg) !important;  /* true invert preserves hue exactly (green stays green / red stays red); 0.9 distorted the signed Styler colors (audit) */
     }}
-    /* Undo the inversion for images/icons inside the dataframe */
-    [data-testid="stDataFrame"] img {{
-        filter: invert(1) hue-rotate(180deg) !important;
+    /* The Glide canvas grid follows the DEVICE prefers-color-scheme, NOT the app toggle.
+       So invert it to dark ONLY when the device painted it LIGHT. On a DARK device the
+       grid is already dark — inverting it would flip it to near-WHITE inside the dark app
+       (audit finding: dark phone + dark/System app = white tables). Scoping to a light
+       device fixes that while keeping the dark-app-on-a-light-device case correct. */
+    @media (prefers-color-scheme: light) {{
+      [data-testid="stDataFrame"] {{
+        filter: invert(1) hue-rotate(180deg) !important;  /* hue-rotate restores green/red exactly */
+      }}
+      [data-testid="stDataFrame"] img {{
+        filter: invert(1) hue-rotate(180deg) !important;   /* undo inversion for images/icons */
+      }}
     }}
     /* DOM-rendered fallback (HTML tables used by data_editor) */
     [data-testid="stDataFrame"] table {{
@@ -3230,9 +3238,24 @@ section[data-testid="stSidebar"],
             }}
             forceSidebarIframes();
 
-            // Keep re-running so Streamlit rerenders don't undo the fix
+            // React to actual sidebar DOM changes (throttled) instead of polling
+            // getComputedStyle over every element every 800ms forever (perf drain).
+            // The observer watches childList only (not attributes), so our own style
+            // writes can't re-trigger it → no loop. Disconnect-prior avoids leaks.
+            try {{ if (d.__pmSidebarDarkObs) d.__pmSidebarDarkObs.disconnect(); }} catch(e){{}}
+            var _sbDark = d.querySelector('[data-testid="stSidebar"]');
+            if (_sbDark) {{
+              var _sbPend = false;
+              var _sbRun = function(){{ _sbPend = false; forceSidebarDark(); forceSidebarIframes(); }};
+              var _sbObs = new MutationObserver(function(){{
+                if (_sbPend) return; _sbPend = true; setTimeout(_sbRun, 250); // ≤1 run / 250ms
+              }});
+              _sbObs.observe(_sbDark, {{childList:true, subtree:true}});
+              d.__pmSidebarDarkObs = _sbObs;
+            }}
+            // slow heartbeat fallback (covers late-mounting component iframes), 5x less polling
             if (!d.__pmSidebarDarkTimer) {{
-              d.__pmSidebarDarkTimer = setInterval(function(){{ forceSidebarDark(); forceSidebarIframes(); }}, 800);
+              d.__pmSidebarDarkTimer = setInterval(function(){{ forceSidebarDark(); forceSidebarIframes(); }}, 4000);
             }}
           }} catch(e){{}}
         }})();</script>""",
@@ -3406,7 +3429,12 @@ def inject_client_fixes() -> None:
             const PAGE_TAB_WORDS = ['סקירה','הרכב','דוחות','תנועות',
                                     'overview','allocation','holdings','reports','transactions'];
             function getContentTabList() {
-              const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'));
+              // NEVER the sidebar Settings tab-list (☁ Sync/🔗 Connect/🔒 Lock/⚙ General):
+              // it has 4 tabs so a bare count>=3 test would let swipe hijack it on pages
+              // with no main content tabs (e.g. the AI page). Exclude the sidebar, and
+              // require a real PAGE-tab label match so an unrelated tab-list is never driven.
+              const lists = Array.from(rootDoc.querySelectorAll('[data-baseweb="tab-list"]'))
+                .filter(l => !(l.closest && l.closest('[data-testid="stSidebar"]')));
               let best = null, bestScore = -1;
               for (const list of lists) {
                 const tabs = Array.from(list.querySelectorAll('[data-baseweb="tab"]'));
@@ -3414,6 +3442,7 @@ def inject_client_fixes() -> None:
                 const labels = tabs.map(t => (t.innerText || '').trim().toLowerCase());
                 const labelHits = PAGE_TAB_WORDS.filter(w =>
                   labels.some(l => l.indexOf(w.toLowerCase()) >= 0)).length;
+                if (labelHits === 0) continue;   // require a genuine page-tab match — don't hijack unrelated tabs
                 const score = labelHits * 100 + tabs.length;   // label match dominates
                 if (score > bestScore) { bestScore = score; best = { list, tabs }; }
               }
