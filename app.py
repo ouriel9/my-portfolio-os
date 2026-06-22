@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r43"
+APP_BUILD = "2026-06-22 · r44"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -13290,10 +13290,10 @@ def main() -> None:
                         hover_data={"Value_ILS": ":,.0f", "Yield_Origin_Pct": ":.2f"},
                     )
                     fig_tree.update_traces(
-                        # mobile: 2-line label (ticker + yield%) so the small DOGE/INTC tiles aren't
-                        # forced to clip a 3-line label; desktop keeps the ₪ value line.
-                        texttemplate=("<b>%{label}</b><br>%{customdata[0]}" if is_mobile
-                                      else "<b>%{label}</b><br>₪%{value:,.0f}<br>%{customdata[0]}"),
+                        # Show the yield % on EVERY tile (ticker + %), even the tiniest DOGE/INTC ones
+                        # (owner request: "אחוזים בכל מלבן גם אם קטן"). Drop the ₪ value line so the
+                        # label is compact enough to fit small tiles; the ₪ value stays in the hover.
+                        texttemplate="<b>%{label}</b><br>%{customdata[0]}",
                         textposition="middle center",
                     )
                     # On mobile: move colorbar below the chart to free horizontal space
@@ -13311,8 +13311,9 @@ def main() -> None:
                     fig_tree.update_layout(
                         margin=tree_margin,
                         coloraxis_colorbar=tree_colorbar,
-                        # a tile too small to hold its label hides the text instead of clipping it.
-                        uniformtext=dict(minsize=9, mode="hide"),
+                        # mode="show" → render the label (incl. the %) on EVERY tile, shrinking it to
+                        # fit even a tiny tile, instead of hiding it. (owner request: % in every tile)
+                        uniformtext=dict(minsize=6, mode="show"),
                     )
                     st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
                     if is_mobile:
