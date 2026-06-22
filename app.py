@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r31"
+APP_BUILD = "2026-06-22 · r32"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -6375,12 +6375,19 @@ def _background_sheet_sync(web_app_url: str, token: str) -> None:
     try:
         df_remote = _fetch_google_snapshot_raw(web_app_url, token)
         if df_remote is not None and not df_remote.empty:
-            _save_local_snapshot_cache(df_remote)
-            save_local_portfolio(
-                df_remote, preserve_dirty=False,
-                meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
-            )
-            result = "ok:%d" % len(df_remote)
+            # Re-check dirty count INSIDE the thread, immediately before the destructive
+            # full-mirror save (preserve_dirty=False). The call-site guard can race: a
+            # dirty row created after that check would be silently wiped here. If anything
+            # is unsynced, skip the clobber and let the user push first.
+            if count_dirty_local_trades() > 0:
+                result = "skip:dirty"
+            else:
+                _save_local_snapshot_cache(df_remote)
+                save_local_portfolio(
+                    df_remote, preserve_dirty=False,
+                    meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
+                )
+                result = "ok:%d" % len(df_remote)
         else:
             result = "empty"
         _clear_apps_script_cooldown()
@@ -12450,6 +12457,22 @@ def main() -> None:
                     st.rerun()
                 else:
                     st.error(f"❌ {_pull_msg}")
+            # ── ⬆ Push pending local edits to Google ──
+            # The only path to Google for edits NOT made through the Google-first Manage
+            # form (AI-approved offline trades, offline-delete tombstones). Without this,
+            # sync_portfolio_to_google was dead code and those changes never synced.
+            if _dirty_badge > 0:
+                if st.button(tr(f"⬆ Push {_dirty_badge} pending change(s)", f"⬆ דחוף {_dirty_badge} שינוי/ים ממתינים"),
+                             width="stretch", disabled=(not _has_conn or not _sync_token), key="btn_push_google",
+                             help=tr("Send unsynced local changes up to Google Sheets.",
+                                     "שלח לגוגל שיט את השינויים המקומיים שלא סונכרנו.")):
+                    with st.spinner(tr("Pushing…", "דוחף…")):
+                        _push_ok, _push_msg, _push_n = sync_portfolio_to_google(_sync_web_url, _sync_token, tr=tr)
+                    if _push_ok:
+                        st.success(f"✅ {_push_msg}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {_push_msg}")
 
         # ── 🔗 Connection (assigns the locals the main content reads) ──
         with _tab_conn:
