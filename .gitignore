@@ -120,3 +120,7 @@ apk_streamlit/portfolio-os-release.keystore
 *.keystore
 apk_streamlit/_build_log.txt
 apk_streamlit/_npm_log.txt
+
+keystore.properties
+**/keystore.properties
+*.keystore*
