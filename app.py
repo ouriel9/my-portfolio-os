@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r41"
+APP_BUILD = "2026-06-22 · r42"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -12245,6 +12245,13 @@ def main() -> None:
     # ── Design-critique corrective CSS (addresses critique #4/#5/#9/#11) ──
     _crit_css = (
         "<style id='pp-crit-fixes'>"
+        # Hebrew-first UI font that ALSO carries the ₪ (U+20AA) shekel glyph, so KPI labels
+        # ('שווי כולל (₪)' / 'TOTAL VALUE (₪)'), table headers and body text never fall back to a
+        # tofu box on a device/headless-render whose default sans lacks ₪. @import MUST be first.
+        "@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap');"
+        "html body [data-testid='stAppViewContainer'] *:not([data-testid='stIconMaterial']):not(.material-icons):not([class*='material-symbols']),"
+        "html body [data-testid='stSidebar'] *:not([data-testid='stIconMaterial']):not(.material-icons):not([class*='material-symbols'])"
+        "{font-family:'Heebo',system-ui,-apple-system,'Segoe UI','Arial',sans-serif !important;}"
         # #9 hero: trim vertical waste — smaller padding + title (but DO NOT pull
         # it up under the nav; user wants the colored title banner fully visible
         # below the nav pills, so no margin-top:0 / container padding-top change).
@@ -12395,6 +12402,17 @@ def main() -> None:
         "html body .st-key-kpi_closed [data-testid='stMetric']{background:" + _kpi_surf + " !important;"
         "border:1px solid " + _kpi_surf_bd + " !important;box-shadow:" + _kpi_surf_sh + " !important;}"
     )
+    # In LIGHT mode the empty sidebar text inputs (API Token / Spreadsheet URL / passcode) were white
+    # fields on the near-white sidebar with no perceptible border — invisible until focused. Give them
+    # a defined border + faint fill so an empty field still reads as a tappable input. (design r4)
+    if not is_dark:
+        _crit_css += (
+            "html body [data-testid='stSidebar'] [data-testid='stTextInput'] input,"
+            "html body [data-testid='stSidebar'] [data-testid='stNumberInput'] input,"
+            "html body [data-testid='stSidebar'] [data-baseweb='input']{"
+            "background:#f4f6fc !important;border:1px solid #c5cde0 !important;border-radius:9px !important;}"
+            "html body [data-testid='stSidebar'] [data-baseweb='input']:focus-within{border-color:#6366f1 !important;}"
+        )
     # #2 — EN dashboard sub-tabs (Overview/Allocation/Reports/Transactions) were
     # clipping ("Transaction" lost its s). Let the tab strip scroll horizontally
     # with no clip, tabs never shrink.
@@ -13928,15 +13946,15 @@ def main() -> None:
                     else:
                         if signed_cols:
                             report_styled = _apply_signed_color(report_styled, signed_cols)
-                        # The Crypto-Concentration headers are longer than the default 'small' column →
-                        # they clipped mid-word. Hebrew labels are longer than the (shortened) English
-                        # ones, so HE columns default to 'medium'; the long coin-qty column gets more.
-                        _rep_def_w = "medium" if language == LANG_HE else "small"
-                        _rep_col_cfg = {c: st.column_config.Column(width=_rep_def_w) for c in localized_df.columns}
+                        # Keep ALL columns 'small' (the HE headers were shortened to fit) so the table
+                        # never overflows the width='stretch' container and silently DROPS columns —
+                        # blanket HE 'medium' did exactly that (dropped 3 of 7). Only the genuinely-long
+                        # coin-qty header gets 'medium' so its label isn't clipped.
+                        _rep_col_cfg = {c: st.column_config.Column(width="small") for c in localized_df.columns}
                         for _raw_long in ("Estimated_Coin_Qty",):
                             _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
                             if _long_lbl and _long_lbl in _rep_col_cfg:
-                                _rep_col_cfg[_long_lbl] = st.column_config.Column(width=("large" if language == LANG_HE else "medium"))
+                                _rep_col_cfg[_long_lbl] = st.column_config.Column(width="medium")
                         _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
                 st.divider()
 
