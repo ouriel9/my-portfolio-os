@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r44"
+APP_BUILD = "2026-06-22 · r45"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -13088,9 +13088,12 @@ def main() -> None:
                 style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
                 # #4 finance convention: P&L / Return value reads RED when negative,
                 # GREEN when positive (pre-attentive — not via reading the minus sign).
-                # #7 contrast: darker red (#b91c1c ≈ 6:1 on white) for negatives.
-                _pnl_c = "#b91c1c" if _tp < 0 else "#15803d"
-                _ret_c = "#b91c1c" if _tr_val < 0 else "#15803d"
+                # Theme-aware P&L colors: BRIGHT green/red on the dark cards (the medium #15803d/#b91c1c
+                # read desaturated/dim on dark navy), darker high-contrast green/red on the light page.
+                _pos_c = "#34d399" if is_dark else "#15803d"
+                _neg_c = "#f87171" if is_dark else "#b91c1c"
+                _pnl_c = _neg_c if _tp < 0 else _pos_c
+                _ret_c = _neg_c if _tr_val < 0 else _pos_c
                 # Visual hierarchy: the TOTAL VALUE is the headline number, so its card
                 # gets a premium indigo-gradient fill with white numerics — instantly
                 # readable as "this is THE figure", with the P&L/Return/Positions cards
