@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r34"
+APP_BUILD = "2026-06-22 · r35"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -7043,38 +7043,60 @@ def _pp_inject_loading_bar() -> None:
               // rerun's new DOM lands — detected because THIS component iframe re-mounts on every
               // rerun (see the __ppDone() call at the bottom, which runs each time). So the bar is
               // visible for exactly as long as the page actually takes to load, then fills + fades.
-              st.textContent='#pp-loadbar{position:fixed;top:0;left:0;height:3px;width:0;z-index:2147483647;'
-                +'background:linear-gradient(90deg,#6366f1,#22d3ee,#a78bfa);'
-                +'box-shadow:0 0 12px rgba(99,102,241,.85);border-radius:0 3px 3px 0;opacity:0;'
-                +'pointer-events:none;will-change:width,opacity;}';
+              st.textContent='#pp-loadbar{position:fixed;top:0;left:0;height:4px;width:0;z-index:2147483647;'
+                +'background:linear-gradient(90deg,#6366f1,#22d3ee,#34d399,#a78bfa);'
+                +'box-shadow:0 0 18px 2px rgba(99,102,241,.95);border-radius:0 4px 4px 0;opacity:0;'
+                +'pointer-events:none;overflow:hidden;will-change:width,opacity;}'
+                +'#pp-loadbar.pp-sh::after{content:"";position:absolute;top:0;bottom:0;left:0;width:60%;'
+                +'background:linear-gradient(90deg,transparent,rgba(255,255,255,.85),transparent);'
+                +'transform:translateX(-120%);animation:ppSh 1s linear infinite;}'
+                +'@keyframes ppSh{to{transform:translateX(260%)}}';
               doc.head.appendChild(st);
               var bar=doc.createElement('div'); bar.id='pp-loadbar'; doc.body.appendChild(bar);
-              W.__ppBar=bar; W.__ppLoading=false;
+              W.__ppBar=bar; W.__ppLoading=false; W.__ppT0=0;
               W.__ppStart=function(){
                 var b=W.__ppBar; if(!b) return;
-                W.__ppLoading=true;
+                W.__ppLoading=true; W.__ppT0=(new W.Date()).getTime();
+                b.classList.add('pp-sh');    // moving shimmer = clearly "loading"
                 b.style.transition='none'; b.style.opacity='1'; b.style.width='0%';
                 void b.offsetWidth;          // reflow so the climb animates from 0
-                b.style.transition='width 9s cubic-bezier(.1,.75,.1,1), opacity .25s';
+                b.style.transition='width 9s cubic-bezier(.1,.75,.1,1), opacity .2s';
                 b.style.width='90%';         // ease toward 90% and hold until the page arrives
+                // WATCHDOG: many controls (st.tabs sub-tabs, the Settings expander + its inner
+                // tabs) switch CLIENT-SIDE with NO server rerun, so the component never re-mounts
+                // and __ppDone is never called → the bar would park at 90% forever. Auto-complete
+                // if no real rerun lands within 1.8s. A genuine rerun calls __ppDone first (it
+                // clears this), so this only fires for client-only interactions.
+                if(W.__ppWd){ W.clearTimeout(W.__ppWd); }
+                W.__ppWd=W.setTimeout(function(){ if(W.__ppLoading) W.__ppDone(); }, 1800);
               };
               W.__ppDone=function(){
-                var b=W.__ppBar; if(!b||!W.__ppLoading) return;   // only if a nav actually started it
+                var b=W.__ppBar; if(!b||!W.__ppLoading) return;   // only if an interaction started it
+                if(W.__ppWd){ W.clearTimeout(W.__ppWd); W.__ppWd=0; }
                 W.__ppLoading=false;
-                b.style.transition='width .25s ease, opacity .45s .15s';
-                b.style.width='100%'; b.style.opacity='0';        // fill, then fade
-                W.setTimeout(function(){ b.style.transition='none'; b.style.width='0%'; },800);
+                var fin=function(){
+                  b.classList.remove('pp-sh');
+                  b.style.transition='width .2s ease, opacity .4s .12s';
+                  b.style.width='100%'; b.style.opacity='0';      // fill, then fade
+                  W.setTimeout(function(){ b.style.transition='none'; b.style.width='0%'; },650);
+                };
+                // guarantee a MINIMUM visible time so even an instant rerun shows a clear bar
+                var el=(new W.Date()).getTime()-(W.__ppT0||0);
+                if(el<600){ W.setTimeout(fin, 600-el); } else { fin(); }
               };
-              // a real user tap on any nav control starts the bar (capture phase → fires first)
-              doc.addEventListener('click', function(e){
+              // Start on a user gesture. pointerdown fires on tap-DOWN (earliest, and is
+              // virtually never synthesized, so no isTrusted gate needed); click is the
+              // fallback for keyboard/non-pointer. Capture phase → fires before Streamlit.
+              var onInteract=function(e){
                 try{
-                  if(!e.isTrusted) return;   // ignore synthetic swipe/tab-restore clicks
                   var t=e.target;
-                  if(t && t.closest && t.closest('[data-testid="stRadio"], [role="radio"], [data-baseweb="tab"], [role="tab"], .stButton button, [data-testid="stSidebar"] button, a[href]')){
+                  if(t && t.closest && t.closest('[data-testid="stRadio"], [role="radio"], [data-baseweb="tab"], [role="tab"], .stButton button, [data-testid="stSidebar"] button, [data-testid="stExpandSidebarButton"], a[href]')){
                     W.__ppStart();
                   }
                 }catch(_){}
-              }, true);
+              };
+              doc.addEventListener('pointerdown', onInteract, true);
+              doc.addEventListener('click', onInteract, true);
             }
             // ── runs on EVERY rerun: this iframe just mounted ⇒ the new page DOM has arrived ⇒
             //    complete the bar (no-op unless a nav tap started it). This is the load-finished signal.
