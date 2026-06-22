@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r45"
+APP_BUILD = "2026-06-23 · r46"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -12413,6 +12413,21 @@ def main() -> None:
             "background:#f4f6fc !important;border:1px solid #c5cde0 !important;border-radius:9px !important;}"
             "html body [data-testid='stSidebar'] [data-baseweb='input']:focus-within{border-color:#6366f1 !important;}"
         )
+    # The Hebrew sidebar was entirely LTR-aligned (labels/captions/checkbox rows/version line hugging
+    # the LEFT). Right-align the TEXT — NO direction:rtl on a positioning ancestor (that would flip the
+    # deliberately-left drawer). Inputs are left untouched so the Latin URL/Token/JSON-path values stay
+    # LTR; only the checkbox flips its box to the leading (right) side. (design r6 P0)
+    if language == LANG_HE:
+        _crit_css += (
+            "html body [data-testid='stSidebar'] [data-testid='stWidgetLabel'],"
+            "html body [data-testid='stSidebar'] [data-testid='stWidgetLabel'] *,"
+            "html body [data-testid='stSidebar'] label,"
+            "html body [data-testid='stSidebar'] [data-testid='stMarkdownContainer'],"
+            "html body [data-testid='stSidebar'] [data-testid='stMarkdownContainer'] p,"
+            "html body [data-testid='stSidebar'] [data-testid='stCaptionContainer'],"
+            "html body [data-testid='stSidebar'] .stCaption{text-align:right !important;}"
+            "html body [data-testid='stSidebar'] [data-testid='stCheckbox'] > label{flex-direction:row-reverse !important;text-align:right !important;}"
+        )
     # #2 — EN dashboard sub-tabs (Overview/Allocation/Reports/Transactions) were
     # clipping ("Transaction" lost its s). Let the tab strip scroll horizontally
     # with no clip, tabs never shrink.
@@ -12507,12 +12522,19 @@ def main() -> None:
         # plain stSidebar chain (0,3,2); adding stTabs makes ours (0,4,2) so it wins. Longhand flex
         # (the 'flex: ... calc(...)' SHORTHAND is silently rejected by the parser) + explicit width.
         "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list']{flex-wrap:wrap !important;overflow:visible !important;gap:4px 6px !important;}"
-        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list'] [data-baseweb='tab']{flex-grow:0 !important;flex-shrink:0 !important;flex-basis:calc(50% - 6px) !important;width:calc(50% - 6px) !important;min-width:calc(50% - 6px) !important;max-width:calc(50% - 6px) !important;box-sizing:border-box !important;white-space:normal !important;word-break:keep-all !important;overflow:visible !important;text-overflow:clip !important;}"
+        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list'] [data-baseweb='tab']{flex-grow:0 !important;flex-shrink:0 !important;flex-basis:calc(50% - 6px) !important;width:calc(50% - 6px) !important;min-width:calc(50% - 6px) !important;max-width:calc(50% - 6px) !important;box-sizing:border-box !important;white-space:normal !important;word-break:keep-all !important;overflow:visible !important;text-overflow:clip !important;font-size:0.6rem !important;padding-left:3px !important;padding-right:3px !important;}"
         "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list'] [data-baseweb='tab'] *{white-space:normal !important;overflow:visible !important;text-overflow:clip !important;max-width:100% !important;}"
         # active-state marker survives the wrap (the baseweb highlight bar misaligns when wrapped)
         "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-highlight']{display:none !important;}"
         "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab'][aria-selected='true']{border-bottom:2px solid #6366f1 !important;font-weight:700 !important;}"
     )
+    # HE: anchor the 2x2 settings grid + the main dashboard tabs RIGHT-to-left (default/Sync at top-right)
+    # so the tab sequence reads correctly on the mirrored Hebrew page. DOM order (and the swipe) unchanged.
+    if language == LANG_HE:
+        _crit_css += (
+            "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list']{direction:rtl !important;}"
+            "html body [data-testid='stTabs'] [role='tablist']{direction:rtl !important;}"
+        )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
 
