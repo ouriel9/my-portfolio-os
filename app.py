@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r40"
+APP_BUILD = "2026-06-22 · r41"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -710,6 +710,27 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     align = "right" if rtl else "left"
     theme_base = _resolve_theme_base(theme_mode)
     is_dark = theme_base == "dark"
+    # ── st.dataframe (Glide canvas) theme: the grid is painted by Streamlit's RESOLVED browser
+    #    theme (st.context.theme.type), NOT the app's light/dark toggle. When they differ we invert
+    #    the grid so the table matches the app. Decide this SERVER-SIDE (authoritative for what the
+    #    canvas actually used) — the old CSS @media(prefers-color-scheme) heuristic diverges inside
+    #    the Streamlit Cloud iframe / on mobile, which made tables render INVERTED vs the app theme.
+    _canvas_theme = ""
+    try:
+        _canvas_theme = (_clean(getattr(getattr(st.context, "theme", None), "type", "")) or "").lower()
+    except Exception:
+        _canvas_theme = ""
+    if _canvas_theme not in (THEME_LIGHT, THEME_DARK):
+        try:
+            _canvas_theme = (_clean(st.get_option("theme.base")) or THEME_LIGHT).lower()
+        except Exception:
+            _canvas_theme = THEME_LIGHT
+    _need_df_invert = (_canvas_theme != theme_base)
+    # hue-rotate(180deg) restores hue after the invert so green/red stay green/red.
+    _df_invert_css = (
+        '[data-testid="stDataFrame"]{filter:invert(1) hue-rotate(180deg) !important;}'
+        '[data-testid="stDataFrame"] img{filter:invert(1) hue-rotate(180deg) !important;}'
+    ) if _need_df_invert else ""
     sidebar_bg = "#1E1E1E" if is_dark else "#f3f5fa"  # theme-aware: dark drawer in dark mode, soft light (not pure white) in light mode
     metric_bg = "#2B2B2B" if is_dark else "#ffffff"
     metric_border = "#3a3a3a" if is_dark else "#e8ecf3"
@@ -2236,19 +2257,11 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         border-radius: 8px !important;
         overflow: hidden !important;
     }}
-    /* The Glide canvas grid follows the DEVICE prefers-color-scheme, NOT the app toggle.
-       So invert it to dark ONLY when the device painted it LIGHT. On a DARK device the
-       grid is already dark — inverting it would flip it to near-WHITE inside the dark app
-       (audit finding: dark phone + dark/System app = white tables). Scoping to a light
-       device fixes that while keeping the dark-app-on-a-light-device case correct. */
-    @media (prefers-color-scheme: light) {{
-      [data-testid="stDataFrame"] {{
-        filter: invert(1) hue-rotate(180deg) !important;  /* hue-rotate restores green/red exactly */
-      }}
-      [data-testid="stDataFrame"] img {{
-        filter: invert(1) hue-rotate(180deg) !important;   /* undo inversion for images/icons */
-      }}
-    }}
+    /* Dark app: invert the canvas grid ONLY when Streamlit actually painted it LIGHT
+       (i.e. the resolved browser theme != the app theme). Decided server-side via
+       st.context.theme.type — see _need_df_invert — so it is correct inside the Cloud
+       iframe / on mobile where a CSS @media(prefers-color-scheme) query would diverge. */
+    {_df_invert_css}
     /* DOM-rendered fallback (HTML tables used by data_editor) */
     [data-testid="stDataFrame"] table {{
         background-color: {dark_bg2} !important;
@@ -2421,17 +2434,12 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
     </style>
     """
     else:
-        # Light app: the canvas st.dataframe grid still follows the DEVICE theme. On a
-        # DARK device the grid is painted dark → a dark table inside the light app. Invert
-        # it to light ONLY when the device is dark (a light device already matches). (audit finding 3)
-        css += """
-    <style>
-    @media (prefers-color-scheme: dark) {
-      [data-testid="stDataFrame"] { filter: invert(1) hue-rotate(180deg) !important; }
-      [data-testid="stDataFrame"] img { filter: invert(1) hue-rotate(180deg) !important; }
-    }
-    </style>
-    """
+        # Light app: invert the canvas grid ONLY when Streamlit actually painted it DARK
+        # (resolved browser theme != app theme). Decided server-side (_need_df_invert via
+        # st.context.theme.type) so it stays correct inside the Cloud iframe / on mobile,
+        # where the old CSS @media(prefers-color-scheme) heuristic diverged and showed the
+        # table INVERTED vs the app theme.
+        css += "\n    <style>\n    " + _df_invert_css + "\n    </style>\n    "
 
     st.markdown(css, unsafe_allow_html=True)
     # Design selector: set env PP_DESIGN_V2=1 to use the from-scratch "Aurora"
