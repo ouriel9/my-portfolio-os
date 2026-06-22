@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r35"
+APP_BUILD = "2026-06-22 · r36"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -2975,6 +2975,13 @@ def inject_dark_dropdown_fix(is_dark: bool) -> None:
                   clearInterval(d.__pmSidebarDarkTimer);
                   d.__pmSidebarDarkTimer = null;
                 }
+                // Disconnect the dark-mode sidebar OBSERVER too — otherwise it stays
+                // connected after a dark→light switch and re-darkens the LIGHT sidebar on
+                // the next mutation (opening Settings / switching its tabs / any rerun).
+                if (d.__pmSidebarDarkObs) {
+                  try { d.__pmSidebarDarkObs.disconnect(); } catch(e5){}
+                  d.__pmSidebarDarkObs = null;
+                }
                 // Remove forced inline styles from all sidebar elements
                 var sidebar = d.querySelector('[data-testid="stSidebar"]');
                 if (sidebar) {
@@ -4802,11 +4809,18 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
                         display_currency=display_currency,
                     )
                 )
+            elif _row_closed and abs(qty) <= 1e-9 and has_own_cost:
+                # Fully-closed position stored with qty=0 but carrying its OWN cost + proceeds:
+                # realize proceeds vs own cost (mirrors engine.js). Otherwise the `qty != 0`
+                # guard below drops it and its realized P/L vanishes. (audit fin-parity)
+                realized += float(_num(row["Current_Value_ILS"])) - cost_ils
             elif _row_closed and qty != 0:
                 sell_qty = abs(qty)
                 # Zero proceeds on a closed row = TOTAL LOSS (sold for nothing), so sell
                 # price is 0, not the buy price — otherwise the realized loss vanishes. (audit C3)
-                sell_price = abs(float(_num(row["Current_Value_ILS"]))) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else 0.0
+                # No abs() on proceeds: a stored negative value must keep its sign (parity with
+                # engine.js); abs() flipped a negative into a phantom gain. (audit fin-parity)
+                sell_price = float(_num(row["Current_Value_ILS"])) / sell_qty if sell_qty and _num(row["Current_Value_ILS"]) != 0 else 0.0
                 # A closed position is stored as a SINGLE self-contained row carrying
                 # BOTH its own buy cost (Cost_ILS / Cost_Origin) and sale proceeds
                 # (Current_Value_ILS) — it is a complete round-trip, NOT a market sell
@@ -11207,10 +11221,11 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
             if divs:
                 ddf = pd.DataFrame(divs)
                 total = float(ddf["amount"].sum())
-                this_year = float(ddf[ddf["date"].astype(str).str[:4] == "2026"]["amount"].sum())
+                _cy = str(datetime.now().year)   # derive the year, don't hardcode 2026
+                this_year = float(ddf[ddf["date"].astype(str).str[:4] == _cy]["amount"].sum())
                 m1, m2 = st.columns(2)
                 m1.metric(_t("Total received", "סך התקבל"), f"₪{total:,.0f}")
-                m2.metric(_t("This year (2026)", "השנה (2026)"), f"₪{this_year:,.0f}")
+                m2.metric(_t(f"This year ({_cy})", f"השנה ({_cy})"), f"₪{this_year:,.0f}")
                 by_t = ddf.groupby("ticker", as_index=False)["amount"].sum().sort_values("amount", ascending=False)
                 st.dataframe(by_t.rename(columns={"ticker": _t("Ticker", "טיקר"), "amount": _t("Total (₪)", "סה\"כ (₪)")}),
                              width="stretch", hide_index=True)
@@ -11671,8 +11686,9 @@ def main() -> None:
     # the data); for real protection use a private deployment / Streamlit auth / viewer allowlist.
     if (_lk.get("pin_hash") or _lk.get("bio_enabled")) and not st.session_state.get("_app_unlocked"):
         st.markdown(
-            "<div style='max-width:380px;margin:14vh auto 1rem;text-align:center'>"
-            "<div style='font-size:3rem;line-height:1'>🔒</div>"
+            f"<div role='dialog' aria-modal='true' aria-label='{tr('Locked', 'נעול')}' "
+            "style='max-width:380px;margin:14vh auto 1rem;text-align:center'>"
+            "<div style='font-size:3rem;line-height:1' aria-hidden='true'>🔒</div>"
             f"<h2 style='margin:.4rem 0'>{tr('Locked', 'נעול')}</h2>"
             f"<div style='opacity:.7'>{tr('Enter your passcode to continue', 'הזן את קוד הגישה כדי להמשיך')}</div></div>",
             unsafe_allow_html=True,
@@ -11698,6 +11714,13 @@ def main() -> None:
                 if st.button("biounlock_bridge", key="_bio_bridge_btn"):
                     st.session_state["_app_unlocked"] = True
                     st.rerun()
+        # Autofocus the passcode field (a11y) — only the lock UI is on the page (st.stop below).
+        components.html(
+            """<script>(function(){try{var d=window.parent?window.parent.document:document;
+              var inp=d.querySelector('input[type="password"]');
+              if(inp) setTimeout(function(){try{inp.focus();}catch(e){}},150);}catch(e){}})();</script>""",
+            height=0, width=0,
+        )
         st.stop()
 
     theme_label_to_value = {
@@ -15334,7 +15357,11 @@ def main() -> None:
 
         # ── Always-on Data Quality KPIs ──
         non_empty_cells, total_cells, completeness = dataframe_completeness(df)
-        dupes = int(df.duplicated(subset=["Trade_ID"]).sum()) if "Trade_ID" in df.columns else 0
+        if "Trade_ID" in df.columns:   # count dupes over NON-BLANK ids only (blank ≠ duplicate)
+            _ids = df["Trade_ID"].map(_clean); _ids = _ids[_ids != ""]
+            dupes = int(len(_ids) - _ids.nunique())
+        else:
+            dupes = 0
         missing_ticker = int(df["Ticker"].map(_clean).eq("").sum()) if "Ticker" in df.columns else 0
         missing_qty = 0
         if "Quantity" in df.columns:
