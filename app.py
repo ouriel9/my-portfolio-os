@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r37"
+APP_BUILD = "2026-06-22 · r38"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -1506,6 +1506,28 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             padding-right: 4px !important;
             font-size: 0.68rem !important;
             white-space: nowrap !important;
+        }}
+        /* Sidebar Settings tabs (☁ Sync/🔗 Connect/🔒 Lock/⚙ General): the global desktop tab
+           styling (flex:1 1 0% + overflow:hidden + nowrap) chopped these labels mid-word in the
+           ~250px sidebar ('Sy/C/Loc/Ge'). Let them WRAP to a 2x2 grid, content-sized, smaller font;
+           draw the active state as a bottom border (the baseweb highlight bar misaligns when wrapped). */
+        [data-testid="stSidebar"] [data-baseweb="tab-list"] {{
+            flex-wrap: wrap !important;
+            overflow: visible !important;
+            gap: 2px 6px !important;
+            row-gap: 2px !important;
+        }}
+        [data-testid="stSidebar"] [data-baseweb="tab-list"] [data-baseweb="tab"] {{
+            flex: 1 1 44% !important;
+            max-width: 100% !important;
+            font-size: 0.62rem !important;
+            padding: 3px 4px !important;
+            text-overflow: ellipsis !important;
+        }}
+        [data-testid="stSidebar"] [data-baseweb="tab-highlight"] {{ display: none !important; }}
+        [data-testid="stSidebar"] [data-baseweb="tab"][aria-selected="true"] {{
+            border-bottom: 2px solid #6366f1 !important;
+            font-weight: 700 !important;
         }}
         h1 {{font-size: 1.6rem !important; margin: 0.2rem 0 0.35rem !important; line-height: 1.2 !important;}}
         h2 {{font-size: 1.3rem !important; margin: 0.18rem 0 0.32rem !important; line-height: 1.2 !important;}}
@@ -12571,8 +12593,8 @@ def main() -> None:
 
         # ── 🔗 Connection (assigns the locals the main content reads) ──
         with _tab_conn:
-            web_app_url = st.text_input("Apps Script Web App URL", value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
-            api_token = st.text_input("API Token", value=settings.get("api_token", ""), type="password")
+            web_app_url = st.text_input(tr("Apps Script Web App URL", "כתובת Apps Script Web App"), value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
+            api_token = st.text_input(tr("API Token", "טוקן API"), value=settings.get("api_token", ""), type="password")
             spreadsheet_ref = st.text_input(
                 tr("Spreadsheet URL or ID", "Spreadsheet URL / ID"),
                 value=settings.get("spreadsheet_ref", ""),
@@ -12803,20 +12825,23 @@ def main() -> None:
     if page == page_dashboard:
         if is_demo:
             st.markdown(
-                """
+                f"""
                 <div class='modern-card' style='margin-bottom:0.6rem;'>
-                  <div style='font-size:1.05rem;font-weight:700;'>Demo Showcase Portfolio</div>
-                  <div style='opacity:0.82;margin-top:0.2rem;'>Institutional-style mix across US equities, global ETFs, defensive assets and digital holdings.</div>
+                  <div style='font-size:1.05rem;font-weight:700;'>{tr('Demo Showcase Portfolio', 'תיק הדגמה לראווה')}</div>
+                  <div style='opacity:0.82;margin-top:0.2rem;'>{tr('Institutional-style mix across US equities, global ETFs, defensive assets and digital holdings.', 'תמהיל בסגנון מוסדי על פני מניות אמריקאיות, קרנות סל גלובליות, נכסים דפנסיביים ואחזקות דיגיטליות.')}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-        stats_text = (
-            f"{len(trades):,} {tr('rows loaded', 'רשומות נטענו')} | "
-            f"{len(trades[trades['Record_Source'] == 'STATE_SNAPSHOT']):,} {tr('snapshot rows', 'שורות תמונת מצב')} | "
-            f"{int(trades['Status'].map(_clean).str.lower().isin(CLOSED_STATUS_VALUES).sum()):,} {tr('closed', 'סגורות')}"
-        )
+        # Each number+label pair is ISOLATED so under RTL the LTR digits + '·' separators can't
+        # reorder and attach a number to the WRONG label (Hebrew status-line swap bug).
+        _seg = lambda n, lbl: f"<span style='unicode-bidi:isolate'>{n:,} {lbl}</span>"
+        stats_text = " · ".join([
+            _seg(len(trades), tr('rows loaded', 'רשומות נטענו')),
+            _seg(len(trades[trades['Record_Source'] == 'STATE_SNAPSHOT']), tr('snapshot rows', 'שורות תמונת מצב')),
+            _seg(int(trades['Status'].map(_clean).str.lower().isin(CLOSED_STATUS_VALUES).sum()), tr('closed', 'סגורות')),
+        ])
         st.markdown(f"<div class='dashboard-stats-line'>{stats_text}</div>", unsafe_allow_html=True)
 
         fx = _safe_quote("USDILS=X")
