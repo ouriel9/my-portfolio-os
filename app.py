@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-23 · r46"
+APP_BUILD = "2026-06-23 · r47"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -12494,6 +12494,21 @@ def main() -> None:
         "html body .st-key-kpi_closed [data-testid='stMetricDelta'] *{color:" + _ncol + " !important;fill:" + _ncol + " !important;}"
         "html body .st-key-kpi_closed [data-testid='stMetricDelta'] svg{display:none !important;}"
     )
+    # PRIMARY buttons (Sync now / Save passcode / Unlock / form submit): Streamlit's gradient theme
+    # stopped painting the ACTUAL inner button in 1.58, so in LIGHT mode the white label sat on a white
+    # surface (invisible) and dark showed a double-border. Force the indigo gradient + white text on the
+    # real button element (and zero its inner spans) in BOTH themes. (design r7 P0)
+    _crit_css += (
+        "html body .stButton > button[kind='primary'],"
+        "html body button[data-testid='stBaseButton-primary'],"
+        "html body [data-testid='stBaseButton-primary'],"
+        "html body [data-testid='stFormSubmitButton'] button{"
+        "background:linear-gradient(135deg,#4f46e5,#6366f1) !important;color:#ffffff !important;"
+        "border:0 !important;box-shadow:0 6px 18px -6px rgba(79,70,229,.5) !important;}"
+        "html body .stButton > button[kind='primary'] *,"
+        "html body button[data-testid='stBaseButton-primary'] *,"
+        "html body [data-testid='stFormSubmitButton'] button *{background:transparent !important;color:#ffffff !important;}"
+    )
     if is_mobile:
         # #1: styling for the per-row mobile cards (_render_df_mobile_cards)
         _cbg = "#1f2937" if is_dark else "#ffffff"
@@ -13218,7 +13233,7 @@ def main() -> None:
                     _pie_src["Value_ILS"] = _pie_src["Value_ILS"].map(_num)
                     _tot_pie = float(_pie_src["Value_ILS"].sum())
                     if _tot_pie > 0:
-                        _small = _pie_src["Value_ILS"] / _tot_pie < (0.04 if is_mobile else 0.025)
+                        _small = _pie_src["Value_ILS"] / _tot_pie < (0.06 if is_mobile else 0.025)
                         if int(_small.sum()) > 1:  # only fold when ≥2 tiny slices actually clutter
                             _big = _pie_src[~_small]
                             _other_val = float(_pie_src.loc[_small, "Value_ILS"].sum())
@@ -13241,9 +13256,10 @@ def main() -> None:
                     # 2-row legend is seated on EVERY render (the Allocation tab was clipping its 2nd
                     # legend row because the auto-sized figure left no room for it). (design r5)
                     legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5,
-                                font=dict(size=9 if is_mobile else 11)),
-                    margin=dict(l=10, r=10, t=40, b=72),
-                    height=360 if is_mobile else 430,
+                                font=dict(size=8 if is_mobile else 11),
+                                itemwidth=30 if is_mobile else 40),
+                    margin=dict(l=6, r=6, t=40, b=78),
+                    height=370 if is_mobile else 430,
                     # hide a % that can't fit INSIDE its wedge instead of ejecting it OUTSIDE as tiny
                     # faint gray text (the name is in the legend anyway). Fixes the 3.76%/5.13% labels.
                     uniformtext_minsize=10, uniformtext_mode="hide",
@@ -13457,11 +13473,13 @@ def main() -> None:
                         exposure_styled = exposure_view.style.format(_fmt_map, na_rep="")
                         _color_cols = [c for c in [pnl_col, yield_origin_col, yield_ils_col] if c in exposure_view.columns]
                         exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
-                        # Use st.dataframe on BOTH desktop and mobile. It renders the Styler
-                        # natively via the Arrow grid (a real component, not sanitized HTML),
-                        # so it ALWAYS shows. The old mobile path (st.table → markdown-HTML)
-                        # left only the "טבלת חשיפה" title with no rows.
-                        st.dataframe(exposure_styled, width="stretch", hide_index=True)
+                        # PHONE: render as a per-row key-value CARD stack (like the report tables) so the
+                        # wide exposure grid never overflows + truncates every cell on a 400px screen.
+                        # DESKTOP: the native Arrow grid. (design r7 P0)
+                        if is_mobile:
+                            _render_df_mobile_cards(exposure_view, _fmt_map, _color_cols)
+                        else:
+                            st.dataframe(exposure_styled, width="stretch", hide_index=True)
                     except Exception:
                         # Last-ditch: plain frame so the table can never silently vanish.
                         st.dataframe(exposure_view, width="stretch", hide_index=True)
@@ -14386,7 +14404,12 @@ def main() -> None:
                 _styled2 = _dv.style
                 if _sfmt2: _styled2 = _styled2.format(_sfmt2, na_rep="")
                 if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
-                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True)
+                # PHONE: per-row key-value cards so the wide transactions grid doesn't overflow +
+                # truncate every cell ('Purchase D…' etc.) on a 400px screen. DESKTOP: the grid. (r7 P0)
+                if _mob:
+                    _render_df_mobile_cards(_dv, _sfmt2, _yc2)
+                else:
+                    _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True)
 
                 # ── Export bar — below the table ───────────────────────────
                 _is_he_tx = _lang.startswith("ע")
