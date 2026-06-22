@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r36"
+APP_BUILD = "2026-06-22 · r37"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -5449,19 +5449,25 @@ def save_manual_deposits_remote(web_app_url: str, token: str, mode: str, rows: L
 
 
 def _normalize_manual_deposit_rows(rows: List[Dict[str, object]], default_platforms: List[str]) -> List[Dict[str, object]]:
-    by_platform: Dict[str, float] = {}
+    # Key by casefold + SUM colliding amounts (was: exact-case key that OVERWROTE, so a
+    # duplicate/case-variant platform silently dropped one deposit). Emit canonical casing.
+    by_platform: Dict[str, float] = {}   # casefold key -> summed amount
+    canon: Dict[str, str] = {}           # casefold key -> first-seen display casing
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         platform = _clean(row.get("Platform", ""))
         if not platform:
             continue
-        by_platform[platform] = _num(row.get("Manual_Deposit_ILS", 0.0))
+        key = platform.casefold()
+        by_platform[key] = by_platform.get(key, 0.0) + _num(row.get("Manual_Deposit_ILS", 0.0))
+        canon.setdefault(key, platform)
     for platform in default_platforms:
         p = _clean(platform)
-        if p and p not in by_platform:
-            by_platform[p] = 0.0
-    clean_rows = [{"Platform": k, "Manual_Deposit_ILS": float(v)} for k, v in by_platform.items() if _clean(k)]
+        if p and p.casefold() not in by_platform:
+            by_platform[p.casefold()] = 0.0
+            canon[p.casefold()] = p
+    clean_rows = [{"Platform": canon[k], "Manual_Deposit_ILS": float(v)} for k, v in by_platform.items() if _clean(canon.get(k, ""))]
     clean_rows.sort(key=lambda r: _clean(r.get("Platform", "")).lower())
     return clean_rows
 
@@ -11222,7 +11228,10 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                 ddf = pd.DataFrame(divs)
                 total = float(ddf["amount"].sum())
                 _cy = str(datetime.now().year)   # derive the year, don't hardcode 2026
-                this_year = float(ddf[ddf["date"].astype(str).str[:4] == _cy]["amount"].sum())
+                # Extract the first 4-digit run as the year so BOTH ISO (2026-03-18) and
+                # Israeli DD/MM/YYYY (18/03/2026) dividends count — str[:4] dropped DD/MM rows.
+                _yr = ddf["date"].astype(str).str.extract(r"(\d{4})")[0]
+                this_year = float(ddf.loc[_yr == _cy, "amount"].sum())
                 m1, m2 = st.columns(2)
                 m1.metric(_t("Total received", "סך התקבל"), f"₪{total:,.0f}")
                 m2.metric(_t(f"This year ({_cy})", f"השנה ({_cy})"), f"₪{this_year:,.0f}")
