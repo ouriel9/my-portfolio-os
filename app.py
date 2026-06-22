@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-23 · r47"
+APP_BUILD = "2026-06-23 · r48"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -12381,6 +12381,9 @@ def main() -> None:
         # accent, that ::before is a second stripe — kill it.
         "html body [data-testid='stMetric']::before{display:none !important;}"
         "html body [data-testid='stMetricLabel'],html body [data-testid='stMetricLabel'] *{color:" + _mc_lbl + " !important;}"
+        # reserve 2 label lines so a single-line KPI label (Total Value) and a 2-line one (Closed
+        # Positions / פוזיציות סגורות) start their VALUE at the same y → shared baseline across the row.
+        "html body [data-testid='stMetricLabel']{min-height:2.4em !important;display:flex !important;align-items:flex-start !important;}"
         # #7 — lock the KPI value to LTR so "-87,370" never reorders in RTL.
         "html body [data-testid='stMetricValue']{direction:ltr !important;unicode-bidi:isolate !important;}"
         + ("html body [data-testid='stMetricValue']{text-align:right !important;}" if language == LANG_HE else "")
