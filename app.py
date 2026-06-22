@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r38"
+APP_BUILD = "2026-06-22 · r40"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -418,12 +418,12 @@ COLUMN_LABELS = {
     "Asset": {LANG_EN: "Target Asset", LANG_HE: "מטבע יעד"},
     # Compact English labels — fit Streamlit's default column widths so
     # the Crypto Concentration table headers don't get truncated mid-word.
-    "Direct_Qty": {LANG_EN: "Direct Qty", LANG_HE: "אחזקה ישירה (כמות)"},
-    "Direct_ILS": {LANG_EN: "Direct (ILS)", LANG_HE: "אחזקה ישירה (₪)"},
-    "ETF_Qty": {LANG_EN: "ETF Qty", LANG_HE: "דרך קרן סל (יחידות)"},
+    "Direct_Qty": {LANG_EN: "Direct Qty", LANG_HE: "ישיר (כמות)"},
+    "Direct_ILS": {LANG_EN: "Direct (ILS)", LANG_HE: "ישיר (₪)"},
+    "ETF_Qty": {LANG_EN: "ETF Qty", LANG_HE: "קרן סל (יח')"},
     "ETF_ILS": {LANG_EN: "ETF (ILS)", LANG_HE: "דרך קרן סל (₪)"},
     "Total_Exposure_ILS": {LANG_EN: "Total (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
-    "Estimated_Coin_Qty": {LANG_EN: "Est. coin qty (incl. ETF)", LANG_HE: "כמות מטבע מוערכת (כולל קרן סל)"},
+    "Estimated_Coin_Qty": {LANG_EN: "Coin qty (incl. ETF)", LANG_HE: "מטבע מוערך (כולל סל)"},
     "Category": {LANG_EN: "Category", LANG_HE: "סוג"},
     "Yield": {LANG_EN: "Return", LANG_HE: "תשואה"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
@@ -1518,11 +1518,21 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
             row-gap: 2px !important;
         }}
         [data-testid="stSidebar"] [data-baseweb="tab-list"] [data-baseweb="tab"] {{
-            flex: 1 1 44% !important;
+            flex: 1 1 calc(50% - 6px) !important;
+            min-width: calc(50% - 6px) !important;
             max-width: 100% !important;
             font-size: 0.62rem !important;
             padding: 3px 4px !important;
-            text-overflow: ellipsis !important;
+            white-space: normal !important;
+            word-break: keep-all !important;
+            text-overflow: clip !important;
+        }}
+        /* the global desktop rule forces nowrap+ellipsis on EVERY tab; re-allow wrap for the
+           inner label spans inside sidebar tabs so 'Sync/Connect/Lock/General' render in full */
+        [data-testid="stSidebar"] [data-baseweb="tab-list"] [data-baseweb="tab"] * {{
+            white-space: normal !important;
+            text-overflow: clip !important;
+            overflow: visible !important;
         }}
         [data-testid="stSidebar"] [data-baseweb="tab-highlight"] {{ display: none !important; }}
         [data-testid="stSidebar"] [data-baseweb="tab"][aria-selected="true"] {{
@@ -10888,7 +10898,7 @@ def render_ai_chat_page(tr, df, web_app_url, token, language, is_dark, is_mobile
 
     _eng = " · ".join(providers) if providers else tr("no engine", "אין מנוע")
     st.markdown(
-        f"<div class='agent-hero'><h3><span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.18rem;vertical-align:-3px;font-feature-settings:'liga' 1;\">smart_toy</span> {tr('AGENT AI', 'סוכן AI')}</h3>"
+        f"<div class='agent-hero'><h3><span class='material-symbols-rounded' style=\"font-family:'Material Symbols Rounded','Material Symbols Outlined';font-size:1.18rem;vertical-align:-3px;font-feature-settings:'liga' 1;\">smart_toy</span> {tr('Agent AI', 'סוכן AI')}</h3>"
         f"<p>{tr('Your portfolio agent — full data access, image understanding, analysis & advice', 'סוכן התיק שלך — גישה לכל הנתונים, הבנת תמונות, ניתוח וייעוץ')}"
         f" · {_eng}</p></div>",
         unsafe_allow_html=True,
@@ -11885,7 +11895,7 @@ def main() -> None:
     page_risk = tr("Risk & FIFO", "סיכונים ו-" + _mix_he_with_ltr("FIFO")) if not _is_mobile_client() else tr("Risk", "סיכון")
     page_simulator = tr("Simulator", "סימולטור")
     page_quality = tr("Data Quality", "בקרת נתונים")
-    page_chat = tr("AGENT AI", "סוכן AI")
+    page_chat = tr("Agent AI", "סוכן AI")
     page_id_to_label = {
         "dashboard": page_dashboard,
         "manage": page_manage,
@@ -12337,12 +12347,20 @@ def main() -> None:
     #    selectors so it OVERRIDES style_metric_cards (which my earlier 1-attr
     #    selector lost to — the 8px left stripe never moved).
     _mc_bg = "#232e47" if is_dark else "#ffffff"
-    _mc_bd = "#2e3a55" if is_dark else "#e5e7ef"
+    # Light KPI cards were near-white (#fff) on the #f6f8fd page → they "vanished".
+    # A more defined border + a real elevation shadow lifts the white card off the page.
+    _mc_bd = "#2e3a55" if is_dark else "#d7ddee"
     _mc_lbl = "#e2e8f0" if is_dark else "#5b5c63"
+    _mc_sh = ("0 1px 3px rgba(15,23,42,.10)" if is_dark
+              else "0 2px 10px -3px rgba(30,41,80,.16),0 1px 3px rgba(30,41,80,.10)")
     _crit_css += (
         "html body [data-testid='stMetric']{background:" + _mc_bg + " !important;"
         "border:1px solid " + _mc_bd + " !important;border-radius:14px !important;"
-        "box-shadow:0 1px 3px rgba(15,23,42,.10) !important;}"
+        # Equal card height so the Closed-Positions 'N open' delta no longer makes that
+        # card taller than its three siblings — all four bottom edges align.
+        "min-height:108px !important;display:flex !important;flex-direction:column !important;"
+        "justify-content:center !important;"
+        "box-shadow:" + _mc_sh + " !important;}"
         # DOUBLE-STRIPE fix (#7): the design overlay draws a 3px indigo→cyan
         # gradient bar via ::before on the LEFT. With our own single border
         # accent, that ::before is a second stripe — kill it.
@@ -12354,6 +12372,20 @@ def main() -> None:
         # #8 contrast — dashboard stats sub-line was ~4.0:1 (grey on near-white).
         + ("html body .dashboard-stats-line{color:#475569 !important;}" if not is_dark
            else "html body .dashboard-stats-line{color:#cbd5e1 !important;}")
+    )
+    # Force the THREE non-hero KPI cards (P&L / Return / Closed) to ONE uniform, clearly-defined
+    # surface: (a) so none can read as a 2nd hero — on phone EN light, OPEN P&L was rendering a
+    # lavender hero-ish fill while Return/Closed stayed white; (b) so they don't vanish into the
+    # #f6f8fd light page. The TOTAL VALUE gradient hero is painted later (kpi fragment) and untouched.
+    _kpi_surf = "#232e47" if is_dark else "#ffffff"
+    _kpi_surf_bd = "#2e3a55" if is_dark else "#ccd5ea"
+    _kpi_surf_sh = ("0 1px 3px rgba(15,23,42,.10)" if is_dark
+                    else "0 2px 12px -4px rgba(30,41,80,.20),0 1px 3px rgba(30,41,80,.12)")
+    _crit_css += (
+        "html body .st-key-kpi_pnl [data-testid='stMetric'],"
+        "html body .st-key-kpi_ret [data-testid='stMetric'],"
+        "html body .st-key-kpi_closed [data-testid='stMetric']{background:" + _kpi_surf + " !important;"
+        "border:1px solid " + _kpi_surf_bd + " !important;box-shadow:" + _kpi_surf_sh + " !important;}"
     )
     # #2 — EN dashboard sub-tabs (Overview/Allocation/Reports/Transactions) were
     # clipping ("Transaction" lost its s). Let the tab strip scroll horizontally
@@ -12438,6 +12470,23 @@ def main() -> None:
             ".pp-mrow .v{font-weight:700;unicode-bidi:plaintext;text-align:start;}"
             ".pp-mrow .v.pos{color:" + _pos + ";}.pp-mrow .v.neg{color:" + _neg + ";}"
         )
+    # AUTHORITATIVE sidebar Settings-tab 2x2 wrap (appended LAST in the _crit_css <style>, so it wins
+    # the cascade over the global single-row tab rule at app.py:1209 which forces flex:1 1 0% + nowrap
+    # + overflow:hidden and truncated Sync/Connect/Lock/General to 'Sy/C/Loc/Ge' in the ~200px sidebar.
+    # The earlier per-block sidebar override lived inside an @media(max-width:768px) so it never ran on
+    # desktop; this one is unconditional and html-body+stSidebar prefixed for guaranteed specificity.
+    _crit_css += (
+        # NOTE the [data-testid='stTabs'] in the chain: a (0,3,3) rule
+        # 'html body [data-testid="stTabs"] > div [tab-list] [tab]{flex:1 1 0px}' was out-specifying a
+        # plain stSidebar chain (0,3,2); adding stTabs makes ours (0,4,2) so it wins. Longhand flex
+        # (the 'flex: ... calc(...)' SHORTHAND is silently rejected by the parser) + explicit width.
+        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list']{flex-wrap:wrap !important;overflow:visible !important;gap:4px 6px !important;}"
+        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list'] [data-baseweb='tab']{flex-grow:0 !important;flex-shrink:0 !important;flex-basis:calc(50% - 6px) !important;width:calc(50% - 6px) !important;min-width:calc(50% - 6px) !important;max-width:calc(50% - 6px) !important;box-sizing:border-box !important;white-space:normal !important;word-break:keep-all !important;overflow:visible !important;text-overflow:clip !important;}"
+        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list'] [data-baseweb='tab'] *{white-space:normal !important;overflow:visible !important;text-overflow:clip !important;max-width:100% !important;}"
+        # active-state marker survives the wrap (the baseweb highlight bar misaligns when wrapped)
+        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-highlight']{display:none !important;}"
+        "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab'][aria-selected='true']{border-bottom:2px solid #6366f1 !important;font-weight:700 !important;}"
+    )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
 
@@ -12494,7 +12543,7 @@ def main() -> None:
     if is_mobile:
         _chat_active = (active_page_id == "chat")
         if st.sidebar.button(
-            tr("AGENT AI", "סוכן AI") + ("  ✓" if _chat_active else ""),
+            tr("Agent AI", "סוכן AI") + ("  ✓" if _chat_active else ""),
             icon=":material/smart_toy:",
             width="stretch",
             type="secondary",
@@ -12543,7 +12592,7 @@ def main() -> None:
                 st.info(tr("Set a Web App URL / Spreadsheet ID in 🔗 Connect first.",
                            "הגדר Web App URL / Spreadsheet ID בלשונית 🔗 חיבור."))
             _force_pull = st.checkbox(
-                tr("Force pull (replace local with Google)", "שליפה כפויה (החלף מקומי בנתוני גוגל)"),
+                tr("Force pull (replace local with Google)", "שליפה כפויה מהענן"),
                 value=False, key="chk_force_pull", disabled=not _has_conn,
                 help=tr("Discards unsynced local edits and mirrors exactly what Google has.",
                         "מוחק עריכות מקומיות שלא סונכרנו ומשקף בדיוק את מה שבגוגל."))
@@ -12596,7 +12645,7 @@ def main() -> None:
             web_app_url = st.text_input(tr("Apps Script Web App URL", "כתובת Apps Script Web App"), value=settings.get("web_app_url", DEFAULT_WEB_APP_URL))
             api_token = st.text_input(tr("API Token", "טוקן API"), value=settings.get("api_token", ""), type="password")
             spreadsheet_ref = st.text_input(
-                tr("Spreadsheet URL or ID", "Spreadsheet URL / ID"),
+                tr("Spreadsheet URL or ID", "כתובת או מזהה גיליון"),
                 value=settings.get("spreadsheet_ref", ""),
                 help=tr("Full Google Sheets URL or just its ID.", "URL מלא של Google Sheets או ה-ID בלבד."))
             worksheet_name = st.text_input(tr("Worksheet name", "שם גיליון"), value=settings.get("worksheet_name", DEFAULT_WORKSHEET_NAME))
@@ -13077,7 +13126,7 @@ def main() -> None:
                 tr("Overview", "סקירה") if is_mobile else tr("Overview", "סקירה כללית"),
                 tr("Allocation", "הרכב") if is_mobile else tr("Portfolio Allocation", "הרכב התיק"),
                 tr("Reports", "דוחות") if is_mobile else tr("Reports & Analytics", "דוחות ואנליזה"),
-                tr("Transactions", "תנועות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
+                tr("Activity", "תנועות") if is_mobile else tr("Transactions & Cash Flow", "תנועות ועסקאות"),
             ]
         )
 
@@ -13109,6 +13158,23 @@ def main() -> None:
                 # exclusions so the pie reconciles with the totals. (audit bug-st)
                 _pie_src = summary[summary["Value_ILS"].map(_num) > 0] if "Value_ILS" in summary.columns else summary
                 _pie_excluded = len(summary) - len(_pie_src)
+                # De-clutter: with ~10 holdings the donut drew a tangle of outside leader-lines and
+                # a horizontal legend that wrapped + clipped (only the first ~6 showed). Fold sub-2.5%
+                # slices into a single "Other" wedge so the ring + legend stay readable; per-asset
+                # detail still lives in the treemap + holdings table just below. (design r2)
+                if "Value_ILS" in _pie_src.columns and not _pie_src.empty:
+                    _pie_src = _pie_src[["Ticker", "Value_ILS"]].copy()
+                    _pie_src["Value_ILS"] = _pie_src["Value_ILS"].map(_num)
+                    _tot_pie = float(_pie_src["Value_ILS"].sum())
+                    if _tot_pie > 0:
+                        _small = _pie_src["Value_ILS"] / _tot_pie < 0.025
+                        if int(_small.sum()) > 1:  # only fold when ≥2 tiny slices actually clutter
+                            _big = _pie_src[~_small]
+                            _other_val = float(_pie_src.loc[_small, "Value_ILS"].sum())
+                            _pie_src = pd.concat(
+                                [_big, pd.DataFrame([{"Ticker": tr("Other", "אחר"), "Value_ILS": _other_val}])],
+                                ignore_index=True,
+                            )
                 fig_pie = px.pie(
                     _pie_src,
                     names="Ticker",
@@ -13119,12 +13185,19 @@ def main() -> None:
                     color_discrete_sequence=_BRAND_PALETTE,
                 )
                 fig_pie.update_layout(
-                    legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
-                    margin=dict(l=10, r=10, t=40, b=40),
+                    # vertical legend on the side lists EVERY slice (no wrap-clip); extra bottom
+                    # margin keeps it clear of the chart edge.
+                    legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5,
+                                font=dict(size=11)),
+                    margin=dict(l=10, r=10, t=40, b=70),
                 )
                 fig_pie.update_traces(
                     hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percent}<extra></extra>",
-                    textinfo="percent+label",
+                    # %-only INSIDE the ring (labels live in the legend) → no crowded outside
+                    # leader-lines jammed against the chart's right edge.
+                    textinfo="percent",
+                    textposition="inside",
+                    insidetextorientation="horizontal",
                 )
                 st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), theme="streamlit", width="stretch")
                 if _pie_excluded > 0:
@@ -13142,7 +13215,8 @@ def main() -> None:
                     color_discrete_map={"Profit": "#16a34a", "Loss": "#dc2626"},
                     title=tr("Net P/L by Asset", "רווח/הפסד לפי נכס"),
                     template=template,
-                    labels={"Net_PnL_ILS": tr("Net P/L (ILS)", "רווח/הפסד (₪)"), "Ticker": tr("Ticker", "טיקר"), "_color": ""},
+                    # ₪ (not 'ILS') to match the KPI/native currency token across the app.
+                    labels={"Net_PnL_ILS": tr("Net P/L (₪)", "רווח/הפסד (₪)"), "Ticker": tr("Ticker", "טיקר"), "_color": ""},
                 )
                 fig_bar.update_layout(
                     showlegend=False,
@@ -13150,6 +13224,8 @@ def main() -> None:
                     hovermode="x unified",
                     xaxis_title=tr("Ticker", "טיקר"),
                 )
+                # automargin so the rotated y-axis title isn't clipped (HE 'רווח/הפסד (₪)' was cut to 'ל/הפסד').
+                fig_bar.update_yaxes(automargin=True, title_standoff=6)
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
                 )
@@ -13844,7 +13920,16 @@ def main() -> None:
                     else:
                         if signed_cols:
                             report_styled = _apply_signed_color(report_styled, signed_cols)
-                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True)
+                        # The Crypto-Concentration headers are longer than the default 'small' column →
+                        # they clipped mid-word. Hebrew labels are longer than the (shortened) English
+                        # ones, so HE columns default to 'medium'; the long coin-qty column gets more.
+                        _rep_def_w = "medium" if language == LANG_HE else "small"
+                        _rep_col_cfg = {c: st.column_config.Column(width=_rep_def_w) for c in localized_df.columns}
+                        for _raw_long in ("Estimated_Coin_Qty",):
+                            _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
+                            if _long_lbl and _long_lbl in _rep_col_cfg:
+                                _rep_col_cfg[_long_lbl] = st.column_config.Column(width=("large" if language == LANG_HE else "medium"))
+                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
