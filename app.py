@@ -401,7 +401,7 @@ DEFAULT_LANGUAGE = LANG_HE
 
 # Visible build stamp so we can confirm exactly which version a device (esp. the
 # installed PWA) is actually running. Bump on every push that should reach the phone.
-APP_BUILD = "2026-06-22 · r30"
+APP_BUILD = "2026-06-22 · r31"
 THEME_SYSTEM = "system"
 THEME_LIGHT = "light"
 THEME_DARK = "dark"
@@ -6987,35 +6987,50 @@ def _pp_inject_loading_bar() -> None:
         <script>(function(){
           try{
             var W=window.parent, doc=W.document;
-            if(W.__ppLoadbarInit) return;          // set up exactly once
-            W.__ppLoadbarInit=true;
-            var st=doc.createElement('style');
-            // PURE-CSS one-shot bar. The stStatusWidget isn't in the DOM (can't read a
-            // "running" flag), and JS timer/observer schemes kept getting stuck on animating
-            // pages. A CSS animation has a FIXED duration and self-stops at opacity:0 — it can
-            // never freeze. Tapping a page pill / sub-tab / button (re)starts it.
-            st.textContent='#pp-loadbar{position:fixed;top:0;left:0;height:3px;width:0;z-index:2147483647;'
-              +'background:linear-gradient(90deg,#6366f1,#22d3ee,#a78bfa);'
-              +'box-shadow:0 0 12px rgba(99,102,241,.75);border-radius:0 3px 3px 0;opacity:0;pointer-events:none;}'
-              +'#pp-loadbar.pp-go{animation:ppLoadGo 1100ms cubic-bezier(.25,.6,.3,1) forwards;}'
-              +'@keyframes ppLoadGo{0%{opacity:1;width:6%}25%{opacity:1;width:42%}'
-              +'60%{opacity:1;width:74%}85%{opacity:1;width:93%}100%{opacity:0;width:100%}}';
-            doc.head.appendChild(st);
-            var bar=doc.createElement('div'); bar.id='pp-loadbar'; doc.body.appendChild(bar);
-            function lbGo(){
-              bar.classList.remove('pp-go');
-              void bar.offsetWidth;          // reflow so the animation restarts cleanly
-              bar.classList.add('pp-go');
+            if(!W.__ppLoadbarInit){            // ── one-time setup on the parent window ──
+              W.__ppLoadbarInit=true;
+              var st=doc.createElement('style');
+              // The bar is driven by Streamlit's REAL lifecycle, not a fixed timer: a nav tap
+              // starts it climbing (toward 90%, never arriving), and it COMPLETES the moment the
+              // rerun's new DOM lands — detected because THIS component iframe re-mounts on every
+              // rerun (see the __ppDone() call at the bottom, which runs each time). So the bar is
+              // visible for exactly as long as the page actually takes to load, then fills + fades.
+              st.textContent='#pp-loadbar{position:fixed;top:0;left:0;height:3px;width:0;z-index:2147483647;'
+                +'background:linear-gradient(90deg,#6366f1,#22d3ee,#a78bfa);'
+                +'box-shadow:0 0 12px rgba(99,102,241,.85);border-radius:0 3px 3px 0;opacity:0;'
+                +'pointer-events:none;will-change:width,opacity;}';
+              doc.head.appendChild(st);
+              var bar=doc.createElement('div'); bar.id='pp-loadbar'; doc.body.appendChild(bar);
+              W.__ppBar=bar; W.__ppLoading=false;
+              W.__ppStart=function(){
+                var b=W.__ppBar; if(!b) return;
+                W.__ppLoading=true;
+                b.style.transition='none'; b.style.opacity='1'; b.style.width='0%';
+                void b.offsetWidth;          // reflow so the climb animates from 0
+                b.style.transition='width 9s cubic-bezier(.1,.75,.1,1), opacity .25s';
+                b.style.width='90%';         // ease toward 90% and hold until the page arrives
+              };
+              W.__ppDone=function(){
+                var b=W.__ppBar; if(!b||!W.__ppLoading) return;   // only if a nav actually started it
+                W.__ppLoading=false;
+                b.style.transition='width .25s ease, opacity .45s .15s';
+                b.style.width='100%'; b.style.opacity='0';        // fill, then fade
+                W.setTimeout(function(){ b.style.transition='none'; b.style.width='0%'; },800);
+              };
+              // a real user tap on any nav control starts the bar (capture phase → fires first)
+              doc.addEventListener('click', function(e){
+                try{
+                  if(!e.isTrusted) return;   // ignore synthetic swipe/tab-restore clicks
+                  var t=e.target;
+                  if(t && t.closest && t.closest('[data-testid="stRadio"], [role="radio"], [data-baseweb="tab"], [role="tab"], .stButton button, [data-testid="stSidebar"] button, a[href]')){
+                    W.__ppStart();
+                  }
+                }catch(_){}
+              }, true);
             }
-            doc.addEventListener('click', function(e){
-              try{
-                if(!e.isTrusted) return;     // only real user taps (not synthetic swipe/tab-restore clicks)
-                var t=e.target;
-                if(t && t.closest && t.closest('[data-testid="stRadio"], [role="radio"], [data-baseweb="tab"], [role="tab"], .stButton button, [data-testid="stSidebar"] button')){
-                  lbGo();
-                }
-              }catch(_){}
-            }, true);
+            // ── runs on EVERY rerun: this iframe just mounted ⇒ the new page DOM has arrived ⇒
+            //    complete the bar (no-op unless a nav tap started it). This is the load-finished signal.
+            if(W.__ppDone) W.__ppDone();
           }catch(e){}
         })();</script>
         """,
