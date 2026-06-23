@@ -4261,19 +4261,13 @@ def _render_dataframe_adaptive(
     force_same_render_path: bool = False,
     **kwargs,
 ) -> None:
-    """Render Styler with formatting preserved. All columns default to minimal width."""
-    # Build a column_config that sets every column to 'small' width,
-    # unless the caller already provided one.
-    if "column_config" not in kwargs:
-        try:
-            df = data.data if hasattr(data, "data") else data
-            if isinstance(df, pd.DataFrame):
-                kwargs["column_config"] = {
-                    col: st.column_config.Column(width="small")
-                    for col in df.columns
-                }
-        except Exception:
-            pass
+    """Render a Styler sized to its CONTENT: every column auto-fits its widest cell/header and the table
+    scrolls sideways when it's wider than the screen — so there is NO dead space from stretched or
+    fixed-width columns (owner: kill the wide-column dead space). Callers that pass width='stretch' are
+    remapped to 'content' for the same reason; pass an explicit column_config to override per-column."""
+    if kwargs.get("width") == "stretch":
+        kwargs["width"] = "content"
+    kwargs.setdefault("width", "content")
     st.dataframe(data, **kwargs)
 
 
@@ -5213,6 +5207,31 @@ def _he_uniformize_columns(df: "pd.DataFrame", language: str) -> "pd.DataFrame":
         out[c] = ser.map(lambda v: _he_uniformize_value(v)
                          if (not pd.isna(v) and re.search(r"[A-Za-z]", str(v))) else v)
     return out
+
+
+# Reverse map (Hebrew transliteration → canonical English) for EDITABLE columns: the manual-deposits
+# editor shows the platform Hebraized (ביטוסי) but must STORE the canonical English (Bit2C) so deposits
+# group with the trades' platform (both 'Bit2C') in the by-platform report — otherwise they'd split.
+_HE_PLATFORM_HE2EN = {
+    "ביטוסי": "Bit2C", "גלובל פריים": "Global Prime", "קוואנט דסק": "Quant Desk",
+    "דיגיטל אלפא": "Digital Alpha", "ישראטרייד": "IsraTrade", "ארנק קר": "Cold Wallet",
+    "ארנק סטייקינג": "Staking Wallet", "אנדרווטר": "Underwater", "בייננס": "Binance",
+    "קוינבייס": "Coinbase", "קראקן": "Kraken", "אקסלנס": "Excellence", "הורייזון": "Horizon",
+}
+
+
+def _he_display_platform(v: object) -> str:
+    """Hebraize a platform value for DISPLAY (Bit2C → ביטוסי)."""
+    if v is None or pd.isna(v) or not re.search(r"[A-Za-z]", str(v)):
+        return v
+    return _he_uniformize_value(v)
+
+
+def _he_store_platform(v: object) -> object:
+    """Reverse a Hebraized platform back to canonical English for STORAGE (ביטוסי → Bit2C)."""
+    if v is None or pd.isna(v):
+        return v
+    return _HE_PLATFORM_HE2EN.get(str(v).strip(), v)
 
 
 def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None, help_text: Optional[str] = None) -> str:
@@ -12645,6 +12664,12 @@ def main() -> None:
     if language == LANG_HE:
         _crit_css += (
             "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list']{direction:rtl !important;}"
+            # FORCE the MAIN dashboard tab-list to LTR on BOTH desktop AND phone so 'סקירה'/Overview is the
+            # LEFTMOST tab and 'תנועות ועסקאות' the rightmost — matching the phone. The desktop default in the
+            # RTL page rendered them RTL (Overview on the right). Scoped to stMain so the sidebar 2x2 stays RTL.
+            # (The swipe is index-based so LTR order keeps swipe-left → next.)
+            "html body [data-testid='stMain'] [data-testid='stTabs'] [data-baseweb='tab-list'],"
+            "html body [data-testid='stMain'] [data-testid='stTabs'] [role='tablist']{direction:ltr !important;}"
         )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
@@ -13593,10 +13618,10 @@ def main() -> None:
                         exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
                         # Owner preference: a real TABLE with horizontal scroll on phone too (not a
                         # card stack) — it's fine that not every column is visible without scrolling.
-                        st.dataframe(exposure_styled, width="stretch", hide_index=True)
+                        st.dataframe(exposure_styled, width="content", hide_index=True)
                     except Exception:
                         # Last-ditch: plain frame so the table can never silently vanish.
-                        st.dataframe(exposure_view, width="stretch", hide_index=True)
+                        st.dataframe(exposure_view, width="content", hide_index=True)
 
                 if include_watchlist:
                     watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
@@ -14154,7 +14179,7 @@ def main() -> None:
                             _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
                             if _long_lbl and _long_lbl in _rep_col_cfg:
                                 _rep_col_cfg[_long_lbl] = st.column_config.Column(width="medium")
-                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
+                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
@@ -14252,10 +14277,14 @@ def main() -> None:
             edit_df = pd.DataFrame(current_rows)
             if edit_df.empty:
                 edit_df = pd.DataFrame([{"Platform": "", "Manual_Deposit_ILS": 0.0}])
+            # HE: show the platform names Hebraized (Bit2C → ביטוסי) like every other table; reverse to the
+            # canonical English on save (below) so storage/grouping stay stable.
+            if language == LANG_HE and "Platform" in edit_df.columns:
+                edit_df["Platform"] = edit_df["Platform"].map(_he_display_platform)
 
             edited_df = st.data_editor(
                 edit_df,
-                width="stretch",
+                width="content",
                 hide_index=True,
                 num_rows="dynamic",
                 key=f"manual_deposits_editor_{deposit_mode}",
@@ -14266,6 +14295,12 @@ def main() -> None:
             )
 
             edited_rows = edited_df.to_dict(orient="records") if isinstance(edited_df, pd.DataFrame) else []
+            # Reverse the Hebraized platform back to canonical English before storing/syncing so deposits
+            # group with the trades' platform (both 'Bit2C') and the sheet keeps the canonical name.
+            if language == LANG_HE:
+                for _r in edited_rows:
+                    if isinstance(_r, dict) and "Platform" in _r:
+                        _r["Platform"] = _he_store_platform(_r["Platform"])
             normalized_rows = _normalize_manual_deposit_rows(edited_rows, default_platforms=[])
             st.session_state[rows_state_key] = normalized_rows
 
@@ -14563,7 +14598,7 @@ def main() -> None:
                 if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
                 # Owner preference: a real scrollable TABLE on phone too (not a card stack) — it's fine
                 # that the wide grid scrolls sideways and not every column is visible at once.
-                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True, column_config=_colcfg2)
+                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True)
 
                 # ── Export bar — below the table ───────────────────────────
                 _is_he_tx = _lang.startswith("ע")
