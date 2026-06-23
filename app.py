@@ -4114,7 +4114,7 @@ def _clear_query_param(name: str) -> None:
         return
 
 
-def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "dark") -> None:
+def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "dark", language: str = "") -> None:
     """Render the TradingView Advanced Chart widget.
 
     Two implementation details that matter:
@@ -4131,7 +4131,7 @@ def _render_tradingview_widget(ticker: object, height: int = 560, theme: str = "
     """
     symbol = _tradingview_symbol(ticker)
     if not symbol:
-        st.info("No chart symbol")
+        st.info("אין סימול תרשים זמין." if language == LANG_HE else "No chart symbol available.")
         return
     tv_theme = "dark" if theme == "dark" else "light"
 
@@ -13677,6 +13677,7 @@ def main() -> None:
                             active_ticker,
                             height=580 if is_mobile else 750,
                             theme="dark" if is_dark else "light",
+                            language=language,
                         )
                         if st.session_state.get(f"{widget_prefix}_chart_scroll_pending", False):
                             components.html(
