@@ -13855,7 +13855,7 @@ def main() -> None:
                         fig_track.update_layout(
                             template=template,
                             xaxis_title=None,
-                            yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                            yaxis_title=tr("Value (₪)", "שווי (₪)"),
                             yaxis_tickformat="~s",
                             hovermode="x unified",
                             xaxis=dict(showgrid=False, showspikes=True, spikethickness=1,
@@ -14938,7 +14938,7 @@ def main() -> None:
                 template=template,
                 title=tr("Historical Value Series (Market-Based Estimate)", "סדרת שווי היסטורית (הערכה לפי מחירי שוק)"),
                 xaxis_title=tr("Date", "תאריך"),
-                yaxis_title=tr("Value (ILS)", "שווי (₪)"),
+                yaxis_title=tr("Value (₪)", "שווי (₪)"),
                 yaxis_tickformat=",.0f",
                 hovermode="x unified",
             )
