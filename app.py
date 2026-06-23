@@ -12354,14 +12354,26 @@ def main() -> None:
         "[data-testid='stSidebar'] h1,[data-testid='stSidebar'] h2,[data-testid='stSidebar'] h3,"
         "[data-testid='stSidebar'] [data-testid='stWidgetLabel'],[data-testid='stSidebar'] [data-baseweb='select'] *,"
         f"[data-testid='stSidebar'] [data-testid='stMarkdownContainer']{{color:{_sb_txt} !important;}}"
-        # EXCEPTION: primary (dark accent) buttons keep WHITE text in BOTH themes —
-        # otherwise the force-colour above makes their label invisible on the dark button.
-        "[data-testid='stSidebar'] button[kind='primary'],[data-testid='stSidebar'] button[kind='primary'] *,"
+        # PRIMARY (accent) buttons in the sidebar (Sync now / Save passcode / Save connection / Enable
+        # fingerprint): force the indigo→violet GRADIENT + white text in BOTH themes. Streamlit 1.58
+        # overrides the base [kind=primary] background inside the sidebar, so without setting the
+        # background HERE the button stayed white while the force-white-text rule made the label
+        # invisible (white-on-white). Button → gradient; its inner spans → transparent so the gradient
+        # shows through, text stays white.
+        "[data-testid='stSidebar'] button[kind='primary'],"
         "[data-testid='stSidebar'] button[data-testid='baseButton-primary'],"
-        "[data-testid='stSidebar'] button[data-testid='stBaseButton-primary'],"
+        "[data-testid='stSidebar'] button[data-testid='stBaseButton-primary']"
+        "{background:linear-gradient(135deg,var(--pp-accent),var(--pp-accent2)) !important;"
+        "border:none !important;color:#ffffff !important;}"
+        "[data-testid='stSidebar'] button[kind='primary'] *,"
         "[data-testid='stSidebar'] button[data-testid='baseButton-primary'] *,"
         "[data-testid='stSidebar'] button[data-testid='stBaseButton-primary'] *"
-        "{color:#ffffff !important;}"
+        "{background:transparent !important;color:#ffffff !important;}"
+        # keep the sheen ::after off-canvas at rest in the sidebar so it never shows as a white patch
+        "[data-testid='stSidebar'] button[kind='primary']::after,"
+        "[data-testid='stSidebar'] button[data-testid='stBaseButton-primary']::after{opacity:0 !important;}"
+        "[data-testid='stSidebar'] button[kind='primary']:hover::after,"
+        "[data-testid='stSidebar'] button[data-testid='stBaseButton-primary']:hover::after{opacity:1 !important;}"
     )
     # The two dedicated sidebar nav buttons (נתונים / סוכן AI) rendered dark-navy in
     # LIGHT mode, which — with the dark sidebar text above — made their label invisible.
@@ -13346,8 +13358,10 @@ def main() -> None:
                                 # row holds EXACTLY 4 items and wraps cleanly — the 5th ('NVDA') was being
                                 # ejected past the card's rounded right edge and clipped to 'NVD'.
                                 **(dict(entrywidth=0.25, entrywidthmode="fraction") if is_mobile else {})),
-                    margin=dict(l=6, r=6, t=40, b=92 if is_mobile else 78),
-                    height=400 if is_mobile else 430,
+                    # Extra bottom room + taller figure on phone so the wrapped 2-row legend clears the
+                    # card's rounded bottom border (descenders of NVDA/IBIT/AAPL were being sliced).
+                    margin=dict(l=6, r=6, t=40, b=112 if is_mobile else 78),
+                    height=448 if is_mobile else 430,
                     # hide a % that can't fit INSIDE its wedge instead of ejecting it OUTSIDE as tiny
                     # faint gray text (the name is in the legend anyway). Fixes the 3.76%/5.13% labels.
                     uniformtext_minsize=10, uniformtext_mode="hide",
@@ -13439,7 +13453,7 @@ def main() -> None:
                             title=dict(text="%", side="bottom"),
                             thickness=12, len=0.75,
                         )
-                        tree_margin = dict(l=10, r=10, t=50, b=70)
+                        tree_margin = dict(l=14, r=16, t=50, b=70)  # right buffer so right-edge tiles don't spill
                     else:
                         tree_colorbar = dict(title="%")
                         tree_margin = dict(l=10, r=10, t=50, b=10)
@@ -13448,9 +13462,9 @@ def main() -> None:
                         coloraxis_colorbar=tree_colorbar,
                         # mode="show" → render the label (incl. the %) on EVERY tile, shrinking it to
                         # fit even a tiny tile, instead of hiding it. (owner request: % in every tile)
-                        # Lower the mobile floor to 5px so the narrowest tiles' text shrinks enough to fit
-                        # horizontally (was clipping 'INTC'→'INTO' at the 6px floor).
-                        uniformtext=dict(minsize=5 if is_mobile else 6, mode="show"),
+                        # Lower the mobile floor to 4px so the NARROWEST right-edge tiles (INTC/DOGE) shrink
+                        # enough to fit inside the tile instead of spilling past the plot's right boundary.
+                        uniformtext=dict(minsize=4 if is_mobile else 6, mode="show"),
                     )
                     st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
                     if is_mobile:
@@ -13511,13 +13525,17 @@ def main() -> None:
                     exposure_base = pd.DataFrame(columns=exposure_cols)
                 else:
                     exposure_base = summary_df.reindex(columns=exposure_cols).copy()
-                    # Keep current-price column resilient when upstream shape changes.
-                    if "Current_Price" not in summary_df.columns and {"Value_ILS", "Open_Qty"}.issubset(summary_df.columns):
-                        qty = pd.to_numeric(summary_df.get("Open_Qty"), errors="coerce")
-                        val = pd.to_numeric(summary_df.get("Value_ILS"), errors="coerce")
-                        with np.errstate(divide="ignore", invalid="ignore"):
-                            derived_price = np.where(qty > 0, val / qty, np.nan)
-                        exposure_base["Current_Price"] = derived_price
+                    # Current per-unit price (ILS). Derive it from Value/Qty when the source column is
+                    # ABSENT *or* present-but-all-zero/NaN (the demo case) — otherwise the whole
+                    # 'Current Price' column rendered as a dead '—' band between Ticker and Active Qty.
+                    if {"Value_ILS", "Open_Qty"}.issubset(summary_df.columns):
+                        _cp = (pd.to_numeric(exposure_base["Current_Price"], errors="coerce").to_numpy()
+                               if "Current_Price" in exposure_base.columns else np.array([], dtype=float))
+                        if _cp.size == 0 or float(np.nansum(np.abs(_cp))) == 0.0:
+                            qty = pd.to_numeric(summary_df.get("Open_Qty"), errors="coerce")
+                            val = pd.to_numeric(summary_df.get("Value_ILS"), errors="coerce")
+                            with np.errstate(divide="ignore", invalid="ignore"):
+                                exposure_base["Current_Price"] = np.where(qty > 0, val / qty, np.nan)
                 exposure_work = exposure_base.copy()
                 exposure_work["Ticker"] = exposure_work["Ticker"].map(_clean)
                 for numeric_col in ["Current_Price", "Open_Qty", "Cost_ILS", "Value_ILS", "Net_PnL_ILS", "Yield_Origin", "Yield_ILS"]:
@@ -13851,14 +13869,19 @@ def main() -> None:
                             # On the 400px phone a right-anchored 2-series legend overflowed the LEFT
                             # edge and clipped the 2nd name ('Cumulative Cost'/'עלות') — center it +
                             # smaller font on mobile so both names fit. (design r5)
+                            # Center the legend on BOTH breakpoints — the desktop right-anchor (x=1) was
+                            # overflowing the plot and clipping the 2nd name ('Cumulative Cost').
                             legend=dict(orientation="h", yanchor="bottom", y=1.0,
-                                        xanchor="center" if is_mobile else "right", x=0.5 if is_mobile else 1,
+                                        xanchor="center", x=0.5,
                                         font=dict(color="#e2e8f0" if is_dark else "#334155", size=10 if is_mobile else 12),
                                         bgcolor="rgba(0,0,0,0)"),
-                            margin=dict(t=64, l=8, r=8, b=8),
+                            # Reserve room at the BOTTOM (x date ticks were sliced by the card border) and
+                            # on the RIGHT (last 'Oct 2024' tick overflowed) — esp. on the narrow phone.
+                            margin=dict(t=64, l=8, r=24 if is_mobile else 16, b=44 if is_mobile else 30),
                             # Taller, more prominent on desktop; keep compact on mobile.
-                            height=320 if is_mobile else 460,
+                            height=340 if is_mobile else 460,
                         )
+                        _fig_track.update_xaxes(automargin=True)
                         st.plotly_chart(_fig_track, theme=None, width="stretch")
                 except Exception:
                     pass
@@ -14015,14 +14038,21 @@ def main() -> None:
                         class_mix,
                         path=["Asset_Class"],
                         values="Current_Value_ILS",
-                        title=tr("Allocation by Asset Class", "חלוקה לפי סוג נכס"),
+                        # Distinct title — the sibling donut already says 'Allocation by Asset Class', so
+                        # this map carries its own heading instead of repeating it.
+                        title=tr("Asset-Class Map", "מפת סוגי נכס"),
                         template=template,
                         color="Asset_Class",
                         color_discrete_map=class_color_map,
                         color_discrete_sequence=_BRAND_PALETTE,
                     )
                     type_fig.update_traces(
-                        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<extra></extra>",
+                        # Show class name + % of total on each tile (like the donut) instead of a bare
+                        # label, so the map doesn't read as sparse/unfinished next to the labelled donut.
+                        texttemplate="<b>%{label}</b><br>%{percentRoot:.1%}",
+                        textposition="middle center",
+                        insidetextfont=dict(color="#ffffff"),
+                        hovertemplate="<b>%{label}</b><br>₪%{value:,.0f}<br>%{percentRoot:.1%}<extra></extra>",
                     )
                     st.plotly_chart(
                         _apply_plotly_theme(type_fig, is_dark, is_mobile),
