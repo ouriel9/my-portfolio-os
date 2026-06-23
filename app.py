@@ -14028,20 +14028,24 @@ def main() -> None:
                     # (e.g. the ETHA/BSOL columns in the Crypto-Concentration table).
                     report_styled = report_styled.format(fmt_map or None, na_rep="—")
                     signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "p/l", "p&l", "תשואה", "רווח"])]
-                    # Owner preference: a real scrollable TABLE on phone too (not a card stack) — it's
-                    # fine that not every column is visible without scrolling sideways.
-                    if signed_cols:
-                        report_styled = _apply_signed_color(report_styled, signed_cols)
-                    # Keep ALL columns 'small' (the HE headers were shortened to fit) so the table
-                    # never overflows the width='stretch' container and silently DROPS columns —
-                    # blanket HE 'medium' did exactly that (dropped 3 of 7). Only the genuinely-long
-                    # coin-qty header gets 'medium' so its label isn't clipped.
-                    _rep_col_cfg = {c: st.column_config.Column(width="small") for c in localized_df.columns}
-                    for _raw_long in ("Estimated_Coin_Qty",):
-                        _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
-                        if _long_lbl and _long_lbl in _rep_col_cfg:
-                            _rep_col_cfg[_long_lbl] = st.column_config.Column(width="medium")
-                    _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
+                    # Owner preference: the REPORTS tables look nice as per-row CARDS on the phone — keep
+                    # the card stack HERE ONLY (Reports tab). The other tables (Exposure / Transactions /
+                    # FIFO) are real scrollable st.dataframe tables per the owner's other request.
+                    if is_mobile:
+                        _render_df_mobile_cards(localized_df, fmt_map, signed_cols)
+                    else:
+                        if signed_cols:
+                            report_styled = _apply_signed_color(report_styled, signed_cols)
+                        # Keep ALL columns 'small' (the HE headers were shortened to fit) so the table
+                        # never overflows the width='stretch' container and silently DROPS columns —
+                        # blanket HE 'medium' did exactly that (dropped 3 of 7). Only the genuinely-long
+                        # coin-qty header gets 'medium' so its label isn't clipped.
+                        _rep_col_cfg = {c: st.column_config.Column(width="small") for c in localized_df.columns}
+                        for _raw_long in ("Estimated_Coin_Qty",):
+                            _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
+                            if _long_lbl and _long_lbl in _rep_col_cfg:
+                                _rep_col_cfg[_long_lbl] = st.column_config.Column(width="medium")
+                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
