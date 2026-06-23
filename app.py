@@ -649,8 +649,12 @@ def _apply_plotly_theme(fig: go.Figure, is_dark: bool, is_mobile: bool, is_bar: 
             minreducedheight=280,
         )
         if is_bar:
-            fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25)
-            fig.update_xaxes(tickangle=45, tickfont=dict(size=9))
+            # Bar x-ticks are rotated 45°, so the LAST category label ('INTC') extends to the right past
+            # the plot — the global r=6 margin clipped it to 'IN'. Give bar charts a wider right + bottom
+            # margin (and axis automargin) so every rotated tick fits.
+            fig.update_layout(showlegend=False, coloraxis_showscale=False, bargap=0.25,
+                              margin=dict(l=6, r=26, t=48, b=92))
+            fig.update_xaxes(tickangle=45, tickfont=dict(size=9), automargin=True)
             fig.update_yaxes(tickfont=dict(size=9))
         else:
             fig.update_xaxes(tickfont=dict(size=9))
@@ -5129,7 +5133,8 @@ def _render_df_mobile_cards(df, fmt_map=None, signed_cols=()) -> None:
                     cls = " pos" if float(v) >= 0 else " neg"
                 except Exception:
                     cls = ""
-            parts.append('<div class="pp-mrow"><span class="k">%s</span><span class="v%s">%s</span></div>' % (_esc(c), cls, _esc(vs)))
+            # show a neutral em-dash for an empty cell (e.g. a blank 'Current Location') instead of a void.
+            parts.append('<div class="pp-mrow"><span class="k">%s</span><span class="v%s">%s</span></div>' % (_esc(c), cls, _esc(vs if (vs is not None and str(vs).strip() != "") else "—")))
         parts.append('</div>')
     parts.append('</div>')
     st.markdown("".join(parts), unsafe_allow_html=True)
@@ -12546,12 +12551,13 @@ def main() -> None:
         "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-highlight']{display:none !important;}"
         "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab'][aria-selected='true']{border-bottom:2px solid #6366f1 !important;font-weight:700 !important;}"
     )
-    # HE: anchor the 2x2 settings grid + the main dashboard tabs RIGHT-to-left (default/Sync at top-right)
-    # so the tab sequence reads correctly on the mirrored Hebrew page. DOM order (and the swipe) unchanged.
+    # HE: anchor ONLY the sidebar 2x2 settings grid right-to-left (Sync at top-right). The MAIN dashboard
+    # tabs stay LTR (default) so 'סקירה'/Overview is the LEFTMOST tab — the owner rejected the round-6 RTL
+    # flip on the main tabs because it mirrored them (Overview jumped to the right) and made the index-based
+    # swipe (swipe-left → next tab) feel backwards. Reverting to LTR restores the original swipe direction.
     if language == LANG_HE:
         _crit_css += (
             "html body [data-testid='stSidebar'] [data-testid='stTabs'] [data-baseweb='tab-list']{direction:rtl !important;}"
-            "html body [data-testid='stTabs'] [role='tablist']{direction:rtl !important;}"
         )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
@@ -12721,12 +12727,12 @@ def main() -> None:
             followed_symbols_text = settings.get("followed_symbols", "")
             _cc1, _cc2 = st.columns(2)
             with _cc1:
-                if st.button(tr("💾 Save", "💾 שמור"), width="stretch", key="_conn_save_btn"):
+                if st.button(tr("💾 Save", "💾 שמור"), width="stretch", key="_conn_save_btn", type="primary"):
                     _ok = save_local_settings(web_app_url, api_token, spreadsheet_ref, worksheet_name,
                                               service_account_file, language, theme_mode, demo_mode, followed_symbols_text)
                     (st.success(tr("Saved", "נשמר")) if _ok else st.error(tr("Save failed", "השמירה נכשלה")))
             with _cc2:
-                if st.button(tr("↻ Refresh", "↻ רענן"), width="stretch", key="_conn_refresh_btn"):
+                if st.button(tr("🔄 Refresh", "🔄 רענן"), width="stretch", key="_conn_refresh_btn"):
                     load_google_snapshot_data.clear()
                     load_google_snapshot_data_via_gspread.clear()
                     st.rerun()
@@ -12751,7 +12757,7 @@ def main() -> None:
                 st.divider()
             _newpin = st.text_input(tr("Set / change passcode (4+ chars)", "קבע / שנה קוד (4+ תווים)"),
                                     type="password", key="_lock_newpin")
-            if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", use_container_width=True):
+            if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", type="primary", use_container_width=True):
                 if len(str(_newpin)) >= 4:
                     _salt = _secrets.token_hex(8)
                     _lk_now["pin_hash"] = _lock_hash(_newpin, _salt)
@@ -13260,9 +13266,13 @@ def main() -> None:
                     # legend row because the auto-sized figure left no room for it). (design r5)
                     legend=dict(orientation="h", yanchor="top", y=-0.16, xanchor="center", x=0.5,
                                 font=dict(size=8 if is_mobile else 11),
-                                itemwidth=30 if is_mobile else 40),
-                    margin=dict(l=6, r=6, t=40, b=78),
-                    height=370 if is_mobile else 430,
+                                itemwidth=30 if is_mobile else 40,
+                                # On the 400px phone, pin each legend entry to 1/4 of the plot width so the
+                                # row holds EXACTLY 4 items and wraps cleanly — the 5th ('NVDA') was being
+                                # ejected past the card's rounded right edge and clipped to 'NVD'.
+                                **(dict(entrywidth=0.25, entrywidthmode="fraction") if is_mobile else {})),
+                    margin=dict(l=6, r=6, t=40, b=92 if is_mobile else 78),
+                    height=400 if is_mobile else 430,
                     # hide a % that can't fit INSIDE its wedge instead of ejecting it OUTSIDE as tiny
                     # faint gray text (the name is in the legend anyway). Fixes the 3.76%/5.13% labels.
                     uniformtext_minsize=10, uniformtext_mode="hide",
@@ -13302,6 +13312,9 @@ def main() -> None:
                 )
                 # automargin so the rotated y-axis title isn't clipped (HE 'רווח/הפסד (₪)' was cut to 'ל/הפסד').
                 fig_bar.update_yaxes(automargin=True, title_standoff=6)
+                # x-axis automargin too, so the last rotated category tick ('INTC') isn't clipped to 'IN'
+                # at the right plot edge on the narrow phone width.
+                fig_bar.update_xaxes(automargin=True)
                 fig_bar.update_traces(
                     hovertemplate="<b>%{x}</b><br>P/L: ₪%{y:,.0f}<extra></extra>"
                 )
@@ -13337,7 +13350,10 @@ def main() -> None:
                         # Show the yield % on EVERY tile (ticker + %), even the tiniest DOGE/INTC ones
                         # (owner request: "אחוזים בכל מלבן גם אם קטן"). Drop the ₪ value line so the
                         # label is compact enough to fit small tiles; the ₪ value stays in the hover.
-                        texttemplate="<b>%{label}</b><br>%{customdata[0]}",
+                        # On the narrow phone, drop the bold (bold glyphs are ~10% wider) so 'INTC' and
+                        # '-35.3%' fit the narrowest tiles instead of clipping to 'INTO'/'-35.3'.
+                        texttemplate=("%{label}<br>%{customdata[0]}" if is_mobile
+                                      else "<b>%{label}</b><br>%{customdata[0]}"),
                         textposition="middle center",
                     )
                     # On mobile: move colorbar below the chart to free horizontal space
@@ -13357,7 +13373,9 @@ def main() -> None:
                         coloraxis_colorbar=tree_colorbar,
                         # mode="show" → render the label (incl. the %) on EVERY tile, shrinking it to
                         # fit even a tiny tile, instead of hiding it. (owner request: % in every tile)
-                        uniformtext=dict(minsize=6, mode="show"),
+                        # Lower the mobile floor to 5px so the narrowest tiles' text shrinks enough to fit
+                        # horizontally (was clipping 'INTC'→'INTO' at the 6px floor).
+                        uniformtext=dict(minsize=5 if is_mobile else 6, mode="show"),
                     )
                     st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
                     if is_mobile:
@@ -13453,17 +13471,21 @@ def main() -> None:
                         if f == int(f) or abs(f) >= 100:
                             return f"{f:,.0f}"
                         return f"{f:,.6f}".rstrip("0").rstrip(".")
-                    # On mobile the full 8-column table overflows the viewport and the
-                    # last column ("שווי כולל") gets silently clipped. Show only the
-                    # essential columns there so everything fits and nothing is cut.
-                    if is_mobile:
-                        _keep = [localize_column_name(x, language)
-                                 for x in ["Ticker", "Open_Qty", "Value_ILS", "Net_PnL_ILS", "Yield_Origin"]]
-                        _keep = [c for c in _keep if c in exposure_view.columns]
-                        if _keep:
-                            exposure_view = exposure_view[_keep]
+                    # Owner preference: keep the FULL table on phone (all columns) and let it scroll
+                    # sideways — do NOT drop columns to a mobile subset.
+                    def _fmt_price(v):
+                        # A live per-ticker price isn't always available (e.g. demo / before a
+                        # quote loads). Show a neutral em-dash instead of a literal "0.0000",
+                        # which reads as broken data on a finance dashboard. Real prices: 2 dp.
+                        try:
+                            f = float(v)
+                        except Exception:
+                            return "—"
+                        if not np.isfinite(f) or f == 0:
+                            return "—"
+                        return f"{f:,.2f}"
                     _fmt_map = {
-                        current_price_col: "{:,.4f}",
+                        current_price_col: _fmt_price,
                         localize_column_name("Open_Qty", language): _fmt_qty,
                         localize_column_name("Cost_ILS", language): "{:,.0f}",
                         localize_column_name("Value_ILS", language): "{:,.0f}",
@@ -13476,13 +13498,9 @@ def main() -> None:
                         exposure_styled = exposure_view.style.format(_fmt_map, na_rep="")
                         _color_cols = [c for c in [pnl_col, yield_origin_col, yield_ils_col] if c in exposure_view.columns]
                         exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
-                        # PHONE: render as a per-row key-value CARD stack (like the report tables) so the
-                        # wide exposure grid never overflows + truncates every cell on a 400px screen.
-                        # DESKTOP: the native Arrow grid. (design r7 P0)
-                        if is_mobile:
-                            _render_df_mobile_cards(exposure_view, _fmt_map, _color_cols)
-                        else:
-                            st.dataframe(exposure_styled, width="stretch", hide_index=True)
+                        # Owner preference: a real TABLE with horizontal scroll on phone too (not a
+                        # card stack) — it's fine that not every column is visible without scrolling.
+                        st.dataframe(exposure_styled, width="stretch", hide_index=True)
                     except Exception:
                         # Last-ditch: plain frame so the table can never silently vanish.
                         st.dataframe(exposure_view, width="stretch", hide_index=True)
@@ -14009,23 +14027,21 @@ def main() -> None:
                     # na_rep so empty cells render as "—" instead of a literal "None"
                     # (e.g. the ETHA/BSOL columns in the Crypto-Concentration table).
                     report_styled = report_styled.format(fmt_map or None, na_rep="—")
-                    signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "תשואה", "רווח"])]
-                    if is_mobile:
-                        # #1: render as cards so wide report tables never clip on a phone
-                        _render_df_mobile_cards(localized_df, fmt_map, signed_cols)
-                    else:
-                        if signed_cols:
-                            report_styled = _apply_signed_color(report_styled, signed_cols)
-                        # Keep ALL columns 'small' (the HE headers were shortened to fit) so the table
-                        # never overflows the width='stretch' container and silently DROPS columns —
-                        # blanket HE 'medium' did exactly that (dropped 3 of 7). Only the genuinely-long
-                        # coin-qty header gets 'medium' so its label isn't clipped.
-                        _rep_col_cfg = {c: st.column_config.Column(width="small") for c in localized_df.columns}
-                        for _raw_long in ("Estimated_Coin_Qty",):
-                            _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
-                            if _long_lbl and _long_lbl in _rep_col_cfg:
-                                _rep_col_cfg[_long_lbl] = st.column_config.Column(width="medium")
-                        _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
+                    signed_cols = [c for c in localized_df.columns if any(t in str(c).lower() for t in ["yield", "return", "pnl", "p/l", "p&l", "תשואה", "רווח"])]
+                    # Owner preference: a real scrollable TABLE on phone too (not a card stack) — it's
+                    # fine that not every column is visible without scrolling sideways.
+                    if signed_cols:
+                        report_styled = _apply_signed_color(report_styled, signed_cols)
+                    # Keep ALL columns 'small' (the HE headers were shortened to fit) so the table
+                    # never overflows the width='stretch' container and silently DROPS columns —
+                    # blanket HE 'medium' did exactly that (dropped 3 of 7). Only the genuinely-long
+                    # coin-qty header gets 'medium' so its label isn't clipped.
+                    _rep_col_cfg = {c: st.column_config.Column(width="small") for c in localized_df.columns}
+                    for _raw_long in ("Estimated_Coin_Qty",):
+                        _long_lbl = COLUMN_LABELS.get(_raw_long, {}).get(language)
+                        if _long_lbl and _long_lbl in _rep_col_cfg:
+                            _rep_col_cfg[_long_lbl] = st.column_config.Column(width="medium")
+                    _render_dataframe_adaptive(report_styled, is_mobile, width="stretch", hide_index=True, column_config=_rep_col_cfg)
                 st.divider()
 
             for _rep_title, _rep_key in report_options.items():
@@ -14110,10 +14126,13 @@ def main() -> None:
             current_rows = _normalize_manual_deposit_rows(st.session_state.get(rows_state_key, []), default_platforms)
             st.session_state[rows_state_key] = current_rows
 
+            # LTR-isolate the Latin source token so the Hebrew sentence's closing ")." doesn't reorder
+            # to ".(demo_seed" in RTL.
+            _src_tok = "⁦" + str(st.session_state.get(source_state_key, "local")) + "⁩"
             st.caption(
                 tr(
-                    f"Manual deposits are isolated and synced separately (source: {st.session_state.get(source_state_key, 'local')}).",
-                    f"הפקדות ידניות מבודדות ומסונכרנות בנפרד (מקור: {st.session_state.get(source_state_key, 'local')}).",
+                    f"Manual deposits are isolated and synced separately (source: {_src_tok}).",
+                    f"הפקדות ידניות מבודדות ומסונכרנות בנפרד (מקור: {_src_tok}).",
                 )
             )
 
@@ -14141,7 +14160,7 @@ def main() -> None:
             st.metric(tr("Total Manual Deposits", "סה\"כ הפקדות ידניות"), f"{total_manual:,.2f} ₪")
 
             action_cols = st.columns([1, 1, 3])
-            if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}"):
+            if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}", type="primary"):
                 if not can_sync_remote:
                     st.error(tr(
                         "Google Sheets connection required to save deposits. Configure a valid Web App URL.",
@@ -14404,15 +14423,31 @@ def main() -> None:
                 for yc in _yc2:
                     if yc in _dv.columns: _sfmt2[yc] = "{:.2%}"
 
+                # Money/quantity columns otherwise print raw floats ("4000.000000", "0.000000").
+                # Give every remaining numeric column a clean thousands-separated format (integers as
+                # whole numbers, money trimmed to <=2dp) so no cell shows six trailing zeros. Build a
+                # per-column width config too: TEXT columns (date/platform/location/currency/type) get
+                # 'medium' so 'Global Prime'/'Purchase Date' don't truncate, numeric columns stay 'small'
+                # (_render_dataframe_adaptive otherwise forces ALL columns to 'small' -> mid-word clipping).
+                def _numfmt2(v):
+                    try: f = float(v)
+                    except Exception: return "" if pd.isna(v) else _clean(v)
+                    if not np.isfinite(f): return ""
+                    if f == int(f): return f"{f:,.0f}"
+                    return (f"{f:,.2f}" if abs(f) >= 1 else f"{f:,.4f}").rstrip("0").rstrip(".")
+                _colcfg2: Dict[str, object] = {}
+                for _col in _dv.columns:
+                    _is_num = pd.to_numeric(_dv[_col], errors="coerce").notna().mean() >= 0.6
+                    if _col not in _sfmt2 and _is_num:
+                        _sfmt2[_col] = _numfmt2
+                    _colcfg2[_col] = st.column_config.Column(width=("small" if _is_num else "medium"))
+
                 _styled2 = _dv.style
                 if _sfmt2: _styled2 = _styled2.format(_sfmt2, na_rep="")
                 if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
-                # PHONE: per-row key-value cards so the wide transactions grid doesn't overflow +
-                # truncate every cell ('Purchase D…' etc.) on a 400px screen. DESKTOP: the grid. (r7 P0)
-                if _mob:
-                    _render_df_mobile_cards(_dv, _sfmt2, _yc2)
-                else:
-                    _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True)
+                # Owner preference: a real scrollable TABLE on phone too (not a card stack) — it's fine
+                # that the wide grid scrolls sideways and not every column is visible at once.
+                _render_dataframe_adaptive(_styled2, _mob, force_same_render_path=True, width="stretch", hide_index=True, column_config=_colcfg2)
 
                 # ── Export bar — below the table ───────────────────────────
                 _is_he_tx = _lang.startswith("ע")
@@ -14722,20 +14757,17 @@ def main() -> None:
                 tr("Open Cost (ILS)", "עלות פתוחה (₪)"): "{:,.0f}",
                 realized_col: "{:,.0f}",
             }
-            if is_mobile:
-                # #2 — wide table headers clipped on phones ("Open Qty (FIF(").
-                # Render as per-row cards (key: value) so nothing is ever cut.
-                _render_df_mobile_cards(fifo_view, _fifo_fmt, signed_cols=(realized_col,))
-            else:
-                fifo_styled = fifo_view.style.format(_fifo_fmt)
-                fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
-                _render_dataframe_adaptive(
-                    fifo_styled,
-                    is_mobile,
-                    force_same_render_path=True,
-                    width="stretch",
-                    hide_index=True,
-                )
+            # Owner preference: a real scrollable TABLE on phone too (not a card stack) — fine that the
+            # wide FIFO grid scrolls sideways and not every column is visible at once.
+            fifo_styled = fifo_view.style.format(_fifo_fmt)
+            fifo_styled = _apply_signed_color(fifo_styled, [realized_col])
+            _render_dataframe_adaptive(
+                fifo_styled,
+                is_mobile,
+                force_same_render_path=True,
+                width="stretch",
+                hide_index=True,
+            )
 
         st.divider()
         st.subheader(tr("📊 Risk Metrics", "📊 מדדי סיכון"))
@@ -14802,24 +14834,30 @@ def main() -> None:
             st.markdown(f"#### {tr('Scenario Lab', 'מעבדת תרחישים')}")
             _chart_help("Scenario Lab: simulates portfolio value and P/L under various market shock levels applied uniformly to all holdings.",
                         "מעבדת תרחישים: מדמה את שווי התיק ורווח/הפסד תחת רמות הלם שוק שונות המופעלות באחידות על כל האחזקות.", language)
+            # Localize the COLUMN HEADERS too (were hardcoded English, so the Hebrew view showed
+            # 'Scenario/Shock/Estimated Value' over Hebrew row labels — fixed via tr()).
+            _h_scen = tr("Scenario", "תרחיש")
+            _h_shock = tr("Shock", "הלם")
+            _h_val = tr("Estimated Value (ILS)", "שווי משוער (₪)")
+            _h_pl = tr("Estimated P/L (ILS)", "רווח/הפסד (₪)")
             scenario_df = pd.DataFrame(
                 [
-                    {"Scenario": tr("Calm market", "שוק רגוע"), "Shock": -0.03},
-                    {"Scenario": tr("Risk-off week", "שבוע ירידות"), "Shock": -0.08},
-                    {"Scenario": tr("Macro stress", "סטרס מאקרו"), "Shock": -0.15},
-                    {"Scenario": tr("Tail event", "אירוע קיצון"), "Shock": -0.25},
+                    {_h_scen: tr("Calm market", "שוק רגוע"), _h_shock: -0.03},
+                    {_h_scen: tr("Risk-off week", "שבוע ירידות"), _h_shock: -0.08},
+                    {_h_scen: tr("Macro stress", "סטרס מאקרו"), _h_shock: -0.15},
+                    {_h_scen: tr("Tail event", "אירוע קיצון"), _h_shock: -0.25},
                 ]
             )
-            scenario_df["Estimated Value (ILS)"] = total_value * (1 + scenario_df["Shock"])
-            scenario_df["Estimated P/L (ILS)"] = scenario_df["Estimated Value (ILS)"] - total_cost
+            scenario_df[_h_val] = total_value * (1 + scenario_df[_h_shock])
+            scenario_df[_h_pl] = scenario_df[_h_val] - total_cost
             scenario_styled = scenario_df.style.format(
                 {
-                    "Shock": "{:.1%}",
-                    "Estimated Value (ILS)": "{:,.0f}",
-                    "Estimated P/L (ILS)": "{:,.0f}",
+                    _h_shock: "{:.1%}",
+                    _h_val: "{:,.0f}",
+                    _h_pl: "{:,.0f}",
                 }
             )
-            scenario_styled = _apply_signed_color(scenario_styled, ["Shock", "Estimated P/L (ILS)"])
+            scenario_styled = _apply_signed_color(scenario_styled, [_h_shock, _h_pl])
             _render_dataframe_adaptive(
                 scenario_styled,
                 is_mobile,
@@ -15689,7 +15727,7 @@ def main() -> None:
             recent_view, _ = _with_calendar_purchase_date(localize_snapshot_view(df_src, language), language)
             signed_cols = [
                 c for c in recent_view.columns
-                if any(token in str(c).lower() for token in ["yield", "return", "תשואה", "pnl", "רווח"])
+                if any(token in str(c).lower() for token in ["yield", "return", "תשואה", "pnl", "p/l", "p&l", "רווח"])
             ]
             # Normalize yield/return values to ratio then format as %
             pct_cols = [
