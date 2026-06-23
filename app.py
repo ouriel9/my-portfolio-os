@@ -5140,6 +5140,81 @@ def _render_df_mobile_cards(df, fmt_map=None, signed_cols=()) -> None:
     st.markdown("".join(parts), unsafe_allow_html=True)
 
 
+# ── Latin→Hebrew value transliteration for MIXED-language table columns ──────────────────
+# In the canvas st.dataframe, a column that mixes Hebrew (RTL, hugs the right) and Latin (LTR, hugs
+# the left) aligns EACH cell to its own direction, so the column alternates sides and leaves a band
+# of dead space opposite each word. Owner's fix (keep the table structure): write the Latin values in
+# Hebrew letters so the whole column reads in ONE language/direction and lines up. A precise override
+# map covers the known platform/location names; an approximate phonetic fallback Hebraizes anything
+# else. TICKER/symbol columns (short ALL-CAPS codes like AAPL/VOO/BTC) are detected and left in Latin.
+_HE_TXT_MAP = {
+    "bit2c": "ביטוסי", "global prime": "גלובל פריים", "quant desk": "קוואנט דסק",
+    "digital alpha": "דיגיטל אלפא", "isratrade": "ישראטרייד", "underwater": "אנדרווטר",
+    "cold wallet": "ארנק קר", "staking wallet": "ארנק סטייקינג", "hot wallet": "ארנק חם",
+    "binance": "בייננס", "coinbase": "קוינבייס", "kraken": "קראקן", "excellence": "אקסלנס",
+    "horizon": "הורייזון", "etoro": "איטורו", "interactive brokers": "אינטראקטיב ברוקרס",
+    "ledger": "לדג'ר", "metamask": "מטאמאסק", "phantom": "פאנטום", "trezor": "טרזור",
+}
+_HE_DIGRAPHS = [("sch", "ש"), ("tch", "צ'"), ("sh", "ש"), ("ch", "צ'"), ("ph", "פ"),
+                ("th", "ת"), ("ck", "ק"), ("qu", "קוו"), ("oo", "ו"), ("ee", "י"),
+                ("ou", "או"), ("igh", "יי"), ("wa", "ווה")]
+_HE_LETTERS = {"a": "א", "b": "ב", "c": "ק", "d": "ד", "e": "א", "f": "פ", "g": "ג",
+               "h": "ה", "i": "י", "j": "ג'", "k": "ק", "l": "ל", "m": "מ", "n": "נ",
+               "o": "ו", "p": "פ", "q": "ק", "r": "ר", "s": "ס", "t": "ט", "u": "ו",
+               "v": "ו", "w": "וו", "x": "קס", "y": "י", "z": "ז"}
+
+
+def _he_translit_token(token: str) -> str:
+    low = token.lower()
+    if low in _HE_TXT_MAP:
+        return _HE_TXT_MAP[low]
+    if not re.search(r"[A-Za-z]", token):
+        return token  # already Hebrew / number / symbol — leave it
+    out, i, n = [], 0, len(low)
+    while i < n:
+        ch = low[i]
+        if not ch.isalpha():
+            out.append(token[i]); i += 1; continue
+        hit = next(((dg, he) for dg, he in _HE_DIGRAPHS if low.startswith(dg, i)), None)
+        if hit:
+            out.append(hit[1]); i += len(hit[0])
+        else:
+            out.append(_HE_LETTERS.get(ch, "")); i += 1
+    return "".join(out)
+
+
+def _he_uniformize_value(value: object) -> str:
+    s = str(value)
+    # transliterate each whitespace-separated token (whole multi-word names hit the map first)
+    low = s.strip().lower()
+    if low in _HE_TXT_MAP:
+        return _HE_TXT_MAP[low]
+    return re.sub(r"\S+", lambda m: _he_translit_token(m.group(0)), s)
+
+
+def _he_uniformize_columns(df: "pd.DataFrame", language: str) -> "pd.DataFrame":
+    """For HE only: rewrite the Latin cells of any non-ticker TEXT column in Hebrew so the column is
+    one direction (kills the mixed-alignment dead space). Ticker/symbol columns and numeric columns
+    are left untouched."""
+    if language != LANG_HE or df is None or getattr(df, "empty", True):
+        return df
+    out = df.copy()
+    for c in out.columns:
+        ser = out[c]
+        # string view that treats NaN/None as EMPTY (not the literal "nan", which has Latin letters and
+        # would otherwise be transliterated to gibberish).
+        col = ser.map(lambda v: "" if pd.isna(v) else str(v))
+        if not col.str.contains(r"[A-Za-z]").any():
+            continue  # no Latin in this column → nothing to do (pure Hebrew / numbers / empty)
+        nonempty = col[col.str.strip() != ""]
+        # skip TICKER/symbol columns — keep AAPL/VOO/BTC/IBIT in Latin
+        if len(nonempty) and nonempty.str.match(r"^[A-Z0-9.\-]{1,6}$").mean() >= 0.6:
+            continue
+        out[c] = ser.map(lambda v: _he_uniformize_value(v)
+                         if (not pd.isna(v) and re.search(r"[A-Za-z]", str(v))) else v)
+    return out
+
+
 def _select_or_type(label: str, options: List[str], default: str = "", key_prefix: str = "", tr_fn=None, help_text: Optional[str] = None) -> str:
     cleaned = sorted({_clean(v) for v in options if _clean(v)})
     tr_local = tr_fn or (lambda en, he: he)
@@ -14023,6 +14098,9 @@ def main() -> None:
                                     fmt_map[col] = _smart_qty
                             except Exception:
                                 pass
+                    # Hebraize Latin platform/location-type values (HE only) so a column mixing
+                    # Hebrew + Latin lines up instead of alternating sides (tickers stay Latin).
+                    localized_df = _he_uniformize_columns(localized_df, language)
                     report_styled = localized_df.style
                     # na_rep so empty cells render as "—" instead of a literal "None"
                     # (e.g. the ETHA/BSOL columns in the Crypto-Concentration table).
@@ -14446,7 +14524,10 @@ def main() -> None:
                         _sfmt2[_col] = _numfmt2
                     _colcfg2[_col] = st.column_config.Column(width=("small" if _is_num else "medium"))
 
-                _styled2 = _dv.style
+                # Display copy with Latin platform/location values Hebraized (HE only) so mixed
+                # HE/Latin columns line up instead of alternating sides. _dv (original) feeds the export.
+                _dv_disp = _he_uniformize_columns(_dv, language)
+                _styled2 = _dv_disp.style
                 if _sfmt2: _styled2 = _styled2.format(_sfmt2, na_rep="")
                 if _yc2: _styled2 = _apply_signed_color(_styled2, _yc2)
                 # Owner preference: a real scrollable TABLE on phone too (not a card stack) — it's fine
