@@ -115,16 +115,22 @@ def _is_crypto_ticker(ticker: object) -> bool:
 def _asset_class_label(ticker: object, type_text: object) -> str:
     """Label-free asset-class classifier returning 'crypto'/'etf'/'stocks'. Shared by the
     allocation pie and the crypto-share KPI so app.py and the native app agree on blank-Type
-    / English-CRYPTO / new-coin rows. Precedence (canonical, audit sync-defs): MSTR→stocks,
-    then the forced/crypto-proxy ETFs (IBIT/ETHA/BSOL/QQQ/VOO)→etf BEFORE the crypto test so a
-    crypto-proxy ETF tagged 'קריפטו' still buckets as ETF for the pie, then crypto (broad
-    KNOWN_COINS/-USD heuristic mirroring engine.js isCryptoTicker), then remaining ETFs."""
+    / English-CRYPTO / new-coin rows. Precedence (canonical): MSTR→stocks, then crypto-PROXY
+    ETFs (IBIT/ETHA/BSOL)→crypto so the by-asset-class pie/treemap AGREES with the Crypto-Share
+    KPI (owner 2026-06-25: both count crypto ETFs as crypto — one consistent crypto number), then
+    forced index ETFs (QQQ/VOO)→etf, then crypto (broad KNOWN_COINS/-USD heuristic), then
+    remaining ETFs, else stocks."""
     t = _clean(ticker).upper()
     type_clean = _clean(type_text)
     type_upper = type_clean.upper()
     if t in CHART_STOCK_TICKERS:  # MSTR — leveraged equity proxy overrides crypto sets
         return "stocks"
-    # Forced/crypto-proxy ETFs win over a crypto Type label (canonical ordering).
+    # Crypto-PROXY ETFs (IBIT/ETHA/BSOL) count as CRYPTO everywhere (owner request) — checked
+    # BEFORE the forced-ETF rule so they win; pure index ETFs (QQQ/VOO) still bucket as ETF. This
+    # makes the asset-class pie's Crypto slice equal the 'Crypto Share' KPI (no more two numbers).
+    if t in CRYPTO_SHARE_TICKERS:
+        return "crypto"
+    # Forced index ETFs (QQQ/VOO) win over a crypto Type label (canonical ordering).
     if t in CHART_FORCED_ETF_TICKERS:
         return "etf"
     if (type_clean == "קריפטו") or (type_upper == "CRYPTO") or (t in CHART_CRYPTO_TICKERS) or _is_crypto_ticker(t):
