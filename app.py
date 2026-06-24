@@ -14109,14 +14109,33 @@ def main() -> None:
             alloc_kpi_cols[0].metric(
                 crypto_share_label,
                 f"{float(allocation_payload.get('crypto_share', 0.0)):.2%}",
+                help=tr(
+                    "Crypto value (incl. crypto ETFs such as IBIT) as a share of the whole portfolio.",
+                    "שווי הקריפטו (כולל קרנות-סל קריפטו כמו IBIT) מתוך כלל התיק.",
+                ),
             )
             alloc_kpi_cols[1].metric(
                 btc_portfolio_label,
                 f"{float(allocation_payload.get('btc_share_of_portfolio', 0.0)):.2%}",
+                # The owner asked why this can read e.g. 57% while the BTC treemap tile looks <½: the
+                # metric COMBINES direct BTC + the IBIT Bitcoin ETF, which are two SEPARATE tiles in
+                # the treemap — so no single tile equals this number. Spell that out in the tooltip.
+                help=tr(
+                    "Bitcoin exposure as a share of the WHOLE portfolio — combines your direct BTC and "
+                    "the iShares Bitcoin ETF (IBIT). In the treemap these are two separate tiles "
+                    "(BTC + IBIT), so the combined weight is split across both; no single tile equals this.",
+                    "חשיפת ביטקוין מתוך כל התיק — מאחדת את ההחזקה הישירה ב-BTC ואת קרן הסל IBIT. במפת החום "
+                    "אלה שני מלבנים נפרדים (BTC + IBIT), ולכן המשקל המשולב מתחלק ביניהם — אף מלבן בודד לא "
+                    "שווה למספר הזה.",
+                ),
             )
             alloc_kpi_cols[2].metric(
                 btc_crypto_label,
                 f"{float(allocation_payload.get('btc_share_of_crypto', 0.0)):.2%}",
+                help=tr(
+                    "Bitcoin exposure (direct BTC + IBIT) as a share of your CRYPTO holdings only.",
+                    "חשיפת ביטקוין (BTC ישיר + IBIT) מתוך החזקות הקריפטו בלבד.",
+                ),
             )
             style_metric_cards(border_left_color="#4f46e5", border_radius_px=12, box_shadow=True)
             _space(8)
