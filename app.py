@@ -13286,6 +13286,9 @@ def main() -> None:
                 # renders reliably; the metric-value font lacks it and showed a
                 # tofu box). Values are pure numbers, forced LTR via CSS so the
                 # minus stays on the left in RTL ("-81,369", not "81,369-").
+                # Publish the LIVE total value so the Build-Up chart can anchor its endpoint to the
+                # exact same number (owner: the graph's final value must equal 'Total Value').
+                st.session_state["_pos_live_total"] = float(_tv)
                 _tv_txt = f"{_tv:,.0f}"
                 _tp_txt = f"{_tp:,.0f}"
                 _tr_val = (_tp / _tc_val) if _tc_val > 0 else 0.0
@@ -13946,6 +13949,16 @@ def main() -> None:
                         _value = perf_track["Cum_Value_ILS"]
                         _final_val = float(_value.iloc[-1]) if len(_value) else 0.0
                         _final_cost = float(_cost.iloc[-1]) if len(_cost) else 0.0
+                        # Reconcile the endpoint with the LIVE 'Total Value' KPI so the two numbers
+                        # AGREE (owner). The KPI re-fetches live prices every 20s and uses each ticker's
+                        # quote-currency FX, while this series is a page-load snapshot summed by purchase
+                        # date (undated rows drop out) — so they drift. Scale the cumulative-VALUE line so
+                        # its final point equals the live total; cost is left as the real invested amount,
+                        # so the badge's return % also matches the KPI's 'Total Return'.
+                        _live_total = float(st.session_state.get("_pos_live_total", 0.0) or 0.0)
+                        if _live_total > 0 and _final_val > 0:
+                            _value = _value * (_live_total / _final_val)
+                            _final_val = _live_total
                         _ret = (_final_val / _final_cost - 1.0) if _final_cost else 0.0
                         _up = _final_val >= _final_cost
                         # Whole chart is tinted green/red by the overall result for an at-a-glance read.
