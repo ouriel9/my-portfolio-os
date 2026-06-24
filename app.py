@@ -15910,6 +15910,7 @@ def main() -> None:
                 fig_cc.update_layout(
                     xaxis_tickformat=".0%",
                     xaxis=dict(range=[0, 1.18]),
+                    xaxis_title=tr("Completeness", "שלמות"),
                     yaxis_title="",
                     yaxis=dict(automargin=True),
                     margin=dict(l=150, r=20, t=50, b=20),
@@ -15951,6 +15952,10 @@ def main() -> None:
 
         def _render_recent_data_table(df_src: pd.DataFrame) -> None:
             recent_view, _ = _with_calendar_purchase_date(localize_snapshot_view(df_src, language), language)
+            # HE: Hebraize Latin platform/location cells (Global Prime → גלובל פריים, Cold Wallet →
+            # ארנק קר) so the HE Recent-Data table is one-direction like every other table (tickers
+            # stay Latin). No-op for EN.
+            recent_view = _he_uniformize_columns(recent_view, language)
             signed_cols = [
                 c for c in recent_view.columns
                 if any(token in str(c).lower() for token in ["yield", "return", "תשואה", "pnl", "p/l", "p&l", "רווח"])
@@ -15969,6 +15974,23 @@ def main() -> None:
             for _pc in pct_cols:
                 recent_view[_pc] = recent_view[_pc].map(_to_ratio_for_display_dq)
             recent_fmt: Dict[str, object] = {c: "{:.2%}" for c in pct_cols if c in recent_view.columns}
+            # Clean money/quantity columns: integers show no decimals, fractions trim trailing
+            # zeros — otherwise Buy Price/Cost/Quantity print "850000.000000" / "0.000000".
+            def _recent_numfmt(v: object) -> str:
+                try:
+                    f = float(v)
+                except Exception:
+                    return "" if pd.isna(v) else _clean(v)
+                if not np.isfinite(f):
+                    return ""
+                if f == int(f):
+                    return f"{f:,.0f}"
+                return (f"{f:,.2f}" if abs(f) >= 1 else f"{f:,.4f}").rstrip("0").rstrip(".")
+            for _c in recent_view.columns:
+                if _c in recent_fmt:
+                    continue
+                if pd.to_numeric(recent_view[_c], errors="coerce").notna().mean() >= 0.6:
+                    recent_fmt[_c] = _recent_numfmt
             recent_styled = recent_view.style.format(recent_fmt, na_rep="")
             if signed_cols:
                 recent_styled = _apply_signed_color(recent_styled, signed_cols)
