@@ -472,6 +472,13 @@ VALUE_LABELS = {
         "Winner": {LANG_EN: "Winner", LANG_HE: "מנצח"},
         "Loser": {LANG_EN: "Loser", LANG_HE: "מפסיד"},
     },
+    # The app injects these two Hebrew sentinels into Current_Location regardless of UI
+    # language (_fill_current_location_defaults: closed trade → "נמכר", blank-location
+    # Excellence position → "אקסלנס"). Localize them so the EN table isn't half-Hebrew.
+    "Current_Location": {
+        "נמכר": {LANG_EN: "Sold", LANG_HE: "נמכר"},
+        "אקסלנס": {LANG_EN: "Excellence", LANG_HE: "אקסלנס"},
+    },
 }
 
 
@@ -1130,7 +1137,35 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         color: {metric_label} !important;
         font-size: 0.82rem !important;
         line-height: 1.15 !important;
-        white-space: nowrap !important;
+        /* WRAP long KPI labels (e.g. 'DATA COMPLETENESS', 'DUPLICATE TRADE IDS') instead of truncating
+           them to 'DATA COMPLETENE…' — the cards have a min-height so a 2-line label fits. */
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        height: auto !important;
+    }}
+    /* The wrap must reach the INNER DOM. Streamlit nests the label text inside
+       <div><p>/<div data-testid=stWidgetLabel>, and when help= is set it wraps
+       the label+icon in a flex StyledLabelHelpWrapper that re-imposes nowrap.
+       Push white-space:normal all the way down and let the help row flex-wrap,
+       otherwise long labels still clip to 'DATA COMPLETENE…'. */
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] *,
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] > div,
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] p,
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] [data-testid="stWidgetLabel"] {{
+        white-space: normal !important; overflow: visible !important;
+        text-overflow: clip !important; height: auto !important;
+    }}
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] .stTooltipIcon,
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] [class*="LabelHelpWrapper"],
+    [data-testid="stMetric"] [data-testid="stMetricLabel"] [class*="labelHelpWrapper"] {{
+        flex-wrap: wrap !important; min-width: 0 !important;
+    }}
+    /* Delta line (e.g. '+₪12,345 (+3.2%)') must wrap too, not clip. */
+    [data-testid="stMetric"] [data-testid="stMetricDelta"],
+    [data-testid="stMetric"] [data-testid="stMetricDelta"] * {{
+        white-space: normal !important; overflow: visible !important;
+        text-overflow: clip !important; height: auto !important;
     }}
     [data-testid="stMetric"] [data-testid="stMetricValue"] {{
         color: {metric_text} !important;
@@ -1825,8 +1860,15 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         .pm-card .pm-value {{font-size: 0.82rem !important; line-height: 1.1 !important;}}
         .pm-card .pm-delta {{font-size: 0.58rem !important; margin-top: 0.1rem !important;}}
         [data-testid="stMetricValue"] {{font-size: 0.82rem !important; white-space: nowrap !important;}}
-        [data-testid="stMetricLabel"] {{font-size: 0.62rem !important; line-height: 1.1 !important; min-height: 1.25rem !important;}}
-        [data-testid="stMetricDelta"] {{font-size: 0.58rem !important; min-height: 0.9rem !important;}}
+        /* Re-assert label wrap on mobile (the @media block would otherwise win with
+           nowrap defaults) and give 2-line labels room: min-height 1.25rem→2.4rem. */
+        [data-testid="stMetricLabel"] {{font-size: 0.62rem !important; line-height: 1.1 !important; min-height: 2.4rem !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; height: auto !important;}}
+        [data-testid="stMetricLabel"] *,
+        [data-testid="stMetricLabel"] > div,
+        [data-testid="stMetricLabel"] p {{white-space: normal !important; overflow: visible !important; text-overflow: clip !important;}}
+        [data-testid="stMetricLabel"] [class*="LabelHelpWrapper"],
+        [data-testid="stMetricLabel"] [class*="labelHelpWrapper"] {{flex-wrap: wrap !important; min-width: 0 !important;}}
+        [data-testid="stMetricDelta"] {{font-size: 0.58rem !important; min-height: 0.9rem !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important;}}
         [data-testid="stDataFrame"] {{overflow-x: auto !important; -ms-overflow-style: none; scrollbar-width: none;}}
         [data-testid="stDataFrame"]::-webkit-scrollbar {{display: none !important;}}
         [data-testid="stDataFrame"] table {{font-size: 12px !important;}}
@@ -4261,13 +4303,26 @@ def _render_dataframe_adaptive(
     force_same_render_path: bool = False,
     **kwargs,
 ) -> None:
-    """Render a Styler sized to its CONTENT: every column auto-fits its widest cell/header and the table
-    scrolls sideways when it's wider than the screen — so there is NO dead space from stretched or
-    fixed-width columns (owner: kill the wide-column dead space). Callers that pass width='stretch' are
-    remapped to 'content' for the same reason; pass an explicit column_config to override per-column."""
-    if kwargs.get("width") == "stretch":
-        kwargs["width"] = "content"
-    kwargs.setdefault("width", "content")
+    """Render a Styler with a width that fits the device.
+
+    DESKTOP: the table fills the full container width ('stretch'). A content-sized table
+    floating inside a wide page column looks broken/uncentered (owner: 'on desktop the
+    tables must take the full width, otherwise it looks weird'). The transliteration pass
+    (_he_uniformize_columns) already removed the mixed-language alignment dead-space, so a
+    full-width table no longer shows a stripe of empty space beside one-sided text.
+
+    MOBILE: the table is sized to its CONTENT and scrolls sideways, so every column keeps
+    its real width instead of being crushed into the narrow viewport (owner wants real
+    scrollable tables on phone, off-screen columns are fine)."""
+    if is_mobile:
+        if kwargs.get("width") == "stretch":
+            kwargs["width"] = "content"
+        kwargs.setdefault("width", "content")
+    else:
+        # Desktop: always fill the width (override any 'content' a caller passed).
+        if kwargs.get("width") == "content":
+            kwargs["width"] = "stretch"
+        kwargs.setdefault("width", "stretch")
     st.dataframe(data, **kwargs)
 
 
@@ -8762,6 +8817,11 @@ def render_advanced_analytics(
         pass
 
     score, score_label, score_color = pp_portfolio_health_score(risk_metrics_dict, hhi, var_95)
+    # pp_portfolio_health_score returns an English band key (module-level, no language). Localize
+    # it here so the HE gauge title reads מצוין/מוצק/מאוזן/זהיר/שביר, not 'Balanced'. (audit P0 i18n)
+    if language == LANG_HE:
+        score_label = {"Excellent": "מצוין", "Solid": "מוצק", "Balanced": "מאוזן",
+                       "Cautious": "זהיר", "Fragile": "שביר"}.get(score_label, score_label)
 
     gauge_fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -13616,12 +13676,12 @@ def main() -> None:
                         exposure_styled = exposure_view.style.format(_fmt_map, na_rep="")
                         _color_cols = [c for c in [pnl_col, yield_origin_col, yield_ils_col] if c in exposure_view.columns]
                         exposure_styled = _apply_signed_color(exposure_styled, _color_cols)
-                        # Owner preference: a real TABLE with horizontal scroll on phone too (not a
-                        # card stack) — it's fine that not every column is visible without scrolling.
-                        st.dataframe(exposure_styled, width="content", hide_index=True)
+                        # Desktop: full width. Phone: real TABLE with horizontal scroll (not a
+                        # card stack) — fine that not every column is visible without scrolling.
+                        _render_dataframe_adaptive(exposure_styled, is_mobile, hide_index=True)
                     except Exception:
                         # Last-ditch: plain frame so the table can never silently vanish.
-                        st.dataframe(exposure_view, width="content", hide_index=True)
+                        _render_dataframe_adaptive(exposure_view, is_mobile, hide_index=True)
 
                 if include_watchlist:
                     watchlist_label = tr("TradingView Watchlist", "רשימת מעקב TradingView")
@@ -14282,17 +14342,24 @@ def main() -> None:
             if language == LANG_HE and "Platform" in edit_df.columns:
                 edit_df["Platform"] = edit_df["Platform"].map(_he_display_platform)
 
-            edited_df = st.data_editor(
-                edit_df,
-                width="content",
-                hide_index=True,
-                num_rows="dynamic",
-                key=f"manual_deposits_editor_{deposit_mode}",
-                column_config={
-                    "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
-                    "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%,.2f"),
-                },
-            )
+            # Center the deposits editor on DESKTOP: it has only two columns, so a full-width
+            # stretch would leave a sea of dead space, while a content-width table anchored to
+            # one RTL edge reads as "not centered" (owner). Put it in the middle of a [1,2,1]
+            # split so it sits centered at a comfortable width. On MOBILE it spans full width.
+            _dep_cfg = {
+                "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
+                "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%,.2f"),
+            }
+            _dep_container = st.container() if is_mobile else st.columns([1, 2, 1])[1]
+            with _dep_container:
+                edited_df = st.data_editor(
+                    edit_df,
+                    width="stretch",
+                    hide_index=True,
+                    num_rows="dynamic",
+                    key=f"manual_deposits_editor_{deposit_mode}",
+                    column_config=_dep_cfg,
+                )
 
             edited_rows = edited_df.to_dict(orient="records") if isinstance(edited_df, pd.DataFrame) else []
             # Reverse the Hebraized platform back to canonical English before storing/syncing so deposits
@@ -14373,7 +14440,11 @@ def main() -> None:
                 if legacy_current_price_cols:
                     tx_view = tx_view.drop(columns=legacy_current_price_cols, errors="ignore")
 
-                tx_view = tx_view.replace({"#VALUE!": "נמכר", "VALUE": "נמכר", "#VALUE": "נמכר"})
+                # Closed positions have no live price → the sheet leaves a #VALUE! error in the
+                # price/value cells. Show the localized "Sold"/"נמכר" instead of a raw spreadsheet
+                # error (and not a hard-coded Hebrew word in the EN view). (audit P0 i18n leak)
+                _sold_lbl = tr("Sold", "נמכר")
+                tx_view = tx_view.replace({"#VALUE!": _sold_lbl, "VALUE": _sold_lbl, "#VALUE": _sold_lbl})
 
                 is_open_only = False
                 if "Status" in tx_view.columns:
@@ -15809,7 +15880,11 @@ def main() -> None:
                     non_empty = int(pd.to_numeric(s, errors="coerce").notna().sum())
                 else:
                     non_empty = int((~s.map(lambda v: _clean(v).lower()).isin(_PLACEHOLDERS)).sum())
-                col_rows.append({"Column": str(c), "Completeness": non_empty / col_total if col_total else 0.0})
+                # Friendly axis label: localized name where available, else snake_case → spaced words
+                # (so 'Event_Type'/'Origin_Buy_Price' read cleanly instead of as raw DB columns).
+                _loc = localize_column_name(str(c), language)
+                _clabel = _loc if _loc != str(c) else str(c).replace("_", " ")
+                col_rows.append({"Column": _clabel, "Completeness": non_empty / col_total if col_total else 0.0})
             col_df = pd.DataFrame(col_rows).sort_values("Completeness", ascending=True)
             try:
                 fig_cc = px.bar(
@@ -15914,8 +15989,12 @@ def main() -> None:
         status_counts_view = status_counts.copy()
         status_counts_view["Status"] = status_counts_view["Status"].map(lambda v: VALUE_LABELS["Status"].get(_clean(v), {}).get(language, _clean(v)))
         status_counts_view = status_counts_view.rename(columns={"Status": SNAPSHOT_HEADERS["Status"][language], "count": tr("Count", "כמות")})
-        st.dataframe(status_counts_view)
-        fig = px.pie(status_counts, names="Status", values="count", title=tr("Trade Status Distribution", "פיזור סטטוסי עסקאות"), template=template)
+        _render_dataframe_adaptive(status_counts_view, is_mobile, hide_index=True)
+        # Localize the pie slices too: feed the SAME mapped labels so the EN legend reads
+        # Open/Closed, not the canonical Hebrew פתוח/סגור. (audit P0 i18n leak)
+        status_counts_pie = status_counts.copy()
+        status_counts_pie["Status"] = status_counts_pie["Status"].map(lambda v: VALUE_LABELS["Status"].get(_clean(v), {}).get(language, _clean(v)))
+        fig = px.pie(status_counts_pie, names="Status", values="count", title=tr("Trade Status Distribution", "פיזור סטטוסי עסקאות"), template=template)
         st.plotly_chart(_apply_plotly_theme(fig, is_dark, is_mobile), theme="streamlit", width="stretch")
 
         st.subheader(tr("Recent Data", "נתונים אחרונים"))
