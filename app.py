@@ -13550,6 +13550,27 @@ def main() -> None:
                                       else "<b>%{label}</b><br>%{customdata[0]}"),
                         textposition="middle center",
                     )
+                    # PER-TILE font size: a BIG tile gets a BIG ticker, a tiny tile a small one (owner:
+                    # "ככל שריבוע גדול יותר הטיקר יהיה גדול יותר"). uniformtext (removed below) forced ONE
+                    # size — the smallest tile's fit — so even huge tiles showed micro text. Scale each
+                    # node's font by sqrt(value/maxValue) (sqrt because tile AREA ∝ value, so side ∝ sqrt),
+                    # clamped to [floor, cap]. floor = the old uniform size so tiny tiles still show their %.
+                    try:
+                        _tvals = list(fig_tree.data[0].values or [])
+                        _vmax = max([float(v) for v in _tvals if v is not None and pd.notna(v)] or [1.0])
+                        _t_floor = 4.0 if is_mobile else 7.0
+                        _t_cap = 22.0 if is_mobile else 34.0
+                        _tsizes = []
+                        for _v in _tvals:
+                            try:
+                                _frac = (float(_v) / _vmax) ** 0.5 if (_vmax > 0 and _v is not None and pd.notna(_v)) else 0.0
+                            except Exception:
+                                _frac = 0.0
+                            _tsizes.append(round(_t_floor + (_t_cap - _t_floor) * max(0.0, min(1.0, _frac)), 1))
+                        if _tsizes:
+                            fig_tree.update_traces(textfont=dict(size=_tsizes))
+                    except Exception:
+                        pass
                     # On mobile: move colorbar below the chart to free horizontal space
                     if is_mobile:
                         tree_colorbar = dict(
@@ -13565,11 +13586,9 @@ def main() -> None:
                     fig_tree.update_layout(
                         margin=tree_margin,
                         coloraxis_colorbar=tree_colorbar,
-                        # mode="show" → render the label (incl. the %) on EVERY tile, shrinking it to
-                        # fit even a tiny tile, instead of hiding it. (owner request: % in every tile)
-                        # Lower the mobile floor to 4px so the NARROWEST right-edge tiles (INTC/DOGE) shrink
-                        # enough to fit inside the tile instead of spilling past the plot's right boundary.
-                        uniformtext=dict(minsize=4 if is_mobile else 6, mode="show"),
+                        # NB: no uniformtext here — it would force a single size across all tiles (the
+                        # smallest tile's fit) and defeat the per-tile sizing set above. Each tile now
+                        # carries its own font size (big tile = big ticker, tiny tile = small but shown).
                     )
                     st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
                     if is_mobile:
