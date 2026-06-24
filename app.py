@@ -482,8 +482,28 @@ VALUE_LABELS = {
 }
 
 
+# Audit-trail / internal columns that surface in the Data-Quality completeness chart but aren't
+# in COLUMN_LABELS or SNAPSHOT_HEADERS — give them Hebrew so the HE chart isn't half-English.
+_EXTRA_COLUMN_LABELS = {
+    "Action": {LANG_EN: "Action", LANG_HE: "פעולה"},
+    "Event_Type": {LANG_EN: "Event Type", LANG_HE: "סוג אירוע"},
+    "Record_Source": {LANG_EN: "Record Source", LANG_HE: "מקור רשומה"},
+}
+
+
 def localize_column_name(col: str, language: str) -> str:
-    raw = COLUMN_LABELS[col][language] if col in COLUMN_LABELS else col
+    # Precedence: COLUMN_LABELS (the canonical UI labels) → SNAPSHOT_HEADERS (snapshot/raw sheet
+    # columns like Current_Location/Status/Quantity that otherwise leak English into the HE view) →
+    # the internal-columns map → the raw name. COLUMN_LABELS wins on overlapping keys so existing
+    # table headers are unchanged.
+    if col in COLUMN_LABELS:
+        raw = COLUMN_LABELS[col][language]
+    elif col in SNAPSHOT_HEADERS:
+        raw = SNAPSHOT_HEADERS[col][language]
+    elif col in _EXTRA_COLUMN_LABELS:
+        raw = _EXTRA_COLUMN_LABELS[col][language]
+    else:
+        raw = col
     return _flip_currency_header_order(raw)
 
 
