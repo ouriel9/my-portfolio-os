@@ -14702,8 +14702,11 @@ def main() -> None:
                     return {"\u05e2\u05dc\u05d5\u05ea \u05e9\u05e7\u05dc\u05d9\u05ea": "\u05e2\u05dc\u05d5\u05ea ILS"}.get(c, c)
 
                 def _is_hid(cn: object) -> bool:
+                    # Owner request (2026-06-25): SHOW the per-unit buy price ("\u05e9\u05e2\u05e8 \u05e7\u05e0\u05d9\u05d9\u05d4" / "Buy Price",
+                    # field Origin_Buy_Price) in the per-trade table \u2014 it was previously hidden here. Only the
+                    # redundant "sell status" columns stay hidden.
                     low = re.sub(r"\s+", " ", re.sub(r"\s*\(\d+\)$", "", _clean(cn)).lower().replace("_", " ").replace("-", " ")).strip()
-                    return low in {"origin buy price", "buy price", "\u05e9\u05e2\u05e8 \u05e7\u05e0\u05d9\u05d9\u05d4", "\u05e9\u05e2\u05e8 \u05e7\u05e0\u05d9\u05d4", "sell status", "sale status", "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05de\u05db\u05d9\u05e8\u05d4"}
+                    return low in {"sell status", "sale status", "\u05e1\u05d8\u05d8\u05d5\u05e1 \u05de\u05db\u05d9\u05e8\u05d4"}
 
                 def _oo_hid(cn: object) -> bool:
                     c = _clean(cn)
@@ -15360,7 +15363,7 @@ def main() -> None:
         status_filter = st.multiselect(tr("Status filter", "סינון סטטוס"), sorted([s for s in trade_view["Status"].dropna().astype(str).unique() if s]), default=[], placeholder=tr("Choose statuses…", "בחר סטטוסים…"))
         if status_filter:
             trade_view = trade_view[trade_view["Status"].isin(status_filter)]
-        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Current_Location", "Platform", "Type", "Ticker", "Quantity", "Current_Asset_Value_Display", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
+        preview_cols = [c for c in ["Trade_ID", "Purchase_Date", "Current_Location", "Platform", "Type", "Ticker", "Quantity", "Origin_Buy_Price", "Current_Asset_Value_Display", "Cost_Origin", "Cost_ILS", "Status", "validation_status"] if c in trade_view.columns]
         if preview_cols:
             sort_cols = [c for c in ["Purchase_Date", "Ticker"] if c in trade_view.columns]
             if sort_cols:
