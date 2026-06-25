@@ -5456,15 +5456,20 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
         elif fx > 0 and spot_usd > 0:
             estimated_asset_qty = direct_qty + (indirect_ils / fx / spot_usd)
 
+        # A coin the user doesn't hold (no direct + no ETF) has nothing relevant to show — emit NaN so
+        # the table renders a neutral em-dash "—" (na_rep) instead of a wall of literal 0s. (owner:
+        # "anywhere not relevant prefer a dash")
+        _held = (direct_qty + etf_qty) > 1e-9
+        _na = float("nan")
         concentration_rows.append(
             {
                 "Asset": asset,
-                "Direct_Qty": direct_qty,
-                "Direct_ILS": direct_val,
-                "ETF_Qty": etf_qty,
-                "ETF_ILS": etf_val,
-                "Total_Exposure_ILS": direct_val + etf_val,
-                "Estimated_Coin_Qty": estimated_asset_qty,
+                "Direct_Qty": direct_qty if _held else _na,
+                "Direct_ILS": direct_val if _held else _na,
+                "ETF_Qty": etf_qty if _held else _na,
+                "ETF_ILS": etf_val if _held else _na,
+                "Total_Exposure_ILS": (direct_val + etf_val) if _held else _na,
+                "Estimated_Coin_Qty": estimated_asset_qty if _held else _na,
             }
         )
 
