@@ -12724,7 +12724,10 @@ def main() -> None:
             ".pp-mrow{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:.9rem;border-top:1px solid " + _crb + ";}"
             ".pp-mrow:first-of-type{border-top:none;}.pp-mrow .k{opacity:.72;}"
             ".pp-mrow .v{font-weight:700;unicode-bidi:plaintext;text-align:start;}"
-            ".pp-mrow .v.pos{color:" + _pos + ";}.pp-mrow .v.neg{color:" + _neg + ";}"
+            # !important so the green/red P&L colour wins over the markdown-container neutral text
+            # colour (which is more specific and was leaving Reports Winner/Loser + per-platform P/L
+            # white on the phone despite the .pos/.neg class being applied). (audit)
+            ".pp-mrow .v.pos{color:" + _pos + " !important;}.pp-mrow .v.neg{color:" + _neg + " !important;}"
         )
     # AUTHORITATIVE sidebar Settings-tab 2x2 wrap (appended LAST in the _crit_css <style>, so it wins
     # the cascade over the global single-row tab rule at app.py:1209 which forces flex:1 1 0% + nowrap
@@ -13575,11 +13578,12 @@ def main() -> None:
                                 _r = (float(_v) / _vmax) if (_vmax > 0 and _v is not None and pd.notna(_v)) else 0.0
                             except Exception:
                                 _r = 0.0
-                            # PHONE: the tiniest tiles (DOGE/INTC, <5% of total) squarify into THIN slivers
-                            # whose WIDTH is far smaller than sqrt(area) implies, so sqrt-sized text overflows
-                            # the sliver and clips at the plot edge ('INTC'→'INTO', the % sliced). Pin those to
-                            # the floor so 'TICKER<br>-NN.N%' fits without a mid-word clip; big tiles still scale.
-                            if is_mobile and 0.0 < _r < 0.05:
+                            # PHONE: the smallest tiles squarify into THIN slivers whose WIDTH is far less than
+                            # sqrt(area) implies, so sqrt-sized text overflows and clips at the plot edge
+                            # ('INTC'→'INTO', % sliced). _r is the tile's share of the BIGGEST tile (data[0].values
+                            # has no root value, so _vmax is the max LEAF) — pin every tile under ~20% of the
+                            # biggest to the floor so 'TICKER<br>-NN.N%' fits the sliver; big/mid tiles still scale.
+                            if is_mobile and 0.0 < _r < 0.2:
                                 _sz = _t_floor
                             else:
                                 _sz = _t_floor + (_t_cap - _t_floor) * max(0.0, min(1.0, _r ** 0.5))
