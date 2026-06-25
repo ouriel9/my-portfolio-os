@@ -5689,11 +5689,15 @@ def _normalize_manual_deposit_rows(rows: List[Dict[str, object]], default_platfo
         platform = _clean(row.get("Platform", ""))
         if not platform:
             continue
+        # Canonicalize an HE-display name back to its English store form (ביטוסי → Bit2C) BEFORE
+        # keying, so a row stored as "Bit2C" and one typed/displayed as "ביטוסי" collapse into ONE
+        # platform instead of showing as a duplicate. English/unknown names pass through unchanged.
+        platform = _clean(_he_store_platform(platform)) or platform
         key = platform.casefold()
         by_platform[key] = by_platform.get(key, 0.0) + _num(row.get("Manual_Deposit_ILS", 0.0))
         canon.setdefault(key, platform)
     for platform in default_platforms:
-        p = _clean(platform)
+        p = _clean(_he_store_platform(_clean(platform))) or _clean(platform)
         if p and p.casefold() not in by_platform:
             by_platform[p.casefold()] = 0.0
             canon[p.casefold()] = p
@@ -14512,8 +14516,9 @@ def main() -> None:
             _dep_m1.metric(tr("Total Manual Deposits", "סה\"כ הפקדות ידניות"), f"{total_manual:,.2f} ₪")
             _dep_m2.metric(tr("Funded Platforms", "פלטפורמות ממומנות"), f"{_dep_funded}")
 
-            action_cols = st.columns([1, 1, 3])
-            if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}", type="primary"):
+            # Save + Reload side by side as an equal pair filling the row (owner: "אחד ליד השני").
+            action_cols = st.columns(2)
+            if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}", width="stretch", type="primary"):
                 if not can_sync_remote:
                     st.error(tr(
                         "Google Sheets connection required to save deposits. Configure a valid Web App URL.",
@@ -14532,7 +14537,7 @@ def main() -> None:
                         msg = remote_msg or tr("Unknown sync error", "שגיאת סנכרון לא ידועה")
                         st.error(f"{tr('Push to Google failed — no changes saved.', 'הדחיפה לגוגל נכשלה — לא נשמר שום שינוי.')}: {msg}")
 
-            if action_cols[1].button(tr("Reload Cloud", "טען מהענן"), key=f"manual_deposits_reload_{deposit_mode}"):
+            if action_cols[1].button(tr("Reload Cloud", "טען מהענן"), key=f"manual_deposits_reload_{deposit_mode}", width="stretch"):
                 if not can_sync_remote:
                     st.info(tr("Cloud sync is unavailable (missing valid Web App URL or token).", "סנכרון ענן לא זמין (חסר Web App URL תקין או טוקן)."))
                 else:
