@@ -12765,8 +12765,14 @@ def main() -> None:
             # LEFTMOST tab and 'תנועות ועסקאות' the rightmost — matching the phone. The desktop default in the
             # RTL page rendered them RTL (Overview on the right). Scoped to stMain so the sidebar 2x2 stays RTL.
             # (The swipe is index-based so LTR order keeps swipe-left → next.)
+            # Robust against Streamlit DOM/version changes: target the tab-list via BOTH the data-baseweb
+            # attr AND the stable [role='tablist'] / .stTabs class, and force flex-direction:row so the
+            # RTL page can't lay the tabs right-to-left (which put 'סקירה'/Overview on the right). (owner)
             "html body [data-testid='stMain'] [data-testid='stTabs'] [data-baseweb='tab-list'],"
-            "html body [data-testid='stMain'] [data-testid='stTabs'] [role='tablist']{direction:ltr !important;}"
+            "html body [data-testid='stMain'] [data-testid='stTabs'] [role='tablist'],"
+            "html body [data-testid='stMain'] .stTabs [role='tablist'],"
+            "html body [data-testid='stMain'] div[data-baseweb='tab-list']"
+            "{direction:ltr !important; flex-direction:row !important;}"
         )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
