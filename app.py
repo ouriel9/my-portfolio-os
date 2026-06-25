@@ -14459,16 +14459,6 @@ def main() -> None:
             current_rows = _normalize_manual_deposit_rows(st.session_state.get(rows_state_key, []), default_platforms)
             st.session_state[rows_state_key] = current_rows
 
-            # LTR-isolate the Latin source token so the Hebrew sentence's closing ")." doesn't reorder
-            # to ".(demo_seed" in RTL.
-            _src_tok = "⁦" + str(st.session_state.get(source_state_key, "local")) + "⁩"
-            st.caption(
-                tr(
-                    f"Manual deposits sync with the Google Sheet and every app — just like trades (source: {_src_tok}).",
-                    f"הפקדות ידניות מסונכרנות עם הגוגל שיט וכל האפליקציות — בדיוק כמו עסקאות (מקור: {_src_tok}).",
-                )
-            )
-
             edit_df = pd.DataFrame(current_rows)
             if edit_df.empty:
                 edit_df = pd.DataFrame([{"Platform": "", "Manual_Deposit_ILS": 0.0}])
