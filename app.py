@@ -5431,7 +5431,12 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     spot_by_asset = {"BTC": btc_usd, "ETH": eth_usd, "SOL": sol_usd}
     concentration_rows: List[Dict[str, float]] = []
     for asset, etf in asset_map.items():
-        direct = work[(work["Ticker"] == asset) & (work["Type"] == "קריפטו")]
+        # BUG FIX (owner: "ETH shows 0 but I HAVE ETH"): the old filter required Type == "קריפטו"
+        # EXACTLY, so an ETH row tagged 'CRYPTO'/blank/ticker-classified was dropped → 0 holdings.
+        # Match by ticker + the BROAD crypto classifier (BTC/ETH/SOL are always crypto), like the
+        # native engine which matches by ticker only. (mirrors _asset_class_label)
+        direct = work[(work["Ticker"] == asset)
+                      & work.apply(lambda r: _asset_class_label(r.get("Ticker", ""), r.get("Type", "")) == "crypto", axis=1)]
         etf_df = work[work["Ticker"] == etf]
         direct_qty = float(direct["Quantity"].sum())
         direct_val = float(direct["Current_Value_ILS"].sum())
@@ -14115,10 +14120,10 @@ def main() -> None:
                                 )
                         except Exception:
                             pass
-                    # Mirror: render only the exposure TABLE — the heavy 26-symbol
-                    # watchlist + TradingView chart render once in the primary section
-                    # so the dashboard never loads two iframes at once. (audit double-render)
-                    render_exposure_section(_ov_summary, widget_prefix="overview_body", include_watchlist=False)
+                    # Owner request: show the TradingView WATCHLIST at the bottom of the Overview tab too
+                    # (it already sits at the bottom of the Allocation tab). Its widget keys are prefixed
+                    # ("overview_body_*") so they don't collide with the Allocation copy ("overview_*").
+                    render_exposure_section(_ov_summary, widget_prefix="overview_body", include_watchlist=True)
 
                 _ov_exposure_fragment()
 
@@ -15963,7 +15968,21 @@ def main() -> None:
             _PLACEHOLDERS = {"", "nat", "none", "nan", "null", "—", "-", "עדיין פתוח"}
             col_total = len(df)
             col_rows = []
-            for c in [c for c in df.columns if not str(c).startswith("_") and c not in _SALE_ONLY]:
+            def _is_sale_only_col(c) -> bool:
+                # SALE columns (sale-yield / sale-price / sale-date) are filled ONLY when a position is
+                # SOLD, so for a mostly-open book they read low completeness and confuse — exclude them.
+                # The canonical set misses the SHEET's Hebrew-named ones (e.g. 'תשואה במכירה (₪)'), so
+                # also match by keyword in either language. (owner: "why is ILS yield-at-sale low")
+                if c in _SALE_ONLY:
+                    return True
+                he = str(c)
+                n = he.lower().replace("_", " ")
+                if ("מכירה" in he) and any(k in he for k in ("תשואה", "מחיר", "שער", "תאריך")):
+                    return True
+                if (("sell" in n) or ("sale" in n)) and any(k in n for k in ("yield", "return", "price", "date")):
+                    return True
+                return False
+            for c in [c for c in df.columns if not str(c).startswith("_") and not _is_sale_only_col(c)]:
                 s = df[c]
                 if s.dtype.kind in "biufc":
                     non_empty = int(pd.to_numeric(s, errors="coerce").notna().sum())
