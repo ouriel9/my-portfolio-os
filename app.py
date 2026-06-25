@@ -5203,11 +5203,11 @@ def _render_df_mobile_cards(df, fmt_map=None, signed_cols=()) -> None:
             v = r[c]
             vs = _fmt_cell(v, fmt_map.get(c))
             cls = ""
-            if c in signed:
-                try:
-                    cls = " pos" if float(v) >= 0 else " neg"
-                except Exception:
-                    cls = ""
+            if c in signed and vs is not None and str(vs).strip() not in ("", "—"):
+                # Parse the sign from the DISPLAYED value (handles formatted strings like '221.99%',
+                # '-1,683', '₪12,345', '(45)') — float(v) used to throw on these and silently drop the
+                # green/red colour, so Reports Winner/Loser + per-platform P&L read neutral white. (audit)
+                cls = " neg" if _num(vs) < 0 else " pos"
             # show a neutral em-dash for an empty cell (e.g. a blank 'Current Location') instead of a void.
             parts.append('<div class="pp-mrow"><span class="k">%s</span><span class="v%s">%s</span></div>' % (_esc(c), cls, _esc(vs if (vs is not None and str(vs).strip() != "") else "—")))
         parts.append('</div>')
@@ -13567,15 +13567,23 @@ def main() -> None:
                     try:
                         _tvals = list(fig_tree.data[0].values or [])
                         _vmax = max([float(v) for v in _tvals if v is not None and pd.notna(v)] or [1.0])
-                        _t_floor = 4.0 if is_mobile else 7.0
+                        _t_floor = 3.0 if is_mobile else 7.0
                         _t_cap = 22.0 if is_mobile else 34.0
                         _tsizes = []
                         for _v in _tvals:
                             try:
-                                _frac = (float(_v) / _vmax) ** 0.5 if (_vmax > 0 and _v is not None and pd.notna(_v)) else 0.0
+                                _r = (float(_v) / _vmax) if (_vmax > 0 and _v is not None and pd.notna(_v)) else 0.0
                             except Exception:
-                                _frac = 0.0
-                            _tsizes.append(round(_t_floor + (_t_cap - _t_floor) * max(0.0, min(1.0, _frac)), 1))
+                                _r = 0.0
+                            # PHONE: the tiniest tiles (DOGE/INTC, <5% of total) squarify into THIN slivers
+                            # whose WIDTH is far smaller than sqrt(area) implies, so sqrt-sized text overflows
+                            # the sliver and clips at the plot edge ('INTC'→'INTO', the % sliced). Pin those to
+                            # the floor so 'TICKER<br>-NN.N%' fits without a mid-word clip; big tiles still scale.
+                            if is_mobile and 0.0 < _r < 0.05:
+                                _sz = _t_floor
+                            else:
+                                _sz = _t_floor + (_t_cap - _t_floor) * max(0.0, min(1.0, _r ** 0.5))
+                            _tsizes.append(round(_sz, 1))
                         if _tsizes:
                             fig_tree.update_traces(textfont=dict(size=_tsizes))
                     except Exception:
