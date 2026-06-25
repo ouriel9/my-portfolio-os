@@ -7382,10 +7382,8 @@ def apply_premium_polish(language: str = "עברית",
         _pp_inject_help_shim()
     except Exception:
         pass
-    try:
-        _pp_inject_loading_bar()
-    except Exception:
-        pass
+    # Owner: REMOVED the top loading bar — it didn't behave well (parked / janky). Leaving the call
+    # out entirely so it never renders.
 
 
 def _pp_inject_help_shim() -> None:
