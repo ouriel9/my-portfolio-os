@@ -8694,7 +8694,7 @@ def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
     c1, c2, c3 = st.columns(3)
     with c1:
         st.download_button(
-            ("⬇️ הורדה CSV" if is_he else "⬇️ CSV"),
+            ("↓ הורדה CSV" if is_he else "↓ CSV"),
             data=df.to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{label_prefix}_{ts}.csv",
             mime="text/csv",
@@ -8702,7 +8702,7 @@ def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
         )
     with c2:
         st.download_button(
-            ("⬇️ הורדה JSON" if is_he else "⬇️ JSON"),
+            ("↓ הורדה JSON" if is_he else "↓ JSON"),
             data=df.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
             file_name=f"{label_prefix}_{ts}.json",
             mime="application/json",
@@ -8712,7 +8712,7 @@ def pp_render_export_bar(df: pd.DataFrame, label_prefix: str = "portfolio",
         xls = pp_dataframe_to_excel_bytes(df, sheet_name=label_prefix)
         if xls:
             st.download_button(
-                ("⬇️ הורדה Excel" if is_he else "⬇️ Excel"),
+                ("↓ הורדה Excel" if is_he else "↓ Excel"),
                 data=xls,
                 file_name=f"{label_prefix}_{ts}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -12577,9 +12577,13 @@ def main() -> None:
         "html body [data-testid='stMetric']{background:" + _mc_bg + " !important;"
         "border:1px solid " + _mc_bd + " !important;border-radius:14px !important;"
         # Equal card height so the Closed-Positions 'N open' delta no longer makes that
-        # card taller than its three siblings — all four bottom edges align.
+        # card taller than its three siblings — all four bottom edges align. TOP-anchor the
+        # content (NOT center): a no-delta card (Return) was centering its lone value lower
+        # than the paired with-delta card (Closed Positions) whose value sits at the top — so
+        # the two primary numbers in a row landed at different y. flex-start + the 2.4em label
+        # reserve below makes EVERY card start its value at the same y → shared baseline.
         "min-height:108px !important;display:flex !important;flex-direction:column !important;"
-        "justify-content:center !important;"
+        "justify-content:flex-start !important;"
         "box-shadow:" + _mc_sh + " !important;}"
         # DOUBLE-STRIPE fix (#7): the design overlay draws a 3px indigo→cyan
         # gradient bar via ::before on the LEFT. With our own single border
@@ -12688,6 +12692,16 @@ def main() -> None:
         # the RIGHT, not the left. direction:rtl on the metrics row flips the
         # flex column order.
         _crit_css += ("html body [data-testid='stHorizontalBlock']:has([data-testid='stMetric']){direction:rtl !important;}")
+        # RTL expander disclosure caret. In EN the caret sits on the LEADING (left) edge right
+        # next to the label; in HE the leading edge is the RIGHT, but Streamlit kept the caret on
+        # the LEFT while the Hebrew label is right-aligned → a detached gap between them. Reverse
+        # the summary row so the caret moves to the RIGHT (adjacent to the Hebrew text) and mirror
+        # the closed-state caret so it points LEFT toward the RTL reading direction. MAIN content
+        # only — the sidebar caret is handled separately (see notes ~line 12405).
+        _crit_css += (
+            "html body [data-testid='stMain'] [data-testid='stExpander'] summary{flex-direction:row-reverse !important;}"
+            "html body [data-testid='stMain'] [data-testid='stExpander'] summary svg{transform:scaleX(-1) !important;}"
+        )
     # Delta pill: NEUTRAL background + Streamlit's NATIVE sign-based text color
     # (green = gain, red = loss). The old rule forced green text+background on EVERY
     # delta, so losses showed up green — a critical misread of P&L. (audit C6)
@@ -13797,7 +13811,7 @@ def main() -> None:
                             ("macro", "🌐 " + tr("Macro", "מאקרו")),
                         ]
                         _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
-                        _wl_ncol = 1 if is_mobile else 4  # phone: one full-width column (2-up clustered into uneven pairs + a lone last button)
+                        _wl_ncol = 2 if is_mobile else 4  # phone: 2-up grid (tickers are short — BTCUSD/ETHA) so a chip-style pair halves the watchlist's vertical run on Overview+Allocation
                         for _ti, (catkey, _lbl) in enumerate(_wl_cats):
                             with _wl_tabs[_ti]:
                                 part = watch_df[watch_df["Category"] == category_labels[catkey]]
@@ -14489,7 +14503,14 @@ def main() -> None:
             st.session_state[rows_state_key] = normalized_rows
 
             total_manual = float(sum(_num(r.get("Manual_Deposit_ILS", 0.0)) for r in normalized_rows))
-            st.metric(tr("Total Manual Deposits", "סה\"כ הפקדות ידניות"), f"{total_manual:,.2f} ₪")
+            # Pair the total with a contextual count so the metric is NOT a lone full-width card
+            # with an empty two-thirds slab (the value clustered at the leading edge). Two balanced
+            # cards fill the row; in HE the stHorizontalBlock rule reverses order so the Total sits
+            # on the right (leading) edge.
+            _dep_funded = sum(1 for r in normalized_rows if _num(r.get("Manual_Deposit_ILS", 0.0)) > 0)
+            _dep_m1, _dep_m2 = st.columns(2)
+            _dep_m1.metric(tr("Total Manual Deposits", "סה\"כ הפקדות ידניות"), f"{total_manual:,.2f} ₪")
+            _dep_m2.metric(tr("Funded Platforms", "פלטפורמות ממומנות"), f"{_dep_funded}")
 
             action_cols = st.columns([1, 1, 3])
             if action_cols[0].button(tr("Save Deposits", "שמור הפקדות"), key=f"manual_deposits_save_{deposit_mode}", type="primary"):
@@ -14795,7 +14816,7 @@ def main() -> None:
                 _ec1, _ec2, _ec3 = st.columns(3)
                 with _ec1:
                     st.download_button(
-                        ("⬇️ הורדה CSV" if _is_he_tx else "⬇️ CSV"),
+                        ("↓ הורדה CSV" if _is_he_tx else "↓ CSV"),
                         data=_dv.to_csv(index=False).encode("utf-8-sig"),
                         file_name=f"{_export_prefix}_{_ts_tx}.csv",
                         mime="text/csv",
@@ -14804,7 +14825,7 @@ def main() -> None:
                     )
                 with _ec2:
                     st.download_button(
-                        ("⬇️ הורדה JSON" if _is_he_tx else "⬇️ JSON"),
+                        ("↓ הורדה JSON" if _is_he_tx else "↓ JSON"),
                         data=_dv.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
                         file_name=f"{_export_prefix}_{_ts_tx}.json",
                         mime="application/json",
@@ -14815,7 +14836,7 @@ def main() -> None:
                     _xls_tx = pp_dataframe_to_excel_bytes(_dv, sheet_name=_export_prefix)
                     if _xls_tx:
                         st.download_button(
-                            ("⬇️ הורדה Excel" if _is_he_tx else "⬇️ Excel"),
+                            ("↓ הורדה Excel" if _is_he_tx else "↓ Excel"),
                             data=_xls_tx,
                             file_name=f"{_export_prefix}_{_ts_tx}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
