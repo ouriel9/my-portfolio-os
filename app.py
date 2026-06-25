@@ -416,26 +416,26 @@ COLUMN_LABELS = {
     "Ticker": {LANG_EN: "Ticker", LANG_HE: "טיקר"},
     "Current_Price": {LANG_EN: "Current Price", LANG_HE: "שער נוכחי"},
     "Open_Qty": {LANG_EN: "Active Quantity", LANG_HE: "כמות פעילה"},
-    "Cost_ILS": {LANG_EN: "Total Cost (ILS)", LANG_HE: "עלות כוללת (₪)"},
-    "Value_ILS": {LANG_EN: "Current Value (ILS)", LANG_HE: "שווי עדכני (₪)"},
-    "Net_PnL_ILS": {LANG_EN: "Net P/L (ILS)", LANG_HE: "רווח/הפסד נטו (₪)"},
+    "Cost_ILS": {LANG_EN: "Total Cost (₪)", LANG_HE: "עלות כוללת (₪)"},
+    "Value_ILS": {LANG_EN: "Current Value (₪)", LANG_HE: "שווי עדכני (₪)"},
+    "Net_PnL_ILS": {LANG_EN: "Net P/L (₪)", LANG_HE: "רווח/הפסד נטו (₪)"},
     "Yield_Origin": {LANG_EN: "Net Return (Origin)", LANG_HE: "תשואה נטו (מקור)"},
-    "Yield_ILS": {LANG_EN: "Net Return (ILS)", LANG_HE: "תשואה נטו (₪)"},
+    "Yield_ILS": {LANG_EN: "Net Return (₪)", LANG_HE: "תשואה נטו (₪)"},
     "Asset": {LANG_EN: "Target Asset", LANG_HE: "מטבע יעד"},
     # Compact English labels — fit Streamlit's default column widths so
     # the Crypto Concentration table headers don't get truncated mid-word.
     "Direct_Qty": {LANG_EN: "Direct Qty", LANG_HE: "ישיר (כמות)"},
-    "Direct_ILS": {LANG_EN: "Direct (ILS)", LANG_HE: "ישיר (₪)"},
+    "Direct_ILS": {LANG_EN: "Direct (₪)", LANG_HE: "ישיר (₪)"},
     "ETF_Qty": {LANG_EN: "ETF Qty", LANG_HE: "קרן סל (יח')"},
-    "ETF_ILS": {LANG_EN: "ETF (ILS)", LANG_HE: "דרך קרן סל (₪)"},
-    "Total_Exposure_ILS": {LANG_EN: "Total (ILS)", LANG_HE: "סה\"כ חשיפה (₪)"},
+    "ETF_ILS": {LANG_EN: "ETF (₪)", LANG_HE: "דרך קרן סל (₪)"},
+    "Total_Exposure_ILS": {LANG_EN: "Total (₪)", LANG_HE: "סה\"כ חשיפה (₪)"},
     "Estimated_Coin_Qty": {LANG_EN: "Coin qty (incl. ETF)", LANG_HE: "מטבע מוערך (כולל סל)"},
     "Category": {LANG_EN: "Category", LANG_HE: "סוג"},
     "Yield": {LANG_EN: "Return", LANG_HE: "תשואה"},
     "Platform": {LANG_EN: "Platform", LANG_HE: "פלטפורמה"},
-    "Net_Investment_ILS": {LANG_EN: "Net Investment (ILS)", LANG_HE: "עלות שקלית"},
-    "Current_Value_ILS": {LANG_EN: "Current Value (ILS)", LANG_HE: "שווי שקלי"},
-    "PnL_ILS": {LANG_EN: "Net P/L (ILS)", LANG_HE: "רווח/הפסד"},
+    "Net_Investment_ILS": {LANG_EN: "Net Investment (₪)", LANG_HE: "עלות שקלית"},
+    "Current_Value_ILS": {LANG_EN: "Current Value (₪)", LANG_HE: "שווי שקלי"},
+    "PnL_ILS": {LANG_EN: "Net P/L (₪)", LANG_HE: "רווח/הפסד"},
 }
 
 SNAPSHOT_HEADERS = {
@@ -13499,7 +13499,14 @@ def main() -> None:
                     textposition="inside",
                     insidetextorientation="horizontal",
                 )
-                st.plotly_chart(_apply_plotly_theme(fig_pie, is_dark, is_mobile), theme="streamlit", width="stretch")
+                # _apply_plotly_theme clobbers the margin (sets b=80 on mobile) — which was eating the
+                # legend's bottom clearance and seating the 2nd legend row flush on the card border. Apply
+                # the theme FIRST, then re-set the donut's margin + height AFTER so the wrapped legend clears
+                # the rounded bottom; theme=None so Streamlit doesn't re-override. (audit phone-overview)
+                _fig_pie = _apply_plotly_theme(fig_pie, is_dark, is_mobile)
+                _fig_pie.update_layout(margin=dict(l=6, r=6, t=40, b=150 if is_mobile else 78),
+                                       height=520 if is_mobile else 430)
+                st.plotly_chart(_fig_pie, theme=None, width="stretch")
                 if _pie_excluded > 0:
                     st.caption(tr(f"{_pie_excluded} holding(s) with non-positive value excluded from the pie.",
                                   f"{_pie_excluded} אחזקות עם שווי לא חיובי הוחרגו מהתרשים."))
@@ -13784,7 +13791,7 @@ def main() -> None:
                             ("macro", "🌐 " + tr("Macro", "מאקרו")),
                         ]
                         _wl_tabs = st.tabs([lbl for _, lbl in _wl_cats])
-                        _wl_ncol = 2 if is_mobile else 4
+                        _wl_ncol = 1 if is_mobile else 4  # phone: one full-width column (2-up clustered into uneven pairs + a lone last button)
                         for _ti, (catkey, _lbl) in enumerate(_wl_cats):
                             with _wl_tabs[_ti]:
                                 part = watch_df[watch_df["Category"] == category_labels[catkey]]
@@ -14041,11 +14048,14 @@ def main() -> None:
                                         bgcolor="rgba(0,0,0,0)"),
                             # Reserve room at the BOTTOM (x date ticks were sliced by the card border) and
                             # on the RIGHT (last 'Oct 2024' tick overflowed) — esp. on the narrow phone.
-                            margin=dict(t=64, l=8, r=24 if is_mobile else 16, b=44 if is_mobile else 30),
+                            margin=dict(t=64, l=8, r=44 if is_mobile else 20, b=44 if is_mobile else 30),
                             # Taller, more prominent on desktop; keep compact on mobile.
                             height=340 if is_mobile else 460,
                         )
-                        _fig_track.update_xaxes(automargin=True)
+                        # Compact numeric month/year ('10/2024') — shorter than 'Oct 2024' so the LAST tick
+                        # isn't clipped to 'Oct 202' at the right edge, and language-neutral (no English
+                        # month in the Hebrew chart). (audit phone-overview)
+                        _fig_track.update_xaxes(automargin=True, tickformat="%m/%Y")
                         st.plotly_chart(_fig_track, theme=None, width="stretch")
                 except Exception:
                     pass
@@ -14368,7 +14378,10 @@ def main() -> None:
                         if _rates:
                             _rdf = pd.DataFrame([{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in _rates.items()])
                             _rs = _rdf.style.format({tr("Rate", "שער"): "{:,.2f}"})
-                            _render_dataframe_adaptive(_rs, _mob_r, width="stretch", hide_index=True)
+                            # Force FULL width — this narrow 2-col FX table rendered half-width on phone
+                            # because the adaptive helper downgrades stretch→content (right for the wide
+                            # tables, wrong here, leaving a big empty gap). (audit phone-overview)
+                            st.dataframe(_rs, width="stretch", hide_index=True)
                         else:
                             st.info(tr("No market rates available.", "אין שערי שוק זמינים כרגע."))
                     except Exception:
@@ -14382,8 +14395,9 @@ def main() -> None:
                     rates_df = pd.DataFrame(
                         [{tr("Symbol", "סימול"): k, tr("Rate", "שער"): v} for k, v in rates.items()]
                     )
-                    _render_dataframe_adaptive(rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}), is_mobile, width="stretch", hide_index=True)
-            st.divider()
+                    st.dataframe(rates_df.style.format({tr("Rate", "שער"): "{:,.4f}"}), width="stretch", hide_index=True)
+            # (no trailing st.divider() — it left a divider above a large void at the page end; the FX
+            #  block is now the clean last element of the Reports tab. (audit phone-overview))
 
         with tab_deposits:
             # (Equity curve moved to Overview tab — top section.)
@@ -14445,7 +14459,7 @@ def main() -> None:
             # split so it sits centered at a comfortable width. On MOBILE it spans full width.
             _dep_cfg = {
                 "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
-                "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (ILS)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%,.2f"),
+                "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (₪)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%,.2f"),
             }
             _dep_container = st.container() if is_mobile else st.columns([1, 2, 1])[1]
             with _dep_container:
@@ -14775,7 +14789,7 @@ def main() -> None:
                 _ec1, _ec2, _ec3 = st.columns(3)
                 with _ec1:
                     st.download_button(
-                        ("⬇️ CSV" if _is_he_tx else "⬇️ CSV"),
+                        ("⬇️ הורדה CSV" if _is_he_tx else "⬇️ CSV"),
                         data=_dv.to_csv(index=False).encode("utf-8-sig"),
                         file_name=f"{_export_prefix}_{_ts_tx}.csv",
                         mime="text/csv",
@@ -14784,7 +14798,7 @@ def main() -> None:
                     )
                 with _ec2:
                     st.download_button(
-                        ("⬇️ JSON" if _is_he_tx else "⬇️ JSON"),
+                        ("⬇️ הורדה JSON" if _is_he_tx else "⬇️ JSON"),
                         data=_dv.to_json(orient="records", force_ascii=False, indent=2).encode("utf-8"),
                         file_name=f"{_export_prefix}_{_ts_tx}.json",
                         mime="application/json",
@@ -14795,7 +14809,7 @@ def main() -> None:
                     _xls_tx = pp_dataframe_to_excel_bytes(_dv, sheet_name=_export_prefix)
                     if _xls_tx:
                         st.download_button(
-                            ("⬇️ Excel" if _is_he_tx else "⬇️ Excel"),
+                            ("⬇️ הורדה Excel" if _is_he_tx else "⬇️ Excel"),
                             data=_xls_tx,
                             file_name=f"{_export_prefix}_{_ts_tx}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
