@@ -13600,18 +13600,18 @@ def main() -> None:
                             title=dict(text="%", side="bottom"),
                             thickness=12, len=0.75,
                         )
-                        tree_margin = dict(l=14, r=16, t=50, b=70)  # right buffer so right-edge tiles don't spill
+                        tree_margin = dict(l=14, r=26, t=50, b=70)  # bigger right buffer so right-edge tiles don't spill
                     else:
                         tree_colorbar = dict(title="%")
                         tree_margin = dict(l=10, r=10, t=50, b=10)
-                    fig_tree.update_layout(
-                        margin=tree_margin,
-                        coloraxis_colorbar=tree_colorbar,
-                        # NB: no uniformtext here — it would force a single size across all tiles (the
-                        # smallest tile's fit) and defeat the per-tile sizing set above. Each tile now
-                        # carries its own font size (big tile = big ticker, tiny tile = small but shown).
-                    )
-                    st.plotly_chart(_apply_plotly_theme(fig_tree, is_dark, is_mobile), theme="streamlit", width="stretch")
+                    # Apply the dark/mobile theme FIRST (it clobbers margin), THEN re-set the treemap's own
+                    # margin (right buffer) + colorbar so they survive. And render with theme=None — with
+                    # theme="streamlit" Streamlit's chart theming RESET the per-tile textfont sizes, so the
+                    # tiny tiles reverted to Plotly auto-fit and clipped ('INTC'→'INTO'). NB: no uniformtext
+                    # (it would force one uniform size and defeat big-tile-big-text). (audit + diagnosis)
+                    fig_tree = _apply_plotly_theme(fig_tree, is_dark, is_mobile)
+                    fig_tree.update_layout(margin=tree_margin, coloraxis_colorbar=tree_colorbar)
+                    st.plotly_chart(fig_tree, theme=None, width="stretch")
                     if is_mobile:
                         st.caption(tr("Size = value · color = origin-currency yield",
                                       "גודל = שווי · צבע = תשואה במטבע מקור"))
