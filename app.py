@@ -14464,8 +14464,8 @@ def main() -> None:
             _src_tok = "⁦" + str(st.session_state.get(source_state_key, "local")) + "⁩"
             st.caption(
                 tr(
-                    f"Manual deposits are isolated and synced separately (source: {_src_tok}).",
-                    f"הפקדות ידניות מבודדות ומסונכרנות בנפרד (מקור: {_src_tok}).",
+                    f"Manual deposits sync with the Google Sheet and every app — just like trades (source: {_src_tok}).",
+                    f"הפקדות ידניות מסונכרנות עם הגוגל שיט וכל האפליקציות — בדיוק כמו עסקאות (מקור: {_src_tok}).",
                 )
             )
 
@@ -14477,15 +14477,13 @@ def main() -> None:
             if language == LANG_HE and "Platform" in edit_df.columns:
                 edit_df["Platform"] = edit_df["Platform"].map(_he_display_platform)
 
-            # Center the deposits editor on DESKTOP: it has only two columns, so a full-width
-            # stretch would leave a sea of dead space, while a content-width table anchored to
-            # one RTL edge reads as "not centered" (owner). Put it in the middle of a [1,2,1]
-            # split so it sits centered at a comfortable width. On MOBILE it spans full width.
+            # Deposits editor spans the FULL width on desktop AND mobile (owner 2026-06-25:
+            # "תדאג שהטבלה של ההפקדות תהיה לכל הרוחב"). Reverses the earlier [1,2,1] centering.
             _dep_cfg = {
                 "Platform": st.column_config.TextColumn(tr("Platform", "פלטפורמה"), required=True),
                 "Manual_Deposit_ILS": st.column_config.NumberColumn(tr("Manual Deposit (₪)", "הפקדה ידנית (₪)"), min_value=0.0, step=100.0, format="%,.2f"),
             }
-            _dep_container = st.container() if is_mobile else st.columns([1, 2, 1])[1]
+            _dep_container = st.container()  # full width on every viewport
             with _dep_container:
                 edited_df = st.data_editor(
                     edit_df,
@@ -14505,6 +14503,27 @@ def main() -> None:
                         _r["Platform"] = _he_store_platform(_r["Platform"])
             normalized_rows = _normalize_manual_deposit_rows(edited_rows, default_platforms=[])
             st.session_state[rows_state_key] = normalized_rows
+
+            # AUTO-SYNC like trades: the moment deposits change, push to the cloud sheet (the single
+            # source of truth = the Deposits tab in the SAME spreadsheet) so the change propagates to
+            # every app exactly like adding/removing a stock — no separate "save" step. The explicit
+            # buttons below remain only as a manual force-sync / pull fallback. (live mode only)
+            _dep_sig_key = f"manual_deposits_synced_sig_{deposit_mode}"
+            _dep_sig = tuple(sorted((str(r.get("Platform", "")), round(_num(r.get("Manual_Deposit_ILS", 0.0)), 2)) for r in normalized_rows))
+            _dep_prev_sig = st.session_state.get(_dep_sig_key)
+            if _dep_prev_sig is None:
+                st.session_state[_dep_sig_key] = _dep_sig  # seed on first render — don't push the loaded state back
+            elif _dep_sig != _dep_prev_sig and deposit_mode == "live" and can_sync_remote:
+                _ok_auto, _msg_auto = save_manual_deposits_remote(web_url_for_sync, api_token, deposit_mode, normalized_rows)
+                _store_auto = load_manual_deposits_store(); _store_auto[deposit_mode] = normalized_rows; save_manual_deposits_store(_store_auto)
+                st.session_state[_dep_sig_key] = _dep_sig  # update either way so a failed push doesn't retry every rerun
+                if _ok_auto:
+                    st.session_state[source_state_key] = "cloud"
+                    st.toast(tr("Deposits synced", "ההפקדות סונכרנו"), icon="✅")
+                else:
+                    st.warning(f"{tr('Deposit auto-sync failed (kept locally — use Save to retry)', 'סנכרון אוטומטי נכשל (נשמר מקומית — לחץ שמירה לניסיון חוזר)')}: {_msg_auto}")
+            elif _dep_sig != _dep_prev_sig:
+                st.session_state[_dep_sig_key] = _dep_sig  # demo / offline: track locally so the buttons reflect state
 
             total_manual = float(sum(_num(r.get("Manual_Deposit_ILS", 0.0)) for r in normalized_rows))
             # Pair the total with a contextual count so the metric is NOT a lone full-width card
