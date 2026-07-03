@@ -2939,8 +2939,31 @@ def _inject_design_overlay(is_dark: bool) -> None:
         background: rgba(99,102,241,.10) !important;
         transform: translateY(-1px) !important;
     }}
+    /* The ⚙ Settings expander lives in the sidebar, whose background is painted by the
+       NATIVE (device-driven) theme. The generic expander rule sets a card background from the
+       Python is_dark OVERLAY, which can DISAGREE with the device shell (e.g. Appearance=dark on
+       a light device) → the box renders light inside a dark sidebar and looks broken. Force it to
+       INHERIT the sidebar surface (transparent) so it can never mismatch, with a theme-neutral
+       hairline (never the #6366f1 primary). */
+    [data-testid="stSidebar"] [data-testid="stExpander"],
+    [data-testid="stSidebar"] [data-testid="stExpander"] > details,
+    [data-testid="stSidebar"] [data-testid="stExpander"] > details > summary {{
+        background: transparent !important;
+        background-image: none !important;
+    }}
     [data-testid="stSidebar"] [data-testid="stExpander"] {{
-        border-radius: 14px !important; border: 1px solid {card_brd} !important;
+        border-radius: 14px !important;
+        border: 1px solid rgba(128,140,170,.22) !important;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+    }}
+    /* Keyboard-focus stays accessible but uses a soft neutral ring — not the loud purple
+       primaryColor outline the user was seeing "for no reason". */
+    [data-testid="stSidebar"] [data-testid="stExpander"] > details > summary:focus,
+    [data-testid="stSidebar"] [data-testid="stExpander"] > details > summary:focus-visible {{
+        outline: none !important;
+        box-shadow: 0 0 0 2px rgba(128,140,170,.30) !important;
+        border-radius: 12px !important;
     }}
 
     /* Sub-tabs — smoother pills */
