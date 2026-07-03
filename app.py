@@ -12815,6 +12815,29 @@ def main() -> None:
             "html body [data-testid='stMain'] div[data-baseweb='tab-list']"
             "{direction:ltr !important; flex-direction:row !important;}"
         )
+    # AUTHORITATIVE FIX (appended LAST so it wins): a sidebar PRIMARY button (☁ Sync now / 💾 Save /
+    # Save passcode / Enable fingerprint) draws its indigo gradient on the <button>, but Streamlit 1.58
+    # gives the button's INNER label wrapper + stMarkdownContainer a solid sidebar-coloured background
+    # (#f3f5fa in light mode). That opaque inner box covers the gradient, so the button reads as a WHITE
+    # box with only an indigo FRAME — invisible white-on-white text. Force every descendant of the sidebar
+    # primary button transparent with maximum specificity + literal white text so the gradient shows and
+    # the label is readable in BOTH themes. (owner-reported 2026-07-03)
+    # CTA emphasis for the three sidebar SECONDARY action buttons (Sync now / Save connection / Save
+    # passcode) — an indigo border + soft wash + indigo bold label, keyed by their stable st.key wrappers
+    # so it never touches other buttons. Text stays dark-indigo (readable), not white (which the primary
+    # style made invisible). Works in both themes. (owner-reported 2026-07-03)
+    _cta_wash = "rgba(99,102,241,.18)" if is_dark else "rgba(99,102,241,.10)"
+    _cta_ink = "#c7ccff" if is_dark else "#4338ca"
+    _crit_css += (
+        "html body [data-testid='stSidebar'] .st-key-btn_pull_google button,"
+        "html body [data-testid='stSidebar'] .st-key-_conn_save_btn button,"
+        "html body [data-testid='stSidebar'] .st-key-_lock_savepin_btn button"
+        f"{{background:{_cta_wash} !important;border:1.5px solid #6366f1 !important;}}"
+        "html body [data-testid='stSidebar'] .st-key-btn_pull_google button *,"
+        "html body [data-testid='stSidebar'] .st-key-_conn_save_btn button *,"
+        "html body [data-testid='stSidebar'] .st-key-_lock_savepin_btn button *"
+        f"{{color:{_cta_ink} !important;-webkit-text-fill-color:{_cta_ink} !important;font-weight:700 !important;}}"
+    )
     _crit_css += "</style>"
     st.markdown(_crit_css, unsafe_allow_html=True)
 
@@ -12924,8 +12947,13 @@ def main() -> None:
                 value=False, key="chk_force_pull", disabled=not _has_conn,
                 help=tr("Discards unsynced local edits and mirrors exactly what Google has.",
                         "מוחק עריכות מקומיות שלא סונכרנו ומשקף בדיוק את מה שבגוגל."))
+            # NOTE: intentionally NOT type="primary". Streamlit 1.58's primary button in the sidebar
+            # renders an opaque light inner label box + white text that CSS can't reliably override, so a
+            # primary Sync/Save button showed as an invisible white box with a purple frame. The secondary
+            # style (dark text on a light surface) is readable; we add an indigo accent via its st-key
+            # wrapper below for CTA emphasis. (owner-reported 2026-07-03)
             if st.button(tr("☁ Sync now", "☁ סנכרן עכשיו"), width="stretch",
-                         type="primary", disabled=not _has_conn, key="btn_pull_google"):
+                         disabled=not _has_conn, key="btn_pull_google"):
                 with st.spinner(tr("Syncing…", "מסנכרן…")):
                     _pull_ok, _pull_msg, _pull_n = sync_portfolio_from_google(
                         _sync_web_url, _sync_token, _sync_sheet_ref, _sync_ws, _sync_sa,
@@ -12983,7 +13011,7 @@ def main() -> None:
             followed_symbols_text = settings.get("followed_symbols", "")
             _cc1, _cc2 = st.columns(2)
             with _cc1:
-                if st.button(tr("💾 Save", "💾 שמור"), width="stretch", key="_conn_save_btn", type="primary"):
+                if st.button(tr("💾 Save", "💾 שמור"), width="stretch", key="_conn_save_btn"):
                     _ok = save_local_settings(web_app_url, api_token, spreadsheet_ref, worksheet_name,
                                               service_account_file, language, theme_mode, demo_mode, followed_symbols_text)
                     (st.success(tr("Saved", "נשמר")) if _ok else st.error(tr("Save failed", "השמירה נכשלה")))
@@ -13013,7 +13041,7 @@ def main() -> None:
                 st.divider()
             _newpin = st.text_input(tr("Set / change passcode (4+ chars)", "קבע / שנה קוד (4+ תווים)"),
                                     type="password", key="_lock_newpin")
-            if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", type="primary", use_container_width=True):
+            if st.button(tr("Save passcode", "שמור קוד"), key="_lock_savepin_btn", use_container_width=True):
                 if len(str(_newpin)) >= 4:
                     _salt = _secrets.token_hex(8)
                     _lk_now["pin_hash"] = _lock_hash(_newpin, _salt)
