@@ -1243,6 +1243,14 @@ def inject_global_styles(language: str, theme_mode: str = THEME_SYSTEM) -> None:
         letter-spacing: -0.03em;
         line-height: 1.0;
     }}
+    /* "Streamlit" sub-brand in the coral palette of the Streamlit-variant logo. */
+    .app-main-title .app-title-st {{
+        background: linear-gradient(135deg, #ff5470 0%, #ff6a55 55%, #ff9a3d 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        background-clip: text !important;
+        font-weight: 900 !important;
+    }}
     .app-sub-title {{
         text-align: {align} !important;
         direction: {direction} !important;
@@ -4434,15 +4442,13 @@ def _to_trade_id(row: pd.Series) -> str:
     cost_origin = _num(row.get("Cost_Origin", 0))
     currency = _normalize_currency_code(row.get("Origin_Currency", ""))
     commission = _num(row.get("Commission", 0))
-    # Include a status/role discriminator + Sell_Date so an OPEN lot and a separately
-    # recorded fully-closed lot with identical buy parameters don't collide to the same
-    # Trade_ID (which would let edit/delete-by-id target the wrong row). (audit bug-st)
-    role = "SELL" if _is_closed_status(row.get("Status", "")) else "BUY"
-    sell_date = _clean(row.get("Sell_Date", ""))
+    # CANONICAL 10-field identity — byte-identical to the Apps Script gateway (Code.gs tradeIdentityRaw_),
+    # the EXE/APK (genTradeId) and core.py. Streamlit previously appended |role|sell_date (12 fields), so the
+    # SAME trade hashed to a DIFFERENT Trade_ID here than in every other surface → the sheet merge treated a
+    # Streamlit-written trade as new and duplicated it. Must stay 10 fields for cross-surface parity. (sync audit: C)
     raw = (
         f"{platform}|{location}|{asset_type}|{ticker}|{purchase_date}|"
-        f"{qty:.12f}|{buy_price:.12f}|{cost_origin:.12f}|{currency}|{commission:.12f}|"
-        f"{role}|{sell_date}"
+        f"{qty:.12f}|{buy_price:.12f}|{cost_origin:.12f}|{currency}|{commission:.12f}"
     )
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -4603,9 +4609,48 @@ def _yf_price_currency(ticker: str) -> str:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
+def _fx_http(base: str, quote: str = "ILS") -> float:
+    """RELIABLE <base>-><quote> spot from a NON-Yahoo source, used only when the yfinance
+    quote fails. Yahoo now 429s server-side yfinance FX calls, which silently pinned USD/ILS
+    to a stale hard-coded 3.3 and inflated the whole (USD-denominated) book ~8% (₪233k shown
+    as ₪253k). Tries the ECB-backed Frankfurter API, then open.er-api.com. 0.0 on total
+    failure. Cached 10 min so a Streamlit rerun storm doesn't hammer the endpoints."""
+    import urllib.request
+    b = _clean(base).upper()
+    q = _clean(quote).upper()
+    if not b or not q:
+        return 0.0
+    if b == q:
+        return 1.0
+    sources = (
+        ("https://api.frankfurter.app/latest?from=%s&to=%s" % (b, q),
+         lambda j: (j.get("rates") or {}).get(q)),
+        ("https://open.er-api.com/v6/latest/%s" % b,
+         lambda j: (j.get("rates") or {}).get(q)),
+    )
+    for url, pick in sources:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                v = float(pick(json.load(resp)) or 0)
+                if v > 0:
+                    return v
+        except Exception:
+            continue
+    return 0.0
+
+
 def _fx_pair_rate(pair: str) -> float:
-    """Live ILS-per-unit for a Yahoo FX pair (e.g. GBPILS=X, EURILS=X). Cached."""
-    return float(_safe_quote(pair))
+    """Live ILS-per-unit for a Yahoo FX pair (e.g. GBPILS=X, EURILS=X). When yfinance is
+    rate-limited/blocked (returns 0), resolves BASE->ILS from a reliable non-Yahoo source so
+    a throttled Yahoo can't freeze the rate. Cached."""
+    v = float(_safe_quote(pair))
+    if v > 0:
+        return v
+    p = _clean(pair).upper().replace("=X", "")
+    base = p[:-3] if p.endswith("ILS") else p
+    return _fx_http(base, "ILS")
 
 
 def _ils_per_native_unit(quote_currency: object, usd_ils: float) -> float:
@@ -4841,7 +4886,9 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
     # position counts ~3.6x light vs an equal-value ILS one), distorting every
     # aggregate risk metric (vol/Sharpe/MDD/CAGR/beta). Use the USD/ILS history
     # aligned to the price index; fall back to spot if history is unavailable.
-    needs_fx = any(_yf_price_currency(t) == "USD" for t in qty_by_ticker)
+    quote_ccy = {t: _yf_price_currency(t) for t in qty_by_ticker}
+    needs_fx = any(c == "USD" for c in quote_ccy.values())
+    needs_gbp = any(c == "GBX" for c in quote_ccy.values())
     fx_series = None
     fx_spot = 0.0
     if needs_fx:
@@ -4853,6 +4900,16 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
         # _safe_quote is session-state-free. (audit bug-st)
         _spot = _safe_quote("USDILS=X")
         fx_spot = _spot if _spot and _spot > 0 else 3.3
+    gbp_series = None
+    gbp_spot = 0.0
+    if needs_gbp:
+        gbp_df = _download_close_matrix(("GBPILS=X",), days=max(int(days), 30))
+        if not gbp_df.empty and "GBPILS=X" in gbp_df.columns:
+            gbp_series = pd.to_numeric(gbp_df["GBPILS=X"], errors="coerce")
+        # _fx_pair_rate is session-state-free (_safe_quote + cached _fx_http), so it
+        # is safe inside this @st.cache_data function — unlike _usd_ils_rate.
+        _g = _fx_pair_rate("GBPILS=X")
+        gbp_spot = _g if _g and _g > 0 else 0.0
 
     frames = []
     for ticker, qty in qty_by_ticker.items():
@@ -4862,11 +4919,24 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
         s = pd.to_numeric(close_df[sym], errors="coerce").rename(ticker)
         if not s.notna().any():
             continue
-        if _yf_price_currency(ticker) == "USD":
+        # Convert EVERY quote currency to ILS before summing — previously only USD
+        # was handled, so .TA (agorot) / .L (pence) closes were summed raw, making a
+        # TASE holding ~100x overweight in every Risk-page metric. (fixbrief ST-11)
+        c = quote_ccy[ticker]
+        if c == "USD":
             if fx_series is not None:
                 s = s * fx_series.reindex(s.index).ffill().bfill()
             else:
                 s = s * fx_spot
+        elif c == "ILA":
+            s = s * 0.01  # TASE quotes in agorot; mirrors _ils_per_native_unit / engine.js toIls
+        elif c == "GBX":
+            if gbp_series is not None:
+                s = s * gbp_series.reindex(s.index).ffill().bfill() * 0.01
+            elif gbp_spot > 0:
+                s = s * (gbp_spot * 0.01)
+            else:
+                continue  # no GBP/ILS rate at all: skip rather than corrupt the series with raw pence
         frames.append(s * qty)
 
     if not frames:
@@ -4886,13 +4956,20 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
     # same-day buy is always an available lot before its sell consumes it. Mirrors
     # engine.js fifoByTicker. (audit fin-streamlit #3, edge-extreme same-day)
     work = trades.copy()
-    if "Purchase_Date" in work.columns:
-        _fifo_dt = _parse_dates_flexible(work["Purchase_Date"])
-    else:
-        _fifo_dt = pd.Series(pd.NaT, index=work.index, dtype="datetime64[ns]")
-    # NaT dates sort last (they have no usable order); BUY (0) before SELL (1) on ties.
+    _pd_raw = work["Purchase_Date"] if "Purchase_Date" in work.columns else pd.Series("", index=work.index)
+    _sd_raw = work["Sell_Date"] if "Sell_Date" in work.columns else pd.Series("", index=work.index)
+    _closed_m = work["Status"].map(_is_closed_status) if "Status" in work.columns else pd.Series(False, index=work.index)
+    # engine.js _fifoDate parity: a CLOSED row lacking Purchase_Date keys on its
+    # Sell_Date (legacy sells only carry a sell date), else Purchase_Date. (fixbrief ST-18)
+    _use_sell = _closed_m & _pd_raw.map(_clean).eq("") & _sd_raw.map(_clean).ne("")
+    _fifo_raw = _pd_raw.where(~_use_sell, _sd_raw)
+    _fifo_dt = _parse_dates_flexible(_fifo_raw)
+    # engine.js dateKey parity: BLANK dates sort FIRST (key -1, treated as oldest);
+    # non-blank UNPARSEABLE dates sort LAST — never silently mid-stream. The blank
+    # assignment must come AFTER the NaT one (blank rows are a subset of NaT rows).
     work["__fifo_date_key__"] = _fifo_dt.astype("int64")
     work.loc[_fifo_dt.isna(), "__fifo_date_key__"] = np.iinfo("int64").max
+    work.loc[_fifo_raw.map(_clean).eq(""), "__fifo_date_key__"] = -1
     # Dispatch off Status (closed/open) like engine.js fifoByTicker/_cmpFifo, NOT the
     # Action field — Action is display-only and can drift out of sync with Status. A
     # CLOSED row sorts after (1) an OPEN row (0) on same-date ties so a same-day buy is
@@ -5000,6 +5077,14 @@ def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
         open_cost = sum(lot.qty * lot.cost_per_unit for lot in lots)
         open_display_cost = sum(lot.qty * lot.display_cost_per_unit for lot in lots)
         open_display_currency = lots[0].display_currency if lots else _infer_display_currency(ticker, "")
+        # Mixed-currency tickers (e.g. BTC bought in both ILS and USD): per-lot display
+        # costs are in DIFFERENT units and must not be summed. Fall back to the ILS
+        # average (lot.cost_per_unit always derives from Cost_ILS) — parity with
+        # engine.js mixedCcy→MIX (displayed as ILS) and the exposure table's
+        # Cost_ILS/qty fallback. (fixbrief ST-3)
+        if len({lot.display_currency for lot in lots}) > 1:
+            open_display_cost = open_cost
+            open_display_currency = "ILS"
         rows.append(
             {
                 "Ticker": ticker,
@@ -5070,6 +5155,13 @@ def _usd_ils_rate(default: float = 3.3) -> float:
         if live and live > 0:
             st.session_state["_last_good_usdils"] = float(live)
             return float(live)
+        # yfinance blocked/throttled → a RELIABLE non-Yahoo source (ECB/Frankfurter, er-api)
+        # BEFORE any cached or hard-coded guess, so a rate-limited Yahoo can't pin the rate to
+        # a stale 3.3 and inflate the USD book ~8% (₪233k shown as ₪253k). (fix: FX fallback)
+        http = _fx_http("USD", "ILS")
+        if http and http > 0:
+            st.session_state["_last_good_usdils"] = float(http)
+            return float(http)
         cached = float(st.session_state.get("_last_good_usdils", 0) or 0)
         if cached > 0:
             return cached
@@ -5288,6 +5380,28 @@ def _he_uniformize_value(value: object) -> str:
     if low in _HE_TXT_MAP:
         return _HE_TXT_MAP[low]
     return re.sub(r"\S+", lambda m: _he_translit_token(m.group(0)), s)
+
+
+def _pct_fmt_safe(digits: int = 2):
+    """Crash-proof percent formatter for Styler.format: the string form "{:.2%}" raises
+    ValueError ("Unknown format code '%' for object of type 'str'") the moment ONE cell in the
+    column is a string (a live-sheet blank ""/#DIV0 text that survived coercion) — and inside a
+    live-refresh fragment that killed the whole session ("Oh no. Error running app" on the phone).
+    Coerce first; non-numeric text renders as itself, blanks/non-finite as "". (fix: phone Oh-no)"""
+    def _f(v: object) -> str:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            if v is None:
+                return ""
+            try:
+                return "" if pd.isna(v) else _clean(v)
+            except Exception:
+                return _clean(v)
+        if not np.isfinite(f):
+            return ""
+        return f"{f:.{digits}%}"
+    return _f
 
 
 def _he_uniformize_columns(df: "pd.DataFrame", language: str) -> "pd.DataFrame":
@@ -5514,14 +5628,14 @@ def build_home_inspired_reports(open_trades: pd.DataFrame) -> Dict[str, object]:
     }
 
 
-def call_apps_script_(web_app_url: str, payload: Dict[str, object]) -> Dict[str, object]:
+def call_apps_script_(web_app_url: str, payload: Dict[str, object], max_retries: int = NETWORK_MAX_RETRIES) -> Dict[str, object]:
     req = urlrequest.Request(
         web_app_url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={"Content-Type": "application/json; charset=utf-8"},
         method="POST",
     )
-    body = _read_url_with_retries(req)
+    body = _read_url_with_retries(req, max_retries=max_retries)
     try:
         return json.loads(body)
     except (json.JSONDecodeError, ValueError):
@@ -5556,15 +5670,19 @@ def _is_transient_network_error(exc: Exception) -> bool:
     return any(token in text for token in ["tempor", "connection reset", "remote end closed", "502", "503", "504"])
 
 
-def _read_url_with_retries(req: urlrequest.Request) -> str:
+def _read_url_with_retries(req: urlrequest.Request, max_retries: int = NETWORK_MAX_RETRIES) -> str:
+    # max_retries=1 disables the automatic re-send — required for non-idempotent
+    # writes (GAS 'add'), where a timed-out first attempt may have committed and a
+    # blind replay duplicates the trade on the sheet. (fixbrief ST-2)
+    max_retries = max(1, int(max_retries))
     last_exc: Exception | None = None
-    for attempt in range(1, NETWORK_MAX_RETRIES + 1):
+    for attempt in range(1, max_retries + 1):
         try:
             with urlrequest.urlopen(req, timeout=NETWORK_TIMEOUT_SECONDS) as response:
                 return response.read().decode("utf-8")
         except Exception as exc:
             last_exc = exc
-            should_retry = attempt < NETWORK_MAX_RETRIES and _is_transient_network_error(exc)
+            should_retry = attempt < max_retries and _is_transient_network_error(exc)
             if not should_retry:
                 raise
             time.sleep(NETWORK_RETRY_BACKOFF_SECONDS * attempt)
@@ -5699,6 +5817,40 @@ def save_manual_deposits_remote(web_app_url: str, token: str, mode: str, rows: L
         return False, str(parsed.get("error") or parsed)
     except Exception as exc:
         return False, str(exc)
+
+
+def save_dividends_remote(web_app_url: str, token: str, mode: str, rows: list) -> Tuple[bool, str]:
+    # Push dividends to the shared Google Sheet in the CANONICAL schema {Ticker, Amount_ILS, Date} the EXE/APK
+    # use, mapping Streamlit's local {ticker, amount, date} — so a dividend added anywhere shows everywhere. (sync audit: B)
+    try:
+        canon = [{
+            "Ticker": _clean(r.get("ticker") or r.get("Ticker")).upper(),
+            "Amount_ILS": float(_num(r.get("amount") if r.get("amount") is not None else r.get("Amount_ILS", 0))),
+            "Date": _clean(r.get("date") or r.get("Date")),
+        } for r in (rows or [])]
+        payload = {"token": token or "", "action": "save_dividends",
+                   "mode": ("demo" if _clean(mode).lower() == "demo" else "live"), "rows": canon}
+        parsed = call_apps_script_(web_app_url, payload)
+        return (True, "") if bool(parsed.get("ok")) else (False, str(parsed.get("error") or parsed))
+    except Exception as exc:
+        return False, str(exc)
+
+
+def load_dividends_remote(web_app_url: str, token: str, mode: str) -> list:
+    # Read the shared dividend sheet and map canonical {Ticker, Amount_ILS, Date} -> local {ticker, amount, date}.
+    try:
+        payload = {"token": token or "", "action": "read_dividends",
+                   "mode": ("demo" if _clean(mode).lower() == "demo" else "live")}
+        parsed = call_apps_script_(web_app_url, payload)
+        data = (parsed or {}).get("data") or {}
+        rows = data.get("rows") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return []
+        return [{"ticker": _clean(r.get("Ticker")).upper(),
+                 "amount": float(_num(r.get("Amount_ILS", 0))),
+                 "date": _clean(r.get("Date")) or "—"} for r in rows if _clean(r.get("Ticker"))]
+    except Exception:
+        return []
 
 
 def _normalize_manual_deposit_rows(rows: List[Dict[str, object]], default_platforms: List[str]) -> List[Dict[str, object]]:
@@ -5916,22 +6068,31 @@ def save_local_portfolio(
     *,
     meta_patch: Optional[Dict[str, object]] = None,
     preserve_dirty: bool = True,
+    expected_version: Optional[int] = None,
 ) -> bool:
     """Write portfolio DataFrame to the local JSON store.
 
     Thread-safe (acquires _LOCAL_FILE_LOCK) and atomic (temp-file rename).
     preserve_dirty: keep existing _dirty/_dirty_op flags from the file
                     (True after a local edit; False after a Google pull).
+    expected_version: optimistic-concurrency guard — when set, the write is
+                    REFUSED (returns False) if the store's _version changed
+                    since the caller read it. Used by the background mirror so
+                    a snapshot fetched BEFORE a foreground add/delete cannot
+                    overwrite the store AFTER it. (fixbrief ST-10)
     """
     with _LOCAL_FILE_LOCK:
         try:
             existing_flags: Dict[str, Dict[str, object]] = {}
             existing_meta: Dict[str, object] = {}
             existing_tombstones: List[Dict[str, object]] = []
-            if preserve_dirty:
-                try:
-                    raw = _read_portfolio_file_raw()
-                    existing_meta = raw.get("_meta", {})
+            # Always read the current meta (even for a full mirror) so _version is
+            # MONOTONIC — the old preserve_dirty=False reset to 1 defeated any
+            # generation check (ABA). (fixbrief ST-10)
+            try:
+                raw = _read_portfolio_file_raw()
+                existing_meta = raw.get("_meta", {}) if isinstance(raw, dict) else {}
+                if preserve_dirty:
                     for r in raw.get("rows", []):
                         if isinstance(r, dict):
                             tid = _clean(str(r.get("Trade_ID", "")))
@@ -5940,6 +6101,7 @@ def save_local_portfolio(
                                     "_dirty": bool(r.get("_dirty", False)),
                                     "_dirty_op": str(r.get("_dirty_op", "")),
                                     "_deleted": bool(r.get("_deleted", False)),
+                                    "_op_id": str(r.get("_op_id", "") or ""),
                                 }
                             # Pending offline-delete tombstones (_deleted + _dirty)
                             # are HIDDEN by load_local_portfolio(), so a pull's merged
@@ -5948,12 +6110,18 @@ def save_local_portfolio(
                             # and the row RESURRECTS from Google on the next pull.
                             if r.get("_deleted", False) and r.get("_dirty", False):
                                 existing_tombstones.append(dict(r))
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-            new_meta: Dict[str, object] = {**existing_meta}
+            current_version = int(existing_meta.get("_version", 0) or 0)
+            # Must live INSIDE the lock: an external check-then-save would reopen
+            # the TOCTOU gap (_LOCAL_FILE_LOCK is non-reentrant). (fixbrief ST-10)
+            if expected_version is not None and current_version != int(expected_version):
+                return False
+
+            new_meta: Dict[str, object] = {**existing_meta} if preserve_dirty else {}
             new_meta["_last_modified"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-            new_meta["_version"] = int(existing_meta.get("_version", 0)) + 1
+            new_meta["_version"] = current_version + 1
             if meta_patch:
                 new_meta.update(meta_patch)
 
@@ -5965,6 +6133,9 @@ def save_local_portfolio(
                 rd["_dirty"] = bool(flags.get("_dirty", False))
                 rd["_dirty_op"] = str(flags.get("_dirty_op", ""))
                 rd["_deleted"] = bool(flags.get("_deleted", False))
+                _op = str(flags.get("_op_id", "") or "")
+                if _op:
+                    rd["_op_id"] = _op   # keep the pending-add idempotency key (fixbrief ST-2)
                 rows_out.append(rd)
 
             # Re-append pending-delete tombstones that the incoming df didn't carry
@@ -6008,6 +6179,11 @@ def apply_local_trade(op: str, trade_row: Dict[str, object], *, mark_dirty: bool
                 new_r["_dirty"] = mark_dirty
                 new_r["_dirty_op"] = "add" if mark_dirty else ""
                 new_r["_deleted"] = False
+                if mark_dirty:
+                    # Idempotency key for the eventual 'add' push: a re-push after a
+                    # lost response replays with the SAME op_id and GAS treats it as
+                    # a no-op instead of appending a duplicate. (fixbrief ST-2)
+                    new_r["_op_id"] = _secrets.token_hex(16)
                 rows.append(new_r)
 
             elif op == "edit":
@@ -6018,6 +6194,10 @@ def apply_local_trade(op: str, trade_row: Dict[str, object], *, mark_dirty: bool
                         if mark_dirty:
                             updated_r["_dirty"] = True
                             updated_r["_dirty_op"] = r.get("_dirty_op", "edit") if r.get("_dirty_op") == "add" else "edit"
+                            if updated_r["_dirty_op"] == "add":
+                                # Keep the pending-add idempotency key alive across
+                                # offline edits of a not-yet-synced row. (fixbrief ST-2)
+                                updated_r["_op_id"] = str(r.get("_op_id", "") or "") or _secrets.token_hex(16)
                         else:
                             updated_r["_dirty"] = False
                             updated_r["_dirty_op"] = ""
@@ -6030,6 +6210,8 @@ def apply_local_trade(op: str, trade_row: Dict[str, object], *, mark_dirty: bool
                     new_r["_dirty"] = mark_dirty
                     new_r["_dirty_op"] = "add" if mark_dirty else ""
                     new_r["_deleted"] = False
+                    if mark_dirty:
+                        new_r["_op_id"] = _secrets.token_hex(16)
                     rows.append(new_r)
 
             elif op == "delete":
@@ -6223,7 +6405,9 @@ def sync_portfolio_to_google(
         for r in dirty:  # r is a reference into raw["rows"] (no copy) — mutating it persists below
             op_code = str(r.get("_dirty_op", "edit"))
             trade_clean = {k: v for k, v in r.items() if not k.startswith("_")}
-            ok, msg = sync_trade_to_sheet(web_app_url, api_token, op_code, trade_clean)
+            # Replay the row's persisted idempotency key so a re-push of an 'add'
+            # whose earlier response was lost is a server-side no-op. (fixbrief ST-2)
+            ok, msg = sync_trade_to_sheet(web_app_url, api_token, op_code, trade_clean, op_id=str(r.get("_op_id", "") or ""))
             if ok:
                 pushed += 1
                 # Clear dirty PER-ROW immediately. The old code only cleared flags AFTER
@@ -6691,6 +6875,11 @@ _BG_SYNC_MIN_INTERVAL_SECONDS = 90
 def _background_sheet_sync(web_app_url: str, token: str) -> None:
     result = "err:unknown"
     try:
+        # Capture the store generation BEFORE the (1-20s) fetch: any foreground write
+        # (add/edit/delete — dirty OR Google-first) bumps _version, so a snapshot that
+        # predates it must NOT mirror over the store (the just-saved trade would vanish
+        # / a deleted one resurrect until the next window). (fixbrief ST-10)
+        ver_before = int(get_local_portfolio_meta().get("_version", 0) or 0)
         df_remote = _fetch_google_snapshot_raw(web_app_url, token)
         if df_remote is not None and not df_remote.empty:
             # Re-check dirty count INSIDE the thread, immediately before the destructive
@@ -6699,13 +6888,20 @@ def _background_sheet_sync(web_app_url: str, token: str) -> None:
             # is unsynced, skip the clobber and let the user push first.
             if count_dirty_local_trades() > 0:
                 result = "skip:dirty"
-            else:
+            elif save_local_portfolio(
+                df_remote, preserve_dirty=False,
+                meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
+                expected_version=ver_before,
+            ):
+                # Seed the emergency CSV cache only from a snapshot that actually
+                # won the race (never from a stale one). (fixbrief ST-10)
                 _save_local_snapshot_cache(df_remote)
-                save_local_portfolio(
-                    df_remote, preserve_dirty=False,
-                    meta_patch={"_last_synced": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")},
-                )
                 result = "ok:%d" % len(df_remote)
+            else:
+                # A foreground write landed while the fetch was in flight; no
+                # _last_synced stamp, so the normal staleness logic re-syncs the
+                # next window with a fresh snapshot.
+                result = "skip:raced"
         else:
             result = "empty"
         _clear_apps_script_cooldown()
@@ -6866,13 +7062,14 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_demo_snapshot_data() -> pd.DataFrame:
-    # Synthetic showcase portfolio used only for demo mode. Intentionally compact
-    # (~10 open holdings, low total ≈ 80k ILS) so the allocation pie stays clean and
-    # readable, while still feeling varied: every asset class (ETF / stock / crypto),
-    # two currencies (USD/ILS), clear winners AND clear losers, plus two closed trades
-    # (one gain, one loss) so realized-PnL / FIFO / allocation / build-up all populate.
-    # Read-only. (Mirrors the native apps' demo philosophy at presentation scale.)
-    FX = {"USD": 3.65, "ILS": 1.0}
+    # Synthetic showcase portfolio used only for demo mode. Showcase-scale (14 open
+    # holdings + 4 closed, ≈ 115k ILS open value): every asset class (ETF / stock /
+    # crypto), THREE currencies (USD/EUR/ILS), four platforms, clear winners AND
+    # losers, plus partial-sell FIFO stories (NVDA & BTC sold in part) and a
+    # dividend-paying core — so realized-PnL / FIFO / allocation / build-up all
+    # populate at their best. Read-only. KEPT IN SYNC with the native apps' demo
+    # (engine.js demoData). (QA r1 showcase upgrade)
+    FX = {"USD": 3.65, "EUR": 3.95, "ILS": 1.0}
 
     def mk(ticker, typ, platform, ccy, qty, buy, now_mul, date, commission,
            closed=False, sell_date="2026-03-18", loc=""):
@@ -6904,30 +7101,38 @@ def build_demo_snapshot_data() -> pd.DataFrame:
         return row
 
     demo_rows = [
-        # ── ETFs (USD) — steady core ─────────────────────────────────────────
-        mk("VOO",  "ETF", "Global Prime", "USD", 6, 408, 1.33, "2023-11-10", 6),
-        mk("QQQ",  "ETF", "Global Prime", "USD", 4, 372, 1.46, "2024-01-22", 6),
-        mk("IBIT", "ETF", "Global Prime", "USD", 30, 33, 1.52, "2024-02-19", 4),
-        # ── Stocks (USD) — a big winner + clear losers ───────────────────────
-        mk("NVDA", "שוק ההון", "Global Prime", "USD", 7,  95,  2.65, "2023-09-18", 5),
-        mk("AAPL", "שוק ההון", "Global Prime", "USD", 5,  165, 1.28, "2024-02-08", 5),
-        mk("TSLA", "שוק ההון", "Quant Desk",   "USD", 4,  255, 0.80, "2024-06-12", 5, loc="Underwater"),
-        mk("INTC", "שוק ההון", "Quant Desk",   "USD", 12, 44,  0.53, "2024-04-19", 4, loc="Underwater"),
-        # ── Crypto (ILS · local desk) — a moon + a crash ─────────────────────
-        mk("BTC",  "קריפטו", "Bit2C", "ILS", 0.03, 142000, 1.85, "2023-08-14", 0, loc="Cold Wallet"),
-        mk("SOL",  "קריפטו", "Bit2C", "ILS", 11,   390,    2.20, "2023-10-22", 0, loc="Staking Wallet"),
-        mk("DOGE", "קריפטו", "Bit2C", "ILS", 4000, 0.5,    0.58, "2024-09-11", 0, loc="Underwater"),
-        # ── Closed trades (one gain, one loss) ───────────────────────────────
-        mk("META", "שוק ההון", "Global Prime", "USD", 5,  300, 1.70, "2023-07-01", 5, closed=True, sell_date="2025-11-20"),
-        mk("ARKK", "ETF",      "Global Prime", "USD", 20, 51,  0.84, "2024-05-22", 4, closed=True, sell_date="2025-09-08"),
+        # ── ETF core (USD) — steady compounder + spot-bitcoin ETF ────────────
+        mk("VOO",  "ETF", "Global Prime", "USD", 9,  408,  1.34, "2023-11-10", 6),
+        mk("QQQ",  "ETF", "Global Prime", "USD", 6,  372,  1.47, "2024-01-22", 6),
+        mk("SCHD", "ETF", "Global Prime", "USD", 40, 27.5, 1.18, "2024-03-14", 4),
+        mk("IBIT", "ETF", "Global Prime", "USD", 45, 33,   1.55, "2024-02-19", 4),
+        # ── Stocks (USD) — a big winner, steady names, clear losers ──────────
+        mk("NVDA", "שוק ההון", "Global Prime", "USD", 10, 95,  2.72, "2023-09-18", 5),
+        mk("MSFT", "שוק ההון", "Global Prime", "USD", 5,  378, 1.23, "2024-04-02", 5),
+        mk("AAPL", "שוק ההון", "Quant Desk",   "USD", 8,  165, 1.29, "2024-02-08", 5),
+        mk("TSLA", "שוק ההון", "Quant Desk",   "USD", 5,  255, 0.81, "2024-06-12", 5, loc="Underwater"),
+        mk("INTC", "שוק ההון", "Quant Desk",   "USD", 20, 44,  0.55, "2024-04-19", 4, loc="Underwater"),
+        # ── Europe (EUR) — multi-currency showcase ───────────────────────────
+        mk("ASML", "שוק ההון", "Euro Broker",  "EUR", 2,  640, 1.21, "2024-08-06", 7),
+        # ── Crypto (ILS · local desk) — a moon, a solid, a double, a crash ───
+        mk("BTC",  "קריפטו", "Bit2C", "ILS", 0.045, 142000, 1.88, "2023-08-14", 0, loc="Cold Wallet"),
+        mk("ETH",  "קריפטו", "Bit2C", "ILS", 0.8,   8200,   1.42, "2024-05-27", 0, loc="Cold Wallet"),
+        mk("SOL",  "קריפטו", "Bit2C", "ILS", 16,    390,    2.25, "2023-10-22", 0, loc="Staking Wallet"),
+        mk("DOGE", "קריפטו", "Bit2C", "ILS", 5000,  0.5,    0.58, "2024-09-11", 0),
+        # ── Closed trades — realized gains AND a loss, incl. PARTIAL sells ───
+        mk("META", "שוק ההון", "Global Prime", "USD", 6,  300, 1.72, "2023-07-01", 5, closed=True, sell_date="2026-02-12"),
+        mk("NVDA", "שוק ההון", "Global Prime", "USD", 4,  95,  2.31, "2023-09-18", 2, closed=True, sell_date="2025-11-04"),
+        mk("ARKK", "ETF",      "Global Prime", "USD", 25, 51,  0.83, "2024-05-22", 4, closed=True, sell_date="2025-09-08"),
+        mk("BTC",  "קריפטו",   "Bit2C",        "ILS", 0.015, 142000, 1.79, "2023-08-14", 0, closed=True, sell_date="2026-04-15", loc="Cold Wallet"),
     ]
     df = pd.DataFrame(demo_rows)
 
-    # Keep the demo total intentionally low for presentations (≈ 80k ILS open value)
-    # so the allocation pie and figures stay clean and uncluttered.
+    # Guard rail only: the showcase is tuned to ≈115k ILS open value (health 86,
+    # HHI 0.093, no slice above ~15.5%) — rescale kicks in only if a future edit
+    # balloons past the cap, keeping the allocation pie clean.
     open_mask = df["Status"].map(_clean) != "סגור"
     open_value_ils = float(df.loc[open_mask, "Current_Value_ILS"].map(_num).sum())
-    target_open_value_ils = 80000.0
+    target_open_value_ils = 120000.0
     if open_value_ils > (target_open_value_ils + 1e-9):
         scale = target_open_value_ils / open_value_ils
         for col in ["Cost_Origin", "Cost_ILS", "Current_Value_ILS", "Commission"]:
@@ -7054,7 +7259,7 @@ def load_snapshot_data(
     return pd.DataFrame(), "empty"
 
 
-def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Dict[str, object]) -> Tuple[bool, str]:
+def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Dict[str, object], op_id: str = "") -> Tuple[bool, str]:
     if not web_app_url:
         return False, "חסר קישור Web App של Apps Script"
 
@@ -7102,9 +7307,18 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
 
     normalized_trade = _prepare_trade_payload(trade_row)
     payload = {"token": token or "", "action": action, "trade": normalized_trade}
+    if action == "add":
+        # Idempotency key: GAS caches the add result under this id, so a replayed
+        # add (dirty re-push after a lost response) is a no-op instead of a salted
+        # duplicate row. A NEW op_id per logical add keeps legitimate repeat
+        # purchases (same content) appending as before. (fixbrief ST-2/ST-5)
+        payload["op_id"] = _clean(op_id) or _secrets.token_hex(16)
 
     try:
-        parsed = call_apps_script_(web_app_url, payload)
+        # 'add' is NOT replay-idempotent at the transport level — a timed-out first
+        # attempt may have committed on the sheet — so it must not auto-retry.
+        # edit/delete are full-overwrite replays and keep the normal retry budget.
+        parsed = call_apps_script_(web_app_url, payload, max_retries=1 if action == "add" else NETWORK_MAX_RETRIES)
     except urlerror.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else str(exc)
         return False, f"שגיאת HTTP מהשרת: {exc.code} | {details}"
@@ -7112,6 +7326,15 @@ def sync_trade_to_sheet(web_app_url: str, token: str, action: str, trade_row: Di
         return False, f"שגיאת תקשורת ל-Apps Script: {exc}"
 
     if bool(parsed.get("ok")):
+        if action == "add":
+            # Adopt a server-assigned Trade_ID (GAS renames on a genuine collision)
+            # so the local mirror stores the id that actually lives on the sheet. (fixbrief ST-17)
+            sid = _clean(str(parsed.get("trade_id") or parsed.get("Trade_ID") or ""))
+            if sid:
+                try:
+                    trade_row["Trade_ID"] = sid
+                except Exception:
+                    pass
         return True, str(parsed.get("message") or "נשמר בהצלחה בגוגל שיט")
     return False, str(parsed.get("error") or parsed)
 
@@ -8368,6 +8591,27 @@ def _pp_inline_icon(color: str) -> str:
     return "data:image/svg+xml;base64," + _pp_b64.b64encode(svg.encode()).decode()
 
 
+def _pp_inline_icon_coral() -> str:
+    # Coral Streamlit-variant mark for the PWA manifest — mirrors the header logo
+    # (coral→amber squircle + white allocation donut + growth spark) at 192x192, so
+    # "Add to Home Screen" matches the coral tab favicon / v2.10.4 sub-brand instead
+    # of the old indigo native-family mark. (fixbrief ST-14)
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'>"
+        "<defs><linearGradient id='stG' x1='0' y1='0' x2='192' y2='192' gradientUnits='userSpaceOnUse'>"
+        "<stop offset='0%' stop-color='#ff5470'/><stop offset='55%' stop-color='#ff6a55'/>"
+        "<stop offset='100%' stop-color='#ff9a3d'/></linearGradient></defs>"
+        "<rect width='192' height='192' rx='52' fill='url(#stG)'/>"
+        "<circle cx='96' cy='96' r='44' fill='none' stroke='#ffffff' stroke-opacity='.42' stroke-width='17.2'/>"
+        "<circle cx='96' cy='96' r='44' fill='none' stroke='#ffffff' stroke-width='17.2' stroke-linecap='round' "
+        "stroke-dasharray='128 150.4' transform='rotate(-90 96 96)'/>"
+        "<path d='M78.8 111.2 L92.4 95.2 L105.6 102.8 L119.2 84.8' stroke='#ffffff' stroke-width='9.6' "
+        "stroke-linecap='round' stroke-linejoin='round' fill='none'/>"
+        "<circle cx='119.2' cy='84.8' r='7.6' fill='#ffffff'/></svg>"
+    )
+    return "data:image/svg+xml;base64," + _pp_b64.b64encode(svg.encode()).decode()
+
+
 def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
     # Idempotency guard: the JS uses an `ensure()` upsert into the parent <head>,
     # so re-running it only spawns a throwaway iframe. Inject once per session,
@@ -8380,10 +8624,13 @@ def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
         st.session_state["_pp_pwa_assets_key"] = _pwa_key
     except Exception:
         pass
-    theme_color = "#0f172a" if is_dark else "#6366f1"
+    # Coral (not indigo) in light mode — the installed-PWA identity must match the
+    # v2.10.4 coral "Portfolio OS Streamlit" sub-brand; dark keeps the theme-neutral
+    # slate chrome. (fixbrief ST-14)
+    theme_color = "#0f172a" if is_dark else "#ff5470"
     manifest = {
-        "name": "Portfolio Manager",
-        "short_name": "Portfolio",
+        "name": "Portfolio OS Streamlit",
+        "short_name": "Portfolio OS",
         "start_url": ".",
         "display": "standalone",
         "background_color": "#0f172a" if is_dark else "#ffffff",
@@ -8391,7 +8638,7 @@ def _pp_inject_pwa_assets(language: str, is_dark: bool) -> None:
         "orientation": "any",
         "lang": "he" if language.startswith("ע") else "en",
         "icons": [
-            {"src": _pp_inline_icon(theme_color), "sizes": "192x192", "type": "image/svg+xml"},
+            {"src": _pp_inline_icon_coral(), "sizes": "192x192", "type": "image/svg+xml"},
         ],
     }
     manifest_data_uri = "data:application/manifest+json;base64," + _pp_b64.b64encode(
@@ -9566,7 +9813,8 @@ def sim_project_portfolio(
     n = max(int(round(years * 12)), 0)
     if n == 0:
         return pd.DataFrame(
-            [{"month": 0, "year": 0.0, "contributions_cum": initial_capital,
+            [{"month": 0, "year": 0.0,
+              "contributions_cum": initial_capital + (lump_sum if lump_sum_month == 0 else 0.0),
               "balance_no_lump": initial_capital,
               "balance_with_lump": initial_capital + (lump_sum if lump_sum_month == 0 else 0.0)}]
         )
@@ -9586,13 +9834,16 @@ def sim_project_portfolio(
 
     balances_nl[0] = initial_capital
     balances_wl[0] = initial_capital + (lump_sum if k == 0 else 0.0)
-    contribs[0] = initial_capital
+    # The lump sum IS a contribution — engine.js projectPortfolio parity (contrib=bal
+    # at t0; contrib += lump at lumpMonth). Omitting it made the chart baseline and
+    # the yearly 'Contributed' column contradict the KPI above them. (fixbrief ST-12)
+    contribs[0] = initial_capital + (lump_sum if k == 0 else 0.0)
 
     for m in range(1, n + 1):
         balances_nl[m] = balances_nl[m - 1] * (1.0 + r_m) + monthly_contribution
         inj = lump_sum if m == k else 0.0
         balances_wl[m] = balances_wl[m - 1] * (1.0 + r_m) + monthly_contribution + inj
-        contribs[m] = contribs[m - 1] + monthly_contribution
+        contribs[m] = contribs[m - 1] + monthly_contribution + inj
 
     months = np.arange(n + 1, dtype=int)
     return pd.DataFrame({
@@ -11342,6 +11593,21 @@ DIVIDENDS_FILE = _DATA_DIR / "dividends.json"
 
 
 def _load_dividends() -> list:
+    # Pull the shared sheet ONCE per session (so EXE/APK dividends appear here) then read the local mirror on
+    # subsequent reruns — avoids a network call on every rerun while staying in sync. (sync audit: B)
+    try:
+        if "_div_synced" not in st.session_state:
+            st.session_state["_div_synced"] = True
+            s = load_local_settings()
+            url = _clean(s.get("web_app_url", "")); tok = _clean(s.get("api_token", ""))
+            if url:
+                remote = load_dividends_remote(url, tok, "live")
+                if remote:
+                    try: DIVIDENDS_FILE.write_text(json.dumps(remote, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception: pass
+                    return remote
+    except Exception:
+        pass
     try:
         if DIVIDENDS_FILE.exists():
             data = json.loads(DIVIDENDS_FILE.read_text(encoding="utf-8"))
@@ -11356,6 +11622,303 @@ def _save_dividends(rows: list) -> None:
         DIVIDENDS_FILE.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+    # Also push to the shared Google Sheet so a dividend added in Streamlit shows in the EXE/APK too. (sync audit: B)
+    try:
+        s = load_local_settings()
+        url = _clean(s.get("web_app_url", "")); tok = _clean(s.get("api_token", ""))
+        if url:
+            save_dividends_remote(url, tok, "live", rows)
+    except Exception:
+        pass
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 🔐 Crypto Custody (משמורת קריפטו) — MIRRORS the native apps' custody logic
+# so all surfaces agree on the same numbers. Marker: PP-CRYPTO-CUSTODY.
+# ══════════════════════════════════════════════════════════════════════
+_CUSTODY_KIND_COLORS = {"cold": "#22d3ee", "staking": "#34d399", "exchange": "#f59e0b"}
+_CUSTODY_KIND_ORDER = {"cold": 0, "staking": 1, "exchange": 2}
+# STAKING IS CHECKED FIRST — "Staking Wallet" must classify as staking, not cold
+# (the cold regex also matches the word "wallet"-adjacent terms). Mirror of the
+# native kind rules exactly (same patterns, same precedence).
+_CUSTODY_STAKING_RE = re.compile(r"stak|סטייק|earn")
+_CUSTODY_COLD_RE = re.compile(r"ארנק קר|cold|ledger|trezor|vault|כספת|offline|hardware")
+
+
+def _custody_kind(location: object) -> str:
+    """Classify a custody location: staking → cold → exchange (in that order)."""
+    low = _clean(location).lower()
+    if _CUSTODY_STAKING_RE.search(low):
+        return "staking"
+    if _CUSTODY_COLD_RE.search(low):
+        return "cold"
+    return "exchange"
+
+
+def build_crypto_custody(open_trades: "pd.DataFrame") -> pd.DataFrame:
+    """Per-lot custody frame for OPEN spot-crypto rows — the pandas mirror of the
+    native apps' custody computation.
+
+    - SPOT crypto only: _asset_class_label(...)=='crypto' EXCLUDING the
+      crypto-proxy ETFs (CRYPTO_SHARE_TICKERS: IBIT/ETHA/BSOL) — the issuer
+      custodies those, so they don't belong in a self-custody breakdown.
+    - Location = Current_Location, falling back to Platform when blank, else '—'.
+    - Value_ILS = the frame's Current_Value_ILS (pass the live-enriched
+      dashboard_df so values match the holdings table).
+    Returns columns: Trade_ID, Ticker, Quantity, Value_ILS, Location, Kind.
+    """
+    empty = pd.DataFrame(columns=["Trade_ID", "Ticker", "Quantity", "Value_ILS", "Location", "Kind"])
+    if not isinstance(open_trades, pd.DataFrame) or open_trades.empty:
+        return empty
+    work = open_trades.copy()
+    for col in ["Ticker", "Type", "Current_Location", "Platform", "Status", "Trade_ID"]:
+        if col not in work.columns:
+            work[col] = ""
+        work[col] = work[col].map(_clean)
+    for col in ["Quantity", "Current_Value_ILS"]:
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = work[col].map(_num)
+    # Defensive: keep OPEN rows only, even if a caller passes the full trades frame.
+    work = work[~work["Status"].map(_is_closed_status)]
+    if work.empty:
+        return empty
+    work["Ticker"] = work["Ticker"].str.upper()
+    spot_mask = work.apply(
+        lambda r: _asset_class_label(r.get("Ticker", ""), r.get("Type", "")) == "crypto", axis=1
+    ) & ~work["Ticker"].isin(CRYPTO_SHARE_TICKERS)
+    work = work[spot_mask].copy()
+    if work.empty:
+        return empty
+    loc = work["Current_Location"].where(work["Current_Location"].ne(""), work["Platform"])
+    work["Location"] = loc.where(loc.ne(""), "—")
+    work["Kind"] = work["Location"].map(_custody_kind)
+    work["Value_ILS"] = work["Current_Value_ILS"]
+    return work[["Trade_ID", "Ticker", "Quantity", "Value_ILS", "Location", "Kind"]].reset_index(drop=True)
+
+
+def render_crypto_custody(
+    live_open_trades: "pd.DataFrame",
+    stored_open_trades: "pd.DataFrame",
+    tr,
+    language: str,
+    *,
+    is_demo: bool = False,
+    is_mobile: bool = False,
+    is_dark: bool = True,
+    web_app_url: str = "",
+    api_token: str = "",
+) -> None:
+    """🔐 Crypto-custody section: metric row + stacked location bar + table +
+    the location mover. Rendered ONLY when there are open spot-crypto lots.
+
+    The move flow reuses the Manage-page persistence path EXACTLY (Google-first
+    atomic): sync_trade_to_sheet('edit', FULL row) → apply_local_trade('edit',
+    row, mark_dirty=False) → snapshot-cache clears → st.rerun(). The payload is
+    built from the stored row with ONLY Current_Location changed — never a
+    partial payload that could blank other sheet columns. Marker: PP-CRYPTO-CUSTODY.
+    """
+    lots = build_crypto_custody(live_open_trades)
+    if lots.empty:
+        return
+    total_val = float(lots["Value_ILS"].sum())
+    if total_val <= 0:
+        return
+
+    st.markdown(f"### 🔐 {tr('Crypto Custody', 'משמורת קריפטו')}")
+
+    by_loc = lots.groupby(["Location", "Kind"], as_index=False)["Value_ILS"].sum()
+    by_loc["_ord"] = by_loc["Kind"].map(_CUSTODY_KIND_ORDER)
+    by_loc = by_loc.sort_values(["_ord", "Value_ILS"], ascending=[True, False]).reset_index(drop=True)
+    cold_val = float(by_loc.loc[by_loc["Kind"] == "cold", "Value_ILS"].sum())
+    cold_share = (cold_val / total_val) if total_val else 0.0
+    n_locations = int(by_loc["Location"].nunique())
+
+    # ── KPI row ──────────────────────────────────────────────────────────
+    m1, m2, m3 = st.columns(3)
+    m1.metric(
+        tr("Cold-wallet %", "% בארנק קר"),
+        f"{cold_share:.1%}",
+        help=tr(
+            "Share of your spot crypto held in cold storage (hardware/offline wallets) — the key security KPI.",
+            "חלק הקריפטו הספוט שמאוחסן בארנק קר (ארנק חומרה/לא-מקוון) — מדד האבטחה המרכזי.",
+        ),
+    )
+    m2.metric(
+        tr("Spot crypto value", "שווי קריפטו (ספוט)"),
+        f"₪{total_val:,.0f}",
+        help=tr(
+            "Live value of spot coins only — crypto ETFs (IBIT/ETHA/BSOL) are excluded because the issuer custodies them.",
+            "שווי חי של מטבעות ספוט בלבד — קרנות סל קריפטו (IBIT/ETHA/BSOL) אינן נכללות כי המנפיק מחזיק אותן.",
+        ),
+    )
+    m3.metric(
+        tr("Locations", "מיקומים"),
+        f"{n_locations}",
+        help=tr("Distinct custody locations holding spot coins.", "מספר המיקומים השונים שמחזיקים מטבעות ספוט."),
+    )
+    _space(6)
+
+    # ── Stacked distribution bar (one segment per location, colored by kind) ──
+    # Compact 120px strip — _apply_plotly_theme is NOT used here on purpose: it
+    # forces t=48/b=80 margins + a 320px mobile height that break a slim bar.
+    fig = go.Figure()
+    for r in by_loc.itertuples(index=False):
+        share = float(r.Value_ILS) / total_val if total_val else 0.0
+        fig.add_trace(go.Bar(
+            y=[""],
+            x=[float(r.Value_ILS)],
+            name=str(r.Location),
+            orientation="h",
+            marker=dict(color=_CUSTODY_KIND_COLORS.get(str(r.Kind), "#f59e0b")),
+            hovertemplate=f"<b>{_esc(str(r.Location))}</b><br>₪%{{x:,.0f}} · {share:.1%}<extra></extra>",
+        ))
+    fig.update_layout(
+        barmode="stack",
+        height=120,
+        showlegend=False,
+        bargap=0.25,
+        margin=dict(l=8, r=8, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(visible=False, fixedrange=True),
+        yaxis=dict(visible=False, fixedrange=True),
+        font_color="#f1f5f9" if is_dark else "#0f172a",
+        hoverlabel=dict(font=dict(size=13)),
+    )
+    if language == LANG_HE:
+        fig.update_xaxes(autorange="reversed")  # RTL read direction (cold segment starts on the right)
+    st.plotly_chart(fig, width="stretch", theme="streamlit", key="crypto_custody_bar")
+
+    _kind_labels = {
+        "cold": tr("Cold wallet", "ארנק קר"),
+        "staking": tr("Staking", "סטייקינג"),
+        "exchange": tr("Exchange", "זירה"),
+    }
+    chips = " · ".join(
+        f"<span style='color:{_CUSTODY_KIND_COLORS[k]};font-weight:700'>■</span> {_kind_labels[k]}"
+        for k in ("cold", "staking", "exchange")
+        if bool((by_loc["Kind"] == k).any())
+    )
+    st.markdown(f"<div style='opacity:.85;font-size:.85rem;margin-bottom:.4rem'>{chips}</div>", unsafe_allow_html=True)
+
+    # ── Per-location table ───────────────────────────────────────────────
+    _kind_icon = {"cold": "❄️", "staking": "🌱", "exchange": "🏦"}
+    # LTR isolate so "₪12,345" / "BTC 0.045" render as one unit inside the RTL table.
+    _iso = lambda s: "⁦" + s + "⁩"
+    coin_rows = lots.groupby(["Location", "Ticker"], as_index=False).agg(
+        Quantity=("Quantity", "sum"), Value_ILS=("Value_ILS", "sum")
+    )
+    table_rows = []
+    for r in by_loc.itertuples(index=False):
+        coins_df = coin_rows[coin_rows["Location"] == r.Location].sort_values("Value_ILS", ascending=False)
+        coins = " · ".join(f"{t} {_smart_qty(q)}" for t, q in zip(coins_df["Ticker"], coins_df["Quantity"]))
+        table_rows.append({
+            tr("Location", "מיקום"): str(r.Location),
+            tr("Kind", "סוג"): f"{_kind_icon.get(str(r.Kind), '🏦')} {_kind_labels.get(str(r.Kind), str(r.Kind))}",
+            tr("Coins", "מטבעות"): _iso(coins),
+            tr("Value (₪)", "שווי ₪"): _iso(f"₪{float(r.Value_ILS):,.0f}"),
+            tr("% of crypto", "% מהקריפטו"): (f"{(float(r.Value_ILS) / total_val):.1%}" if total_val else "—"),
+        })
+    _render_dataframe_adaptive(pd.DataFrame(table_rows), is_mobile, width="stretch", hide_index=True)
+
+    # ── Move flow (SYNCED — Manage-page persistence path) ────────────────
+    if is_demo:
+        st.caption(tr("Demo mode — read-only.", "מצב הדגמה — לקריאה בלבד."))
+        st.divider()
+        return
+
+    with st.expander("🔁 " + tr("Move a coin between locations", "העברת מטבע בין מיקומים")):
+        groups = (
+            lots.groupby(["Ticker", "Location"], as_index=False)
+            .agg(Quantity=("Quantity", "sum"), Value_ILS=("Value_ILS", "sum"))
+            .sort_values("Value_ILS", ascending=False)
+        )
+        group_labels: List[str] = []
+        group_map: Dict[str, Tuple[str, str]] = {}
+        for g in groups.itertuples(index=False):
+            lbl = f"{g.Ticker} — {g.Location} ({_smart_qty(g.Quantity)})"
+            group_labels.append(lbl)
+            group_map[lbl] = (str(g.Ticker), str(g.Location))
+        src_label = st.selectbox(tr("Coin to move", "מטבע להעברה"), group_labels, key="custody_move_src")
+        src_ticker, src_location = group_map.get(src_label, ("", ""))
+
+        other_label = tr("Other (type manually)…", "אחר (הקלדה ידנית)…")
+        dest_options = [l for l in by_loc["Location"].tolist() if l not in ("—", src_location)]
+        _default_cold = "ארנק קר (Ledger)"
+        if _default_cold not in dest_options:
+            dest_options.append(_default_cold)
+        dest_options.append(other_label)
+        dest_pick = st.selectbox(tr("Destination location", "מיקום יעד"), dest_options, key="custody_move_dest")
+        if dest_pick == other_label:
+            dest = st.text_input(tr("Custom location", "מיקום מותאם"), key="custody_move_dest_custom")
+        else:
+            dest = dest_pick
+        dest = _clean(dest)
+
+        if st.button("🔁 " + tr("Move", "בצע העברה"), key="custody_move_go", type="primary"):
+            if not dest:
+                st.warning(tr("Choose a destination location.", "יש לבחור מיקום יעד."))
+            elif dest == src_location:
+                st.warning(tr("Destination equals the current location.", "מיקום היעד זהה למיקום הנוכחי."))
+            elif not is_apps_script_web_app_url(_clean(web_app_url)):
+                # Same gate as the Manage-page edit: Google-first atomic needs a Web App URL.
+                st.error(tr(
+                    "Google Sheets connection required. Configure a valid Web App URL to move coins.",
+                    "נדרש חיבור לגוגל שיט. הגדר Web App URL תקין כדי להעביר מטבעות.",
+                ))
+            else:
+                move_ids = [
+                    _clean(t) for t in
+                    lots.loc[(lots["Ticker"] == src_ticker) & (lots["Location"] == src_location), "Trade_ID"].tolist()
+                    if _clean(t)
+                ]
+                src_rows = stored_open_trades if isinstance(stored_open_trades, pd.DataFrame) else pd.DataFrame()
+                # SAME field list as the Manage-page edit form (editable_cols) — the
+                # payload always carries the FULL row so no sheet column gets blanked.
+                payload_fields = [
+                    "Current_Location", "Platform", "Type", "Ticker", "Purchase_Date", "Quantity",
+                    "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Sell_Date",
+                    "Sell_Price_Origin", "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID",
+                ]
+                ok_count, failures = 0, []
+                if not move_ids:
+                    failures.append(tr("No syncable lots found (missing Trade_ID).", "לא נמצאו לוטים ברי-סנכרון (חסר Trade_ID)."))
+                for tid in move_ids:
+                    match = (
+                        src_rows[src_rows["Trade_ID"].astype(str).map(_clean) == tid]
+                        if "Trade_ID" in src_rows.columns else pd.DataFrame()
+                    )
+                    if match.empty:
+                        failures.append(f"{tid[:8]}: {tr('row not found', 'רשומה לא נמצאה')}")
+                        continue
+                    src = match.iloc[0]
+                    edited = {f: src.get(f, "") for f in payload_fields}
+                    edited["Current_Location"] = dest
+                    edited["Trade_ID"] = tid
+                    # GOOGLE-FIRST ATOMIC: push to Google first; mirror locally only on success.
+                    ok, msg = sync_trade_to_sheet(_clean(web_app_url), api_token, "edit", edited)
+                    if ok:
+                        apply_local_trade("edit", edited, mark_dirty=False)
+                        ok_count += 1
+                    else:
+                        failures.append(f"{src_ticker} {tid[:8]}: {msg}")
+                if ok_count:
+                    load_google_snapshot_data.clear()
+                    load_google_snapshot_data_via_gspread.clear()
+                if failures:
+                    st.error(
+                        tr("Some lots failed to move — no partial columns were written:",
+                           "חלק מהלוטים לא הועברו — לא נכתבו עמודות חלקיות:")
+                        + " " + " | ".join(failures[:3])
+                    )
+                elif ok_count:
+                    st.success(tr(
+                        f"Moved {ok_count} lot(s) of {src_ticker} to {dest} (local + Google Sheets).",
+                        f"הועברו {ok_count} לוטים של {src_ticker} אל {dest} (מקומי + גוגל שיט).",
+                    ))
+                    st.rerun()
+    st.divider()
 
 
 def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
@@ -11486,6 +12049,13 @@ def render_smart_features(open_trades: "pd.DataFrame", language: str) -> None:
                     st.rerun()
             if divs:
                 ddf = pd.DataFrame(divs)
+                # Only POSITIVE dividends count toward totals — parity with engine.js
+                # dividendStats (QA DD-003), so the same sheet shows the same number on
+                # EXE/APK/Streamlit. Coerce first: a hand-edited dividends store/sheet
+                # cell may hold a string. Filter at STATS time only — never in the
+                # loaders, whose lists round-trip back to the authoritative sheet. (fixbrief ST-19/20)
+                ddf["amount"] = pd.to_numeric(ddf["amount"], errors="coerce").fillna(0.0)
+                ddf = ddf[ddf["amount"] > 0]
                 total = float(ddf["amount"].sum())
                 _cy = str(datetime.now().year)   # derive the year, don't hardcode 2026
                 # Extract the first 4-digit run as the year so BOTH ISO (2026-03-18) and
@@ -11562,8 +12132,11 @@ def main() -> None:
         _early_lang = _early_cfg.get("language", LANG_HE)
     except Exception:
         pass
-    _page_title = "Portfolio OS"
-    st.set_page_config(page_title=_page_title, page_icon="📈", layout="wide", initial_sidebar_state="auto")
+    _page_title = "Portfolio OS Streamlit"
+    # Distinct coral favicon for the Streamlit build (falls back to an emoji if the file is missing).
+    _icon_file = Path(__file__).resolve().parent / "streamlit_icon.png"
+    _page_icon = str(_icon_file) if _icon_file.exists() else "📊"
+    st.set_page_config(page_title=_page_title, page_icon=_page_icon, layout="wide", initial_sidebar_state="auto")
 
     # ══════════════════════════════════════════════════════════════════════
     # Premium CSS — Bug fixes, mobile-only enhancements, sidebar polish
@@ -12336,6 +12909,17 @@ def main() -> None:
                 letter-spacing: -.022em !important;
                 text-shadow: 0 2px 20px rgba(0,0,0,.20) !important;
             }}
+            /* The coral "Streamlit" span (base rule, same 0,2,0 specificity) is
+               illegible over the vivid hero accents (worst 1.02:1 on amber) —
+               force it white here; this block is injected LATER so equal
+               !important wins. Coral identity stays on the squircle logo. (fixbrief ST-4) */
+            .app-main-title .app-title-st {{
+                background: none !important;
+                -webkit-background-clip: border-box !important;
+                background-clip: border-box !important;
+                -webkit-text-fill-color: #ffffff !important;
+                color: #ffffff !important;
+            }}
             .app-sub-title {{
                 color: rgba(255,255,255,.94) !important;
                 font-weight: 700 !important;
@@ -12845,22 +13429,27 @@ def main() -> None:
         f"""<div class='app-header-wrap'>
   <div class='app-logo-row'>
     <div class='app-logo-text'>
-      <h1 class='app-main-title'>Portfolio OS</h1>
+      <h1 class='app-main-title'>Portfolio OS <span class='app-title-st'>Streamlit</span></h1>
       <div class='app-logo-badge'>{tr('Smart Portfolio Management', 'ניהול השקעות חכם')}</div>
     </div>
     <div class='app-logo-icon'>
+      <!-- Distinct Streamlit variant mark: coral->amber squircle + white allocation donut + growth spark. -->
       <svg width='48' height='48' viewBox='0 0 48 48' fill='none' xmlns='http://www.w3.org/2000/svg'>
-        <rect width='48' height='48' rx='13' fill='url(#logoGrad)'/>
-        <polyline points='9,33 17,22 24,27 32,14 39,19' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round' fill='none'/>
-        <circle cx='39' cy='19' r='3' fill='white'/>
-        <rect x='9' y='35' width='6' height='6' rx='2' fill='rgba(255,255,255,0.65)'/>
-        <rect x='18' y='30' width='6' height='11' rx='2' fill='rgba(255,255,255,0.8)'/>
-        <rect x='27' y='25' width='6' height='16' rx='2' fill='white'/>
+        <rect width='48' height='48' rx='13' fill='url(#stGrad)'/>
+        <rect width='48' height='48' rx='13' fill='url(#stSheen)'/>
+        <circle cx='24' cy='24' r='11' fill='none' stroke='#ffffff' stroke-opacity='.42' stroke-width='4.3'/>
+        <circle cx='24' cy='24' r='11' fill='none' stroke='#ffffff' stroke-width='4.3' stroke-linecap='round' stroke-dasharray='32 37.6' transform='rotate(-90 24 24)'/>
+        <path d='M19.7 27.8 L23.1 23.8 L26.4 25.7 L29.8 21.2' stroke='#ffffff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' fill='none'/>
+        <circle cx='29.8' cy='21.2' r='1.9' fill='#ffffff'/>
         <defs>
-          <linearGradient id='logoGrad' x1='0' y1='0' x2='48' y2='48' gradientUnits='userSpaceOnUse'>
-            <stop offset='0%' stop-color='#6366f1'/>
-            <stop offset='60%' stop-color='#818cf8'/>
-            <stop offset='100%' stop-color='#38bdf8'/>
+          <linearGradient id='stGrad' x1='0' y1='0' x2='48' y2='48' gradientUnits='userSpaceOnUse'>
+            <stop offset='0%' stop-color='#ff5470'/>
+            <stop offset='55%' stop-color='#ff6a55'/>
+            <stop offset='100%' stop-color='#ff9a3d'/>
+          </linearGradient>
+          <linearGradient id='stSheen' x1='0' y1='0' x2='0' y2='48' gradientUnits='userSpaceOnUse'>
+            <stop offset='0%' stop-color='#ffffff' stop-opacity='.18'/>
+            <stop offset='50%' stop-color='#ffffff' stop-opacity='0'/>
           </linearGradient>
         </defs>
       </svg>
@@ -13735,6 +14324,7 @@ def main() -> None:
                     Cost_Origin=("Cost_Origin", "sum"),
                     Cost_Origin_With_Fee=("Cost_Origin_With_Fee", "sum"),
                     Value_Origin=("Value_Origin_Est", "sum"),
+                    Origin_Currency=("Origin_Currency", "first"),
                 )
                 out["Net_PnL_ILS"] = out["Value_ILS"] - out["Cost_ILS_With_Fee"]
                 out["Yield_ILS"] = np.where(out["Cost_ILS_With_Fee"] > 0, out["Net_PnL_ILS"] / out["Cost_ILS_With_Fee"], 0.0)
@@ -13749,6 +14339,7 @@ def main() -> None:
                 )
                 _is_pure = out["Ticker"].map(lambda t: _ticker_pure.get(t, True))
                 out["Yield_Origin"] = np.where(_is_pure, _origin_raw, out["Yield_ILS"])
+                out["Is_Pure"] = _is_pure.to_numpy()  # carry the pure/mixed flag for the avg-buy-price column
                 return out
 
             def render_exposure_section(summary_df: pd.DataFrame, widget_prefix: str = "overview", include_watchlist: bool = True) -> None:
@@ -13781,6 +14372,25 @@ def main() -> None:
                 pnl_col = localize_column_name("Net_PnL_ILS", language)
                 yield_origin_col = localize_column_name("Yield_Origin", language)
                 yield_ils_col = localize_column_name("Yield_ILS", language)
+
+                # Average buy price per asset, in the asset's ORIGIN currency (parity with the desktop/phone
+                # holdings views). Pre-formatted as a per-row string (the column mixes $/₪), so it bypasses the
+                # numeric format map. Mixed-currency tickers (ILS+USD) have no single origin price → fall back
+                # to the ILS average (Cost_ILS/Qty); zero qty → em-dash.
+                if not exposure_view.empty and {"Cost_Origin", "Open_Qty"}.issubset(summary_df.columns):
+                    def _avg_buy_str(row):
+                        q = _num(row.get("Open_Qty"))
+                        if not (q > 0):
+                            return "—"
+                        if bool(row.get("Is_Pure", True)):
+                            cur = _infer_display_currency(_clean(row.get("Ticker")), row.get("Origin_Currency"))
+                            return _format_currency_value(_num(row.get("Cost_Origin")) / q, cur)
+                        return _format_currency_value(_num(row.get("Cost_ILS")) / q, "ILS")
+                    avg_label = tr("Avg Buy Price", "מחיר קנייה ממוצע")
+                    avg_series = summary_df.apply(_avg_buy_str, axis=1)
+                    _cols = list(exposure_view.columns)
+                    _pos = (_cols.index(current_price_col) + 1) if current_price_col in _cols else len(_cols)
+                    exposure_view.insert(_pos, avg_label, avg_series.to_numpy())
 
                 if exposure_view.empty:
                     st.info(tr("No open positions to show in Exposure Table.", "אין פוזיציות פתוחות להצגה בטבלת החשיפה."))
@@ -13818,8 +14428,8 @@ def main() -> None:
                         localize_column_name("Cost_ILS", language): "{:,.0f}",
                         localize_column_name("Value_ILS", language): "{:,.0f}",
                         pnl_col: "{:,.0f}",
-                        yield_origin_col: "{:.2%}",
-                        yield_ils_col: "{:.2%}",
+                        yield_origin_col: _pct_fmt_safe(2),
+                        yield_ils_col: _pct_fmt_safe(2),
                     }
                     _fmt_map = {k: v for k, v in _fmt_map.items() if k in exposure_view.columns}
                     try:
@@ -14353,6 +14963,23 @@ def main() -> None:
                 st.markdown("---")
             except Exception as _sf_exc:
                 st.caption(f"Smart features unavailable ({str(_sf_exc)[:60]})")
+            # ── 🔐 Crypto Custody — placed right BEFORE the Crypto-Concentration
+            # report (the crypto-analysis home). Live values from dashboard_df;
+            # the mover persists via the Manage-page path. Marker: PP-CRYPTO-CUSTODY.
+            try:
+                render_crypto_custody(
+                    dashboard_df if isinstance(dashboard_df, pd.DataFrame) and not dashboard_df.empty else open_trades,
+                    open_trades,
+                    tr,
+                    language,
+                    is_demo=is_demo,
+                    is_mobile=is_mobile,
+                    is_dark=is_dark,
+                    web_app_url=web_url_clean,
+                    api_token=api_token,
+                )
+            except Exception as _cust_exc:
+                st.caption(f"Custody section unavailable ({str(_cust_exc)[:60]})")
             report_options = {
                 tr("Crypto Concentration", "ריכוזיות קריפטו"): "concentration_table",
                 tr("Winner / Loser", "המנצח / המפסיד"): "winner_loser_table",
@@ -14381,7 +15008,7 @@ def main() -> None:
                     for col in localized_df.columns:
                         col_s = str(col)
                         if any(t in col_s for t in ["Yield", "Return", "תשואה"]):
-                            fmt_map[col] = "{:.2%}"
+                            fmt_map[col] = _pct_fmt_safe(2)
                         elif "Qty" in col_s or "כמות" in col_s:
                             fmt_map[col] = _smart_qty
                         elif any(token in col_s for token in ["ILS", "Rate", "שער", "שווי", "עלות", "Investment", "PnL", "רווח"]):
@@ -14846,7 +15473,7 @@ def main() -> None:
                 for dc in ["Purchase_Date", "\u05ea\u05d0\u05e8\u05d9\u05da \u05e8\u05db\u05d9\u05e9\u05d4", "Sell_Date", "\u05ea\u05d0\u05e8\u05d9\u05da \u05de\u05db\u05d9\u05e8\u05d4"]:
                     if dc in _dv.columns: _sfmt2[dc] = _dfmt2
                 for yc in _yc2:
-                    if yc in _dv.columns: _sfmt2[yc] = "{:.2%}"
+                    if yc in _dv.columns: _sfmt2[yc] = _pct_fmt_safe(2)
 
                 # Money/quantity columns otherwise print raw floats ("4000.000000", "0.000000").
                 # Give every remaining numeric column a clean thousands-separated format (integers as
@@ -15280,7 +15907,7 @@ def main() -> None:
             scenario_df[_h_pl] = scenario_df[_h_val] - total_cost
             scenario_styled = scenario_df.style.format(
                 {
-                    _h_shock: "{:.1%}",
+                    _h_shock: _pct_fmt_safe(1),
                     _h_val: "{:,.0f}",
                     _h_pl: "{:,.0f}",
                 }
@@ -15490,6 +16117,7 @@ def main() -> None:
         editable_cols = [
             "Current_Location", "Platform", "Type", "Ticker", "Purchase_Date", "Quantity",
             "Origin_Buy_Price", "Cost_Origin", "Origin_Currency", "Commission", "Status", "Sell_Date",
+            "Sell_Price_Origin",
             "Cost_ILS", "Current_Value_ILS", "Action", "Event_Type", "Trade_ID",
         ]
         platforms = trades["Platform"].dropna().astype(str).tolist() if "Platform" in trades.columns else []
@@ -15931,6 +16559,25 @@ def main() -> None:
                                 ).strftime("%Y-%m-%d")
                             else:
                                 edited[col] = ""
+                        elif col == "Sell_Price_Origin":
+                            # A closed lot's stored sale price must ride along on EVERY edit —
+                            # this field was missing from the form, so the payload carried 0.0
+                            # and zeroed col U (שער מכירה) on the sheet, collapsing realized
+                            # P&L to -100% on all three surfaces. Also gives closing-via-edit
+                            # a place to enter the sale price. (fixbrief ST-1)
+                            current_status = _clean(edited.get("Status", trades.at[idx, "Status"]))
+                            if _is_closed_status(current_status):
+                                edited[col] = st.number_input(
+                                    tr("Sell price", "מחיר מכירה"),
+                                    value=float(_num(val)),
+                                    key=f"e_{col}",
+                                    help=tr(
+                                        "Actual sale price per unit in the original currency (0 = total-loss write-off).",
+                                        "מחיר המכירה בפועל ליחידה במטבע המקור (0 = מחיקת הפסד מוחלט).",
+                                    ),
+                                )
+                            else:
+                                edited[col] = 0.0
                         elif col == "Platform":
                             edited[col] = _select_or_type(tr("Platform", "פלטפורמה"), platforms, _clean(val), f"edit_{selected}_platform", tr)
                         elif col == "Current_Location":
@@ -16193,7 +16840,7 @@ def main() -> None:
                 return n / 100.0 if "%" in s else n
             for _pc in pct_cols:
                 recent_view[_pc] = recent_view[_pc].map(_to_ratio_for_display_dq)
-            recent_fmt: Dict[str, object] = {c: "{:.2%}" for c in pct_cols if c in recent_view.columns}
+            recent_fmt: Dict[str, object] = {c: _pct_fmt_safe(2) for c in pct_cols if c in recent_view.columns}
             # Clean money/quantity columns: integers show no decimals, fractions trim trailing
             # zeros — otherwise Buy Price/Cost/Quantity print "850000.000000" / "0.000000".
             def _recent_numfmt(v: object) -> str:
