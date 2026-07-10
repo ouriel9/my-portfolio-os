@@ -7090,13 +7090,11 @@ def _normalize_snapshot_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_demo_snapshot_data() -> pd.DataFrame:
-    # Synthetic showcase portfolio used only for demo mode. Showcase-scale (14 open
-    # holdings + 4 closed, ≈ 115k ILS open value): every asset class (ETF / stock /
-    # crypto), THREE currencies (USD/EUR/ILS), four platforms, clear winners AND
-    # losers, plus partial-sell FIFO stories (NVDA & BTC sold in part) and a
-    # dividend-paying core — so realized-PnL / FIFO / allocation / build-up all
-    # populate at their best. Read-only. KEPT IN SYNC with the native apps' demo
-    # (engine.js demoData). (QA r1 showcase upgrade)
+    # FICTIONAL showcase portfolio (demo mode only) — made-up tickers/platforms so it never resembles
+    # the owner's real holdings. LOW amounts (open ≈ 21k ILS) yet exercises every view: 3 currencies
+    # (USD/EUR/ILS), 4 platforms, winners AND losers, partial-sell FIFO closed trades, dividends,
+    # deposits, and crypto custody (cold / staking / exchange). KEPT IN SYNC with the native apps'
+    # demo (engine.js demoData). (fictional demo upgrade)
     FX = {"USD": 3.65, "EUR": 3.95, "ILS": 1.0}
 
     def mk(ticker, typ, platform, ccy, qty, buy, now_mul, date, commission,
@@ -7129,29 +7127,26 @@ def build_demo_snapshot_data() -> pd.DataFrame:
         return row
 
     demo_rows = [
-        # ── ETF core (USD) — steady compounder + spot-bitcoin ETF ────────────
-        mk("VOO",  "ETF", "Global Prime", "USD", 9,  408,  1.34, "2023-11-10", 6),
-        mk("QQQ",  "ETF", "Global Prime", "USD", 6,  372,  1.47, "2024-01-22", 6),
-        mk("SCHD", "ETF", "Global Prime", "USD", 40, 27.5, 1.18, "2024-03-14", 4),
-        mk("IBIT", "ETF", "Global Prime", "USD", 45, 33,   1.55, "2024-02-19", 4),
-        # ── Stocks (USD) — a big winner, steady names, clear losers ──────────
-        mk("NVDA", "שוק ההון", "Global Prime", "USD", 10, 95,  2.72, "2023-09-18", 5),
-        mk("MSFT", "שוק ההון", "Global Prime", "USD", 5,  378, 1.23, "2024-04-02", 5),
-        mk("AAPL", "שוק ההון", "Quant Desk",   "USD", 8,  165, 1.29, "2024-02-08", 5),
-        mk("TSLA", "שוק ההון", "Quant Desk",   "USD", 5,  255, 0.81, "2024-06-12", 5, loc="Underwater"),
-        mk("INTC", "שוק ההון", "Quant Desk",   "USD", 20, 44,  0.55, "2024-04-19", 4, loc="Underwater"),
-        # ── Europe (EUR) — multi-currency showcase ───────────────────────────
-        mk("ASML", "שוק ההון", "Euro Broker",  "EUR", 2,  640, 1.21, "2024-08-06", 7),
-        # ── Crypto (ILS · local desk) — a moon, a solid, a double, a crash ───
-        mk("BTC",  "קריפטו", "Bit2C", "ILS", 0.045, 142000, 1.88, "2023-08-14", 0, loc="Cold Wallet"),
-        mk("ETH",  "קריפטו", "Bit2C", "ILS", 0.8,   8200,   1.42, "2024-05-27", 0, loc="Cold Wallet"),
-        mk("SOL",  "קריפטו", "Bit2C", "ILS", 16,    390,    2.25, "2023-10-22", 0, loc="Staking Wallet"),
-        mk("DOGE", "קריפטו", "Bit2C", "ILS", 5000,  0.5,    0.58, "2024-09-11", 0),
-        # ── Closed trades — realized gains AND a loss, incl. PARTIAL sells ───
-        mk("META", "שוק ההון", "Global Prime", "USD", 6,  300, 1.72, "2023-07-01", 5, closed=True, sell_date="2026-02-12"),
-        mk("NVDA", "שוק ההון", "Global Prime", "USD", 4,  95,  2.31, "2023-09-18", 2, closed=True, sell_date="2025-11-04"),
-        mk("ARKK", "ETF",      "Global Prime", "USD", 25, 51,  0.83, "2024-05-22", 4, closed=True, sell_date="2025-09-08"),
-        mk("BTC",  "קריפטו",   "Bit2C",        "ILS", 0.015, 142000, 1.79, "2023-08-14", 0, closed=True, sell_date="2026-04-15", loc="Cold Wallet"),
+        # ETFs (USD) — steady core
+        mk("GLXY", "ETF", "Meridian Trade", "USD", 4, 88, 1.31, "2024-01-15", 3),
+        mk("VNTG", "ETF", "Meridian Trade", "USD", 7, 52, 1.19, "2024-03-20", 3),
+        mk("HRZN", "ETF", "Meridian Trade", "USD", 5, 61, 1.44, "2023-11-08", 3),
+        # Stocks — a moonshot, a steady name, clear losers, one EUR lot (multi-currency)
+        mk("AETHER", "שוק ההון", "Meridian Trade", "USD", 6,  40, 2.55, "2023-09-12", 4),
+        mk("QUBIT",  "שוק ההון", "Nimbus Desk",    "USD", 9,  33, 1.28, "2024-02-02", 4),
+        mk("HELIOS", "שוק ההון", "Nimbus Desk",    "USD", 9,  27, 0.62, "2024-04-18", 4, loc="Underwater"),
+        mk("SENTRA", "שוק ההון", "Nimbus Desk",    "USD", 14, 15, 0.78, "2024-06-10", 3, loc="Underwater"),
+        mk("NORDIS", "שוק ההון", "Alto Europe",    "EUR", 5,  46, 1.22, "2024-08-05", 5),
+        # Crypto (ILS) — spread across custody locations for the custody control
+        mk("LUMEN",  "קריפטו", "Ketra", "ILS", 0.7,  3200, 1.85, "2023-08-20", 0, loc="ארנק קר (Ledger)"),
+        mk("ZEPHYR", "קריפטו", "Ketra", "ILS", 10,   140,  2.30, "2023-10-25", 0, loc="ארנק סטייקינג"),
+        mk("PYRA",   "קריפטו", "Ketra", "ILS", 900,  1.4,  0.55, "2024-09-14", 0),
+        mk("ORBYX",  "קריפטו", "Ketra", "ILS", 0.30, 5400, 1.32, "2024-05-27", 0, loc="ארנק קר (Ledger)"),
+        # Closed — realized gains AND a loss, incl. partial sells (AETHER stock + PYRA crypto)
+        mk("VELA",   "שוק ההון", "Meridian Trade", "USD", 5, 30, 1.7,  "2023-07-01", 4, closed=True, sell_date="2025-05-20"),
+        mk("AETHER", "שוק ההון", "Meridian Trade", "USD", 3, 40, 2.3,  "2023-09-12", 2, closed=True, sell_date="2025-11-04"),
+        mk("CRUX",   "ETF",      "Meridian Trade", "USD", 8, 22, 0.82, "2024-05-22", 3, closed=True, sell_date="2025-09-08"),
+        mk("PYRA",   "קריפטו",   "Ketra",          "ILS", 300, 1.4, 1.6, "2024-09-14", 0, closed=True, sell_date="2026-02-12"),
     ]
     df = pd.DataFrame(demo_rows)
 
@@ -7160,7 +7155,7 @@ def build_demo_snapshot_data() -> pd.DataFrame:
     # balloons past the cap, keeping the allocation pie clean.
     open_mask = df["Status"].map(_clean) != "סגור"
     open_value_ils = float(df.loc[open_mask, "Current_Value_ILS"].map(_num).sum())
-    target_open_value_ils = 120000.0
+    target_open_value_ils = 40000.0
     if open_value_ils > (target_open_value_ils + 1e-9):
         scale = target_open_value_ils / open_value_ils
         for col in ["Cost_Origin", "Cost_ILS", "Current_Value_ILS", "Commission"]:
