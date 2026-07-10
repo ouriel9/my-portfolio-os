@@ -14534,11 +14534,9 @@ def main() -> None:
 
             _kpi_live_fragment()
 
-        # ── 📈 שווי התיק לאורך זמן — interactive value-over-time chart, placed
-        # prominently right under the headline value/KPIs (both live and demo). ──
-        _valhist_slot = st.container()
-        with _valhist_slot:
-            render_value_over_time(trades, is_demo, is_dark, is_mobile, tr)
+        # 📈 שווי התיק לאורך זמן no longer renders here (always-on, under the KPIs). It now lives
+        # behind a button in the Build-Up area of the Overview tab — see _build_up_slot below. Gating
+        # it there also stops the network-heavy history reconstruction from running on every page load.
 
         class_mix = pd.DataFrame(columns=["Asset_Class", "Current_Value_ILS", "Assets"])
         if not open_trades.empty and {"Ticker", "Type", "Current_Value_ILS"}.issubset(open_trades.columns):
@@ -15242,6 +15240,21 @@ def main() -> None:
                         st.plotly_chart(_fig_track, theme=None, width="stretch")
                 except Exception:
                     pass
+
+            # ── 📈 שווי התיק לאורך זמן — placed HERE in the Build-Up area, hidden behind a button
+            # (owner: don't always show it; a button opens it). Gating the render also means the
+            # network-heavy price/FX history reconstruction only runs when the user opens it, so the
+            # page loads faster by default. State persists across the 20s live-fragment reruns. ──
+            _vh_key = "show_value_over_time"
+            st.session_state.setdefault(_vh_key, False)
+            _vh_open = bool(st.session_state[_vh_key])
+            _vh_lbl = ("📉 " + tr("Hide value over time", "הסתר שווי תיק לאורך זמן")) if _vh_open \
+                else ("📈 " + tr("Show portfolio value over time", "הצג שווי תיק לאורך זמן"))
+            if st.button(_vh_lbl, key="btn_toggle_valhist", width="stretch"):
+                st.session_state[_vh_key] = not _vh_open
+                st.rerun()
+            if st.session_state[_vh_key]:
+                render_value_over_time(trades, is_demo, is_dark, is_mobile, tr)
 
             # Exposure table mirrored into Overview tab — live fragment updates every 20s
             _ov_exposure_slot = st.container()
