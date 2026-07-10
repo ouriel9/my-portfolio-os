@@ -4,10 +4,14 @@ streamlit-extras
 streamlit-aggrid
 streamlit-lottie
 streamlit-local-storage
-pandas
-numpy
+# Pin the native data stack to the EXACT versions verified locally (no segfault). Unpinned, Streamlit
+# Cloud pulled newer pandas/pyarrow builds whose Arrow serialization SEGFAULTED the container ("Oh no").
+# These four must move together. (fix: phone Streamlit-Cloud segfault)
+pandas==3.0.2
+numpy==2.4.4
+pyarrow==23.0.1
 yfinance
-plotly
+plotly==6.6.0
 fpdf
 gspread
 google-auth
