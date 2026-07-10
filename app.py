@@ -5404,10 +5404,32 @@ def _pct_fmt_safe(digits: int = 2):
     return _f
 
 
+def _looks_numeric(v: object) -> bool:
+    """True if v is (or stringifies to) a plain/scientific-notation number. Used to keep the Hebrew
+    transliterator's hands OFF numbers: a tiny crypto quantity like 5.797e-05 stringifies WITH a Latin
+    'e', so the uniformizer used to transliterate it to '5.797א-05' — which pyarrow then could not
+    serialize and SEGFAULTED the whole Streamlit Cloud app ("Oh no"). (fix: phone Arrow crash)"""
+    if v is None:
+        return False
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return True
+    try:
+        t = str(v).strip().replace(",", "").replace("‏", "").replace("‎", "")
+    except Exception:
+        return False
+    if not t:
+        return False
+    try:
+        float(t)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def _he_uniformize_columns(df: "pd.DataFrame", language: str) -> "pd.DataFrame":
     """For HE only: rewrite the Latin cells of any non-ticker TEXT column in Hebrew so the column is
-    one direction (kills the mixed-alignment dead space). Ticker/symbol columns and numeric columns
-    are left untouched."""
+    one direction (kills the mixed-alignment dead space). Ticker/symbol columns and NUMERIC columns
+    (incl. scientific-notation values whose Latin 'e' must never be transliterated) are left untouched."""
     if language != LANG_HE or df is None or getattr(df, "empty", True):
         return df
     out = df.copy()
@@ -5422,8 +5444,14 @@ def _he_uniformize_columns(df: "pd.DataFrame", language: str) -> "pd.DataFrame":
         # skip TICKER/symbol columns — keep AAPL/VOO/BTC/IBIT in Latin
         if len(nonempty) and nonempty.str.match(r"^[A-Z0-9.\-]{1,6}$").mean() >= 0.6:
             continue
+        # skip NUMERIC columns (Quantity/Cost/Price…): a scientific-notation value like 5.797e-05 has a
+        # Latin 'e' and would be corrupted to '5.797א-05', crashing Arrow serialization. (fix: phone crash)
+        if len(nonempty) and nonempty.map(_looks_numeric).mean() >= 0.6:
+            continue
+        # value-level guard: even in a mostly-text column, never transliterate an individual value that
+        # is itself a number (belt-and-suspenders for the same Arrow crash).
         out[c] = ser.map(lambda v: _he_uniformize_value(v)
-                         if (not pd.isna(v) and re.search(r"[A-Za-z]", str(v))) else v)
+                         if (not pd.isna(v) and re.search(r"[A-Za-z]", str(v)) and not _looks_numeric(v)) else v)
     return out
 
 
