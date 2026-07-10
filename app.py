@@ -16894,5 +16894,26 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Global safety net: an uncaught exception anywhere in the render kills the whole session and
+    # shows Streamlit Cloud's bare "Oh no. Error running app" page (the owner hit this on the phone).
+    # Catch it, keep the session alive, and show a friendly retry with the actual error in an
+    # expander so a real bug is still diagnosable instead of silently swallowed. (fix: phone Oh-no)
+    try:
+        main()
+    except Exception as _fatal:  # noqa: BLE001 — deliberate top-level guard
+        try:
+            import traceback as _tb
+            st.error("⚠️ " + (
+                "קרתה תקלה בטעינת המסך — הנתונים שלך בטוחים. נסה לרענן."
+                if str(st.session_state.get("_lang_pref", "עברית")).startswith("ע")
+                else "Something went wrong rendering this view — your data is safe. Try refreshing."
+            ))
+            _he = str(st.session_state.get("_lang_pref", "עברית")).startswith("ע")
+            if st.button("🔄 " + ("רענן" if _he else "Refresh")):
+                st.rerun()
+            with st.expander("Details", expanded=False):
+                st.code("".join(_tb.format_exception(type(_fatal), _fatal, _fatal.__traceback__))[-3000:])
+        except Exception:
+            # Even the error UI failed (very early crash) — re-raise so Cloud logs still capture it.
+            raise
 ##
