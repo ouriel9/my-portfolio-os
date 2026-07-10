@@ -4,12 +4,14 @@ streamlit-extras
 streamlit-aggrid
 streamlit-lottie
 streamlit-local-storage
-# Pin the native data stack to the EXACT versions verified locally (no segfault). Unpinned, Streamlit
-# Cloud pulled newer pandas/pyarrow builds whose Arrow serialization SEGFAULTED the container ("Oh no").
-# These four must move together. (fix: phone Streamlit-Cloud segfault)
-pandas==3.0.2
-numpy==2.4.4
-pyarrow==23.0.1
+# Native data stack PINNED to a battle-tested combo. Unpinned, Streamlit Cloud pulled bleeding-edge
+# pandas 3.0 whose Arrow serialization SEGFAULTED the Linux container ("Oh no. Error running app" on
+# the phone) — a native crash a Python try/except can't catch. pandas 2.2 + pyarrow 18 is the combo
+# thousands of Cloud apps run without native crashes; verified the app renders cleanly on it (landing,
+# trades table, live fragment). Move all four together. (fix: phone Streamlit-Cloud segfault)
+pandas==2.2.3
+numpy==2.1.3
+pyarrow==18.1.0
 yfinance
 plotly==6.6.0
 fpdf
