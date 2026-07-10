@@ -703,6 +703,161 @@ def _optimize_plotly_for_mobile(fig: go.Figure, is_mobile: bool, is_bar: bool = 
     return _apply_plotly_theme(fig, is_dark=False, is_mobile=is_mobile, is_bar=is_bar)
 
 
+def render_value_over_time(
+    trades: pd.DataFrame,
+    is_demo: bool,
+    is_dark: bool,
+    is_mobile: bool,
+    tr,
+) -> None:
+    """📈 שווי התיק לאורך זמן — interactive portfolio value chart with a selectable
+    range (1D/1W/1M/3M/1Y/הכל) and HOURLY precision on short ranges. Reconstructs the
+    TRUE position over time (steps up on buys, down on sells) and converts every quote
+    currency to ILS at each timestamp. Never raises — the whole body is guarded so a
+    fetch/parse error can't abort the dashboard."""
+    try:
+        st.markdown(f"#### {tr('Portfolio Value Over Time', '📈 שווי התיק לאורך זמן')}")
+
+        # ── Range selector (segmented_control on 1.58+, else horizontal radio) ──
+        _btn_ids = ["1D", "1W", "1M", "3M", "1Y", "ALL"]
+        _btn_labels = {
+            "1D": tr("1D", "יום"), "1W": tr("1W", "שבוע"), "1M": tr("1M", "חודש"),
+            "3M": tr("3M", "3 ח'"), "1Y": tr("1Y", "שנה"), "ALL": tr("All", "הכל"),
+        }
+        _label_to_id = {v: k for k, v in _btn_labels.items()}
+        _options = [_btn_labels[b] for b in _btn_ids]
+        if "valhist_range" not in st.session_state:
+            st.session_state["valhist_range"] = "1M"
+        _default_label = _btn_labels.get(st.session_state.get("valhist_range", "1M"), _btn_labels["1M"])
+        _seg = getattr(st, "segmented_control", None)
+        if callable(_seg):
+            _picked = _seg(
+                tr("Range", "טווח"), _options, default=_default_label,
+                key="valhist_seg", label_visibility="collapsed",
+            )
+        else:
+            _picked = st.radio(
+                tr("Range", "טווח"), _options,
+                index=_options.index(_default_label), horizontal=True,
+                key="valhist_seg", label_visibility="collapsed",
+            )
+        _range_id = _label_to_id.get(_picked or _default_label, "1M")
+        st.session_state["valhist_range"] = _range_id
+        period, interval = _valhist_period_interval(_range_id)
+
+        # ── Build the value series (demo = synthesized, live = reconstructed) ──
+        series = pd.Series(dtype=float)
+        with st.spinner(tr("Loading history…", "טוען היסטוריה…")):
+            lots = _valhist_ledger(trades)
+            if is_demo:
+                # Aggregate today's OPEN value + signed qty per ticker so the synthesized
+                # path ends exactly at the curated demo value.
+                _open = trades.copy()
+                if "Status" in _open.columns:
+                    _open = _open[~_open["Status"].map(_is_closed_status)]
+                _tv_by = {}
+                _tq_by = {}
+                for _, r in _open.iterrows():
+                    _t = _clean(r.get("Ticker", "")).upper()
+                    if not _t:
+                        continue
+                    _tv_by[_t] = _tv_by.get(_t, 0.0) + float(_num(r.get("Current_Value_ILS", 0)))
+                    _tq_by[_t] = _tq_by.get(_t, 0.0) + float(_num(r.get("Quantity", 0)))
+                demo_ledger = tuple(
+                    (
+                        l["ticker"], l["ccy"],
+                        pd.Timestamp(l["buy"]).isoformat(),
+                        pd.Timestamp(l["sell"]).isoformat() if l["sell"] is not None else "",
+                        float(l["qty"]),
+                        float(_tv_by.get(l["ticker"], 0.0)),
+                        float(_tq_by.get(l["ticker"], 0.0)),
+                    )
+                    for l in lots
+                )
+                series = demo_value_history(demo_ledger, period, interval)
+            else:
+                live_ledger = tuple(
+                    (
+                        l["ticker"], l["ccy"],
+                        pd.Timestamp(l["buy"]).isoformat(),
+                        pd.Timestamp(l["sell"]).isoformat() if l["sell"] is not None else "",
+                        float(l["qty"]),
+                    )
+                    for l in lots
+                )
+                series = reconstruct_value_history(live_ledger, period, interval)
+
+        if series is None or series.empty:
+            st.info(tr("No data available", "אין נתונים זמינים"))
+            return
+
+        series = series.dropna()
+        series = series[series > 0]
+        if series.empty:
+            st.info(tr("No data available", "אין נתונים זמינים"))
+            return
+
+        # ── Header: current value + Δ over the selected range (₪ and %) ──
+        _cur = float(series.iloc[-1])
+        _first = float(series.iloc[0])
+        _delta = _cur - _first
+        _delta_pct = (_delta / _first) if _first > 0 else 0.0
+        _up = _delta >= 0
+        _pos_c = "#34d399" if is_dark else "#15803d"
+        _neg_c = "#f87171" if is_dark else "#b91c1c"
+        _dc = _pos_c if _up else _neg_c
+        _arrow = "▲" if _up else "▼"
+        _muted = "#94a3b8" if is_dark else "#64748b"
+        st.markdown(
+            "<div style='display:flex;align-items:baseline;gap:0.6rem;flex-wrap:wrap;"
+            "direction:rtl;margin:-0.2rem 0 0.4rem;'>"
+            f"<span style='font-size:1.55rem;font-weight:800;unicode-bidi:isolate;'>₪{_cur:,.0f}</span>"
+            f"<span style='font-weight:700;color:{_dc};unicode-bidi:isolate;'>"
+            f"{_arrow} ₪{abs(_delta):,.0f} ({_delta_pct:+.2%})</span>"
+            f"<span style='color:{_muted};font-size:0.85rem;'>{_btn_labels.get(_range_id, '')}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Plotly filled-area line ──
+        _line = _pos_c if _up else _neg_c
+        _fill = "rgba(16,185,129,0.16)" if _up else "rgba(239,68,68,0.14)"
+        # Short (intraday) ranges show HH:MM; long ranges show DD/MM.
+        _short = interval in ("5m", "1h")
+        _tickfmt = "%H:%M" if _short else "%d/%m"
+        _hover_t = "%H:%M · %d/%m" if _short else "%d/%m/%Y"
+        _x = series.index
+        _y = series.to_numpy(dtype=float)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=_x, y=_y, mode="lines",
+            line=dict(color=_line, width=2.6, shape="spline", smoothing=0.5),
+            fill="tozeroy", fillcolor=_fill,
+            name=tr("Value", "שווי"),
+            hovertemplate="₪%{y:,.0f}<br>%{x|" + _hover_t + "}<extra></extra>",
+        ))
+        fig.update_layout(
+            template=("plotly_dark" if is_dark else "plotly_white"),
+            height=320,
+            hovermode="x unified",
+            showlegend=False,
+            margin=dict(t=10, l=8, r=12, b=28),
+            xaxis=dict(showgrid=False, tickformat=_tickfmt,
+                       showspikes=True, spikethickness=1, spikedash="dot",
+                       spikecolor="rgba(148,163,184,0.5)", spikemode="across"),
+            yaxis=dict(gridcolor="rgba(148,163,184,0.14)", zeroline=False,
+                       tickformat="~s", side="right"),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        fig.update_xaxes(automargin=True)
+        st.plotly_chart(fig, theme=None, width="stretch", key="valhist_chart")
+    except Exception:
+        try:
+            st.info(tr("No data available", "אין נתונים זמינים"))
+        except Exception:
+            pass
+
+
 def _normalize_theme_mode(theme_mode: str) -> str:
     mode = _clean(theme_mode).lower()
     if mode in {THEME_LIGHT, THEME_DARK, THEME_SYSTEM}:
@@ -4944,6 +5099,320 @@ def portfolio_price_history(tickers: Tuple[str, ...], quantities: Tuple[float, .
 
     combined = pd.concat(frames, axis=1).ffill().fillna(0)
     return combined.sum(axis=1)
+
+
+# ── "Portfolio Value Over Time" — TRUE position reconstruction ───────────────
+# Mirrors the native engine's Engine.valueHistory / Engine.demoValueHistory:
+# unlike portfolio_price_history() above (constant CURRENT quantities × daily
+# closes for the Risk page), this rebuilds the held quantity of every ticker at
+# each timestamp T from the trade ledger — so the line steps UP on a buy and DOWN
+# on a sale (incl. partial sells), and supports selectable interval/range down to
+# HOURLY precision. (feature: value-over-time chart)
+
+# Button → (yfinance period, interval). Respects yfinance's own limits:
+# 1m/5m only ~7-60d, 1h ~730d, 1d is long-range. Keep these in sync with the UI.
+VALHIST_RANGES: Dict[str, Tuple[str, str]] = {
+    "1D": ("1d", "5m"),
+    "1W": ("5d", "1h"),
+    "1M": ("1mo", "1h"),
+    "3M": ("3mo", "1h"),
+    "1Y": ("1y", "1d"),
+    "ALL": ("5y", "1d"),
+}
+
+
+def _valhist_period_interval(button: str) -> Tuple[str, str]:
+    """Map a range button ('1D'/'1W'/'1M'/'3M'/'1Y'/'ALL') to (period, interval)."""
+    return VALHIST_RANGES.get(_clean(button).upper(), VALHIST_RANGES["1M"])
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _history_close_matrix(symbols: Tuple[str, ...], period: str, interval: str) -> pd.DataFrame:
+    """Per-symbol Yahoo close history at an arbitrary (period, interval), returned as a
+    tz-naive DataFrame indexed by timestamp with one column per symbol. Cached on
+    (symbols, period, interval) so switching ranges is instant and reruns never re-download.
+    Uses yf.Ticker(sym).history() one symbol at a time (robust for intraday intervals where
+    the batch yf.download MultiIndex layout is inconsistent). Forward/back-fills happen at
+    the caller when aligned to the master index."""
+    clean_symbols = tuple(dict.fromkeys(s for s in symbols if _clean(s)))
+    if not clean_symbols:
+        return pd.DataFrame()
+    out: Dict[str, pd.Series] = {}
+    for sym in clean_symbols:
+        try:
+            hist = yf.Ticker(sym).history(period=period, interval=interval, auto_adjust=False)
+        except Exception:
+            continue
+        if hist is None or getattr(hist, "empty", True) or "Close" not in hist.columns:
+            continue
+        s = pd.to_numeric(hist["Close"], errors="coerce").dropna()
+        if s.empty:
+            continue
+        idx = pd.to_datetime(s.index)
+        # Drop tz so intraday (tz-aware) and daily (tz-naive) indexes align cleanly.
+        try:
+            if getattr(idx, "tz", None) is not None:
+                idx = idx.tz_localize(None)
+        except Exception:
+            try:
+                idx = idx.tz_convert(None)
+            except Exception:
+                pass
+        s = pd.Series(s.to_numpy(dtype=float), index=idx).rename(sym)
+        s = s[~s.index.duplicated(keep="last")].sort_index()
+        out[sym] = s
+    if not out:
+        return pd.DataFrame()
+    return pd.concat(out.values(), axis=1).sort_index()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _fx_history_matrix(pairs: Tuple[str, ...], period: str, interval: str) -> pd.DataFrame:
+    """USD/EUR/GBP → ILS close history at (period, interval). Thin wrapper over the
+    close-matrix so the FX series is cached independently of the equity symbols."""
+    return _history_close_matrix(pairs, period, interval)
+
+
+def _valhist_ledger(trade_rows: pd.DataFrame) -> List[Dict[str, object]]:
+    """Extract the minimal per-lot ledger the reconstruction needs from a trades frame:
+    ticker, quote-currency, buy timestamp, optional sell timestamp (None while open),
+    and signed quantity. Open lots carry a None sell date (count from buy → forever);
+    closed lots count only between buy and sell (step up on buy, step down on sell)."""
+    if trade_rows is None or trade_rows.empty:
+        return []
+    lots: List[Dict[str, object]] = []
+    for _, row in trade_rows.iterrows():
+        ticker = _clean(row.get("Ticker", "")).upper()
+        if not ticker:
+            continue
+        qty = float(_num(row.get("Quantity", 0)))
+        if abs(qty) <= 1e-12:
+            continue
+        buy = _parse_dates_flexible(pd.Series([row.get("Purchase_Date", "")])).iloc[0]
+        if pd.isna(buy):
+            continue
+        closed = _is_closed_status(row.get("Status", ""))
+        sell = None
+        if closed:
+            sd = _parse_dates_flexible(pd.Series([row.get("Sell_Date", "")])).iloc[0]
+            # A closed lot with no parseable sell date can't contribute a live position
+            # at any T (we don't know when it left the book) → treat as never-held.
+            if pd.isna(sd):
+                continue
+            sell = pd.Timestamp(sd)
+        lots.append({
+            "ticker": ticker,
+            "ccy": _yf_price_currency(ticker),
+            "buy": pd.Timestamp(buy),
+            "sell": sell,
+            "qty": qty,
+        })
+    return lots
+
+
+def _held_qty_series(lots: List[Dict[str, object]], ticker: str, index: pd.DatetimeIndex) -> np.ndarray:
+    """Held quantity of `ticker` at every timestamp in `index`:
+      heldQty(T) = Σ over lots of this ticker where buy ≤ T AND (open OR sell > T) of qty.
+    Vectorised: +qty from `buy` onward, −qty from `sell` onward (open lots never subtract)."""
+    q = np.zeros(len(index), dtype=float)
+    idx_vals = index.values
+    for lot in lots:
+        if lot["ticker"] != ticker:
+            continue
+        buy = np.datetime64(lot["buy"])
+        q += np.where(idx_vals >= buy, lot["qty"], 0.0)
+        if lot["sell"] is not None:
+            sell = np.datetime64(lot["sell"])
+            q -= np.where(idx_vals >= sell, lot["qty"], 0.0)
+    return q
+
+
+def _ccy_fx_on_index(ccy: str, index: pd.DatetimeIndex, fx_mat: pd.DataFrame) -> np.ndarray:
+    """ILS-per-native-unit of the yfinance quote currency at every timestamp in `index`,
+    mirroring _ils_per_native_unit / engine.js toIls but as a time series:
+      ILS/ILA→1, ILA→0.01, USD→USDILS(T), GBX→GBPILS(T)/100, EUR→EURILS(T)."""
+    c = _clean(ccy).upper()
+    if c in {"ILS", ""}:
+        return np.ones(len(index), dtype=float)
+    if c == "ILA":
+        return np.full(len(index), 0.01, dtype=float)
+    pair = {"USD": "USDILS=X", "GBX": "GBPILS=X", "GBP": "GBPILS=X", "EUR": "EURILS=X"}.get(c)
+    scale = 0.01 if c == "GBX" else 1.0
+    if pair and (not fx_mat.empty) and pair in fx_mat.columns:
+        s = pd.to_numeric(fx_mat[pair], errors="coerce").reindex(index).ffill().bfill()
+        arr = s.to_numpy(dtype=float) * scale
+        if np.isfinite(arr).any():
+            return arr
+    # No history → fall back to a session-state-free spot (safe inside cache_data).
+    spot = 0.0
+    if c == "USD":
+        spot = _safe_quote("USDILS=X")
+        spot = spot if spot and spot > 0 else 3.3
+    elif c in {"GBX", "GBP"}:
+        spot = _fx_pair_rate("GBPILS=X")
+        spot = (spot * scale) if spot and spot > 0 else 0.0
+    elif c == "EUR":
+        spot = _fx_pair_rate("EURILS=X")
+        spot = spot if spot and spot > 0 else 0.0
+    return np.full(len(index), float(spot), dtype=float)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def reconstruct_value_history(
+    ledger: Tuple[Tuple[object, ...], ...],
+    period: str,
+    interval: str,
+) -> pd.Series:
+    """LIVE 'Portfolio Value Over Time' — the Python mirror of Engine.valueHistory.
+
+    `ledger` is a hashable tuple of (ticker, ccy, buy_iso, sell_iso_or_'', qty) so the
+    result caches on (ledger, period, interval). For each timestamp T on the master
+    price index:
+        value(T) = Σ_ticker heldQty(ticker,T) × close(ticker,T) × fx(ccy,T)
+    close is forward-filled per ticker; fx converts the quote currency to ILS at T.
+    Returns a tz-naive ILS value Series (empty if no market data)."""
+    lots: List[Dict[str, object]] = []
+    for tk, ccy, buy_iso, sell_iso, qty in ledger:
+        lots.append({
+            "ticker": _clean(tk).upper(),
+            "ccy": _clean(ccy).upper(),
+            "buy": pd.Timestamp(buy_iso),
+            "sell": pd.Timestamp(sell_iso) if _clean(sell_iso) else None,
+            "qty": float(qty),
+        })
+    if not lots:
+        return pd.Series(dtype=float)
+
+    tickers = sorted({l["ticker"] for l in lots})
+    sym_by_ticker = {t: _market_symbol(t) for t in tickers}
+    close_mat = _history_close_matrix(tuple(dict.fromkeys(sym_by_ticker.values())), period, interval)
+    if close_mat.empty:
+        return pd.Series(dtype=float)
+
+    index = pd.DatetimeIndex(close_mat.index)
+    # FX must use the PRICE currency (what yfinance quotes the symbol in), NOT the row's
+    # Origin_Currency: a BTC lot bought in ILS on Bit2C is still priced by Yahoo in USD (BTC-USD),
+    # so it must be ×USD→ILS. _yf_price_currency handles crypto→USD, .TA→ILA, .L→GBX. (value-history fix)
+    price_ccy_by_ticker = {t: _yf_price_currency(t) for t in tickers}
+    ccy_needed = set(price_ccy_by_ticker.values())
+    pairs = []
+    if "USD" in ccy_needed:
+        pairs.append("USDILS=X")
+    if ccy_needed & {"GBX", "GBP"}:
+        pairs.append("GBPILS=X")
+    if "EUR" in ccy_needed:
+        pairs.append("EURILS=X")
+    fx_mat = _fx_history_matrix(tuple(pairs), period, interval) if pairs else pd.DataFrame()
+
+    total = np.zeros(len(index), dtype=float)
+    contributed = False
+    for ticker in tickers:
+        sym = sym_by_ticker[ticker]
+        if sym not in close_mat.columns:
+            continue
+        price = pd.to_numeric(close_mat[sym], errors="coerce").reindex(index).ffill().bfill()
+        price_arr = price.to_numpy(dtype=float)
+        if not np.isfinite(price_arr).any():
+            continue
+        held = _held_qty_series(lots, ticker, index)
+        if not np.any(held):
+            continue
+        fx = _ccy_fx_on_index(price_ccy_by_ticker.get(ticker, "USD"), index, fx_mat)
+        contrib = np.nan_to_num(held * price_arr * fx, nan=0.0, posinf=0.0, neginf=0.0)
+        total += contrib
+        contributed = True
+
+    if not contributed:
+        return pd.Series(dtype=float)
+    series = pd.Series(total, index=index).sort_index()
+    # Trim any leading all-zero stretch (before the first buy) so the chart starts
+    # where the portfolio actually did, not at the left edge of the fetched window.
+    nz = series[series > 0]
+    if not nz.empty:
+        series = series.loc[nz.index[0]:]
+    return series
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def demo_value_history(
+    ledger: Tuple[Tuple[object, ...], ...],
+    period: str,
+    interval: str,
+) -> pd.Series:
+    """DEMO 'Portfolio Value Over Time' — the Python mirror of Engine.demoValueHistory.
+
+    The demo tickers (GLXY/AETHER/LUMEN…) are FICTIONAL and have NO Yahoo data, so we
+    SYNTHESIZE a deterministic seeded price path for each ticker that DRIFTS from ~55–105%
+    of its 'today' price up to its exact today price, then reconstruct the portfolio value
+    over the real position timeline. No network. `ledger` rows are
+    (ticker, ccy, buy_iso, sell_iso_or_'', qty, today_value_ils, today_qty_signed)."""
+    lots: List[Dict[str, object]] = []
+    today_val_by_ticker: Dict[str, float] = {}
+    today_qty_by_ticker: Dict[str, float] = {}
+    for tk, ccy, buy_iso, sell_iso, qty, tv, tq in ledger:
+        t = _clean(tk).upper()
+        lots.append({
+            "ticker": t,
+            "ccy": _clean(ccy).upper(),
+            "buy": pd.Timestamp(buy_iso),
+            "sell": pd.Timestamp(sell_iso) if _clean(sell_iso) else None,
+            "qty": float(qty),
+        })
+        # today_value / today_qty are the OPEN-position aggregates (only open lots
+        # carry a nonzero pair) → the today price = value / qty in ILS terms.
+        today_val_by_ticker[t] = today_val_by_ticker.get(t, 0.0) + float(tv)
+        today_qty_by_ticker[t] = today_qty_by_ticker.get(t, 0.0) + float(tq)
+    if not lots:
+        return pd.Series(dtype=float)
+
+    now = pd.Timestamp(datetime.now()).normalize()
+    # Build the master index from the interval/period so the demo honours the same
+    # range buttons as live. Intraday intervals → a dense recent window; daily → back to
+    # the earliest buy (capped by the range) so 'ALL' shows the full rise.
+    freq = {"5m": "5min", "1h": "h", "1d": "D"}.get(interval, "D")
+    span_days = {"1d": 1, "5d": 7, "1mo": 31, "3mo": 93, "1y": 366, "5y": 1830}.get(period, 31)
+    earliest_buy = min((l["buy"] for l in lots), default=now)
+    start = max(now - pd.Timedelta(days=span_days), pd.Timestamp(earliest_buy).normalize())
+    if start >= now:
+        start = now - pd.Timedelta(days=1)
+    index = pd.date_range(start=start, end=now, freq=freq)
+    if len(index) == 0:
+        index = pd.DatetimeIndex([now])
+    n = len(index)
+    frac = np.linspace(0.0, 1.0, n) if n > 1 else np.array([1.0])
+
+    total = np.zeros(n, dtype=float)
+    tickers = sorted({l["ticker"] for l in lots})
+    for ticker in tickers:
+        held = _held_qty_series(lots, ticker, index)
+        if not np.any(held):
+            continue
+        open_qty = today_qty_by_ticker.get(ticker, 0.0)
+        open_val = today_val_by_ticker.get(ticker, 0.0)
+        # today ILS price per unit — reconstruct value must END exactly at open_val.
+        today_price = (open_val / open_qty) if abs(open_qty) > 1e-12 else 0.0
+        if today_price <= 0:
+            continue
+        # Deterministic per-ticker start multiplier in [0.55, 1.05] plus a gentle
+        # seeded wobble, so each name has its own plausible shape but the path ENDS at 1.0.
+        seed = (abs(hash(ticker)) % 1000) / 1000.0
+        start_mul = 0.55 + 0.50 * seed
+        base = start_mul + (1.0 - start_mul) * frac  # linear drift start_mul → 1.0
+        wobble = 1.0 + 0.05 * np.sin(frac * np.pi * (3.0 + 6.0 * seed) + seed * 6.283)
+        path = base * wobble
+        path = path * (1.0 / path[-1] if path[-1] else 1.0)  # force the endpoint to exactly 1.0
+        price_path = today_price * path  # ILS price per unit over time
+        total += np.nan_to_num(held * price_path, nan=0.0)
+
+    if not np.any(total):
+        return pd.Series(dtype=float)
+    series = pd.Series(total, index=index).sort_index()
+    # Trim the leading all-zero stretch (before the first buy) so the curve starts
+    # where the portfolio actually did — matches the live reconstruction's behaviour.
+    nz = series[series > 0]
+    if not nz.empty:
+        series = series.loc[nz.index[0]:]
+    return series
 
 
 def fifo_metrics(trades: pd.DataFrame) -> pd.DataFrame:
@@ -14064,6 +14533,12 @@ def main() -> None:
                 )
 
             _kpi_live_fragment()
+
+        # ── 📈 שווי התיק לאורך זמן — interactive value-over-time chart, placed
+        # prominently right under the headline value/KPIs (both live and demo). ──
+        _valhist_slot = st.container()
+        with _valhist_slot:
+            render_value_over_time(trades, is_demo, is_dark, is_mobile, tr)
 
         class_mix = pd.DataFrame(columns=["Asset_Class", "Current_Value_ILS", "Assets"])
         if not open_trades.empty and {"Ticker", "Type", "Current_Value_ILS"}.issubset(open_trades.columns):
